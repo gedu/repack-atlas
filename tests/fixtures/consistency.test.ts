@@ -4,12 +4,12 @@
 // it provokes and which exit code the doctor must produce. This test runs the
 // real core rule engine (`runDoctor` + `doctorExitCode`) against the checked-in
 // manifests of each workspace and asserts the claim. The expectation table
-// below is the single source of truth; the fixtures/README.md and per-workspace
-// READMEs mirror it (a string check at the bottom keeps them honest).
+// lives in ./expectations.ts (single source of truth, shared with the
+// spawned-bin CLI tests); the fixtures/README.md and per-workspace READMEs
+// mirror it (a string check at the bottom keeps them honest).
 //
-// This is the guard that fixtures keep proving what they claim until T7 wires
-// the real `dist/cli.js` bin; T7 replaces the direct `runDoctor` calls with
-// spawned-process assertions, not with a new source of expectations.
+// The spawned CLI tests (`tests/cli/`) reproduce the same table through the
+// real `dist/cli.js` process; this file keeps proving the pure-core half.
 
 import assert from 'node:assert/strict';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
@@ -38,75 +38,10 @@ const fixturesDir = path.join(
   'fixtures'
 );
 
-// --------------------------------------------------------------------------
-// Expectation table (single source of truth — READMEs mirror this).
-// --------------------------------------------------------------------------
+// The expectation table lives in ./expectations.ts (shared with the spawned
+// CLI tests); this file only consumes it.
 
-interface ExpectedFinding {
-  code: string;
-  severity: 'error' | 'warning' | 'info';
-  confidence: 'static' | 'heuristic';
-}
-
-interface WorkspaceExpectation {
-  dir: string;
-  /** Every finding the doctor must report for this workspace, in no special order. */
-  findings: ExpectedFinding[];
-  /** Doctor exit code: 0 clean · 1 found errors · 2 could not answer. */
-  exitCode: 0 | 1 | 2;
-  /** True when a manifest exists but must fail to parse (exit-2 provoker). */
-  corrupt?: boolean;
-}
-
-const EXPECTATIONS: WorkspaceExpectation[] = [
-  { dir: 'workspace', findings: [], exitCode: 0 },
-  {
-    dir: 'fixture-remote-cycle',
-    findings: [
-      { code: 'REMOTE_CYCLE', severity: 'warning', confidence: 'static' },
-    ],
-    exitCode: 0,
-  },
-  {
-    dir: 'fixture-version-drift',
-    findings: [
-      {
-        code: 'SHARED_VERSION_DRIFT',
-        severity: 'error',
-        confidence: 'static',
-      },
-    ],
-    exitCode: 1,
-  },
-  {
-    dir: 'fixture-missing-native',
-    findings: [
-      {
-        code: 'MISSING_NATIVE_MODULE',
-        severity: 'error',
-        confidence: 'static',
-      },
-    ],
-    exitCode: 1,
-  },
-  {
-    dir: 'fixture-corrupt-manifest',
-    findings: [],
-    exitCode: 2,
-    corrupt: true,
-  },
-  {
-    dir: 'fixture-heuristic-downgrade',
-    findings: [
-      {
-        code: 'HEURISTIC_ADVISORY',
-        severity: 'warning',
-        confidence: 'heuristic',
-      },
-    ],
-    exitCode: 0,
-  },
-];
+import { EXPECTATIONS } from './expectations.js';
 
 // --------------------------------------------------------------------------
 // Loading helpers (adapters, exactly what T7's CLI will compose).
@@ -246,7 +181,10 @@ describe('fixture manifests satisfy the core schema', () => {
       const names = await fs.readdir(manifestDir);
       assert.deepEqual(
         [...names].sort(),
-        ['host.json', 'mini-auth.json', 'mini-store.json'],
+        expectation.missingManifest
+          ? // The variant deletes one remote manifest: exactly two remain.
+            ['host.json', 'mini-auth.json']
+          : ['host.json', 'mini-auth.json', 'mini-store.json'],
         `${expectation.dir}: manifests/ content`
       );
       for (const name of names) {
@@ -283,6 +221,21 @@ describe('fixture workspaces reproduce their expectation table', () => {
         expectation.exitCode,
         `${expectation.dir}: exit code (findings: ${JSON.stringify(report.findings)})`
       );
+      if (expectation.allowMissingExit !== undefined) {
+        const lenient = runDoctor({ host, remotes, allowMissingManifests: true });
+        assert.equal(
+          doctorExitCode(lenient),
+          expectation.allowMissingExit,
+          `${expectation.dir}: exit code with --allow-missing-manifests`
+        );
+      }
+      if (expectation.failOnWarningsExit !== undefined) {
+        assert.equal(
+          doctorExitCode(report, { failOnWarnings: true }),
+          expectation.failOnWarningsExit,
+          `${expectation.dir}: exit code with --fail-on-warnings`
+        );
+      }
       assert.deepEqual(
         report.findings
           .map((f) => ({
@@ -389,9 +342,12 @@ describe('fixture rspack configs are valid ESM registering both plugins', () => 
 
         // The corrupt variant only corrupts the store manifest, never a
         // config: that app still must parse and register both plugins, but
-        // there is no manifest to cross-check keys against.
+        // there is no manifest to cross-check keys against. The
+        // missing-manifest variant deleted the file outright — same reason
+        // to skip the cross-check for that app.
         const manifestComparable = !(
-          expectation.corrupt && app.manifest === 'mini-store.json'
+          (expectation.corrupt || expectation.missingManifest) &&
+          app.manifest === 'mini-store.json'
         );
         const manifest = manifestComparable
           ? ((await readJson(

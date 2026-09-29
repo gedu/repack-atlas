@@ -62,7 +62,8 @@ pnpm agent:check # CI-mode verification of the above (exit 1 on drift)
 
 ```
 src/
-├── cli.ts               # `repack-atlas` bin (adapts commands to argv/exit codes)
+├── cli.ts               # `repack-atlas` bin: argv → adapters+core → exit code
+├── cli/                 # bin internals: arg parser, help, doctor plan, init plan
 ├── core/                # bundler-agnostic domain: manifest schema types,
 │                        #   findings model, federation graph, cycle detection,
 │                        #   shared-drift analysis, ports (interfaces only)

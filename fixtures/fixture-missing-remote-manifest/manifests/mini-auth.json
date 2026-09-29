@@ -1,0 +1,54 @@
+{
+  "manifestVersion": 1,
+  "id": "mini_auth",
+  "name": "mini_auth",
+  "metaData": {
+    "name": "mini_auth",
+    "globalName": "mini_auth",
+    "type": "remote",
+    "buildInfo": {
+      "buildVersion": "fixture00",
+      "buildName": "mini_auth"
+    },
+    "remoteEntry": {
+      "name": "mini_auth.container.js",
+      "path": "",
+      "type": "var"
+    },
+    "publicPath": "auto"
+  },
+  "shared": [
+    {
+      "name": "react",
+      "version": "19.0.0",
+      "singleton": true,
+      "eager": true,
+      "requiredVersion": "^19.0.0"
+    },
+    {
+      "name": "react-native",
+      "version": "0.79.2",
+      "singleton": true,
+      "eager": true,
+      "requiredVersion": "~0.79.2"
+    }
+  ],
+  "remotes": [],
+  "exposes": [
+    {
+      "id": "mini_auth:Login",
+      "name": "Login",
+      "path": "./src/Login"
+    }
+  ],
+  "reactNative": {
+    "version": "0.79.2",
+    "platforms": [
+      "ios",
+      "android"
+    ],
+    "nativeModules": [],
+    "dynamicImportDetected": false
+  },
+  "_provenance": "Hand-authored fixture manifest for repack-atlas tests (T6). Schema: src/core/manifest-types.ts (FederationManifestSchema v1). Not produced by a real rspack build; see fixtures/README.md."
+}

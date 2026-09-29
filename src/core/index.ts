@@ -11,4 +11,5 @@ export * from './semverRange.js';
 export * from './cycle.js';
 export * from './exit-codes.js';
 export * from './doctor.js';
+export * from './inspect.js';
 export * from './ports.js';

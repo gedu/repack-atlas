@@ -14,7 +14,10 @@
 //     `{findings}` payload; the stable key order is preserved.
 
 import { detectRemoteCycles } from './cycle.js';
-import { doctorExitCode } from './exit-codes.js';
+import {
+  doctorExitCode,
+  type DoctorExitCodeOptions,
+} from './exit-codes.js';
 import type {
   DoctorFinding,
   DoctorReport,
@@ -331,7 +334,10 @@ const isHeuristic = (confidence: FindingConfidence | undefined): boolean =>
  * other warning is static. Additive fields only relative to upstream's
  * `{ findings }` payload.
  */
-export function doctorReportToJson(report: DoctorReport): string {
+export function doctorReportToJson(
+  report: DoctorReport,
+  exitOptions: DoctorExitCodeOptions = {}
+): string {
   const advisories = countConfidence(report, 'warning', (f) =>
     isHeuristic(f.confidence)
   );
@@ -342,7 +348,7 @@ export function doctorReportToJson(report: DoctorReport): string {
     {
       tool: 'repack-atlas',
       doctorVersion: '1',
-      exitCode: doctorExitCode(report),
+      exitCode: doctorExitCode(report, exitOptions),
       summary: {
         errors: report.findings.filter((f) => f.severity === 'error').length,
         warnings,
