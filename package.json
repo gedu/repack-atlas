@@ -1,0 +1,48 @@
+{
+  "name": "repack-atlas",
+  "version": "0.0.1",
+  "description": "Local developer tooling for React Native Module Federation workspaces built with Re.Pack.",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "repack-atlas": "./dist/cli.js"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "packageManager": "pnpm@11.23.0",
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.test.json --noEmit",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "test": "tsx --test \"tests/**/*.test.ts\"",
+    "agent:sync": "node scripts/agent-sync.mjs",
+    "agent:check": "node scripts/agent-sync.mjs --check"
+  },
+  "peerDependencies": {
+    "@callstack/repack": "*"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.5",
+    "@types/node": "^24.0.0",
+    "eslint": "^9.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0",
+    "typescript-eslint": "^8.0.0"
+  }
+}

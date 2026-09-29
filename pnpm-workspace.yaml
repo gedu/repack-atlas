@@ -1,0 +1,14 @@
+# Single-package project. The repo root package is part of the workspace
+# implicitly; fixture workspaces (created in a later task) are listed here so
+# they can be installed and tested together with the tool.
+packages:
+  - "fixtures/*"
+
+# tsx needs the esbuild native binary (pnpm >= 11 blocks build scripts by default).
+allowBuilds:
+  esbuild: true
+
+# @callstack/repack is a peerDependency resolved from the *user project*
+# (PRD 6.2 rule 2), never from Atlas's own tree, so pnpm must not
+# auto-install it into node_modules as if it were a real dependency.
+autoInstallPeers: false
