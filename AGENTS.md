@@ -68,6 +68,8 @@ src/
 │                        #   shared-drift analysis, ports (interfaces only)
 ├── repack-bridge/       # the ONLY Re.Pack import surface
 │   ├── index.ts         #   = the exports request (vendor -> swap)
+│   ├── plugin.ts        #   `repack-atlas/plugin` subpath: FederationManifestPlugin
+│   │                    #   wrapper the showcase app adds to its rspack config
 │   └── vendored/        #   copied Re.Pack code, MIT headers, VENDORED.md
 ├── adapters/            # port implementations: workspace config reader,
 │                        #   manifest sources, ProjectFs, ProcessRunner

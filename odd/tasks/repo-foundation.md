@@ -44,10 +44,9 @@ Out: showcase-fork integration (next feature), npm publish, MCP/Proxy (PRD §16)
 - [ ] T2. Agent files: AGENTS.md (rules + skills table + auto-invoke),
       CLAUDE.md one-liner, `.agents/skills/` day-1 ★ skills, `.claude/skills`
       symlinks, `scripts/agent-sync` with `--check`.
-- [ ] T3. Bridge: `src/repack-bridge/index.ts` surface + `vendored/` manifest
+- [x] T3. Bridge: `src/repack-bridge/index.ts` surface + `vendored/` manifest
       plugin (from #1463 `plugins/federationManifest/*`) + VENDORED.md +
-      `resolveRepack(projectRoot)` helper.
-- [ ] T4. Port core (agnostic): manifest schema types, doctor rules
+      `resolveRepack(projectRoot)` helper.- [ ] T4. Port core (agnostic): manifest schema types, doctor rules
       (drift/singleton/eager/cycles via semverRange), findings model,
       `buildFederationGraph`. No repack/rspack imports (lint-enforced).
 - [ ] T5. Port adapters (Re.Pack-specific): workspace config reader
@@ -88,3 +87,14 @@ Out: showcase-fork integration (next feature), npm publish, MCP/Proxy (PRD §16)
   with --check; 4 day-1 skills + symlinks; AGENTS.md/CLAUDE.md. Lint/typecheck/
   build/test green (1 smoke test). Note: fences use no-restricted-imports
   patterns (resolution-based rule silently no-ops with NodeNext .js specifiers).
+- 2026-09-29: T3 done (delegated writer + parent spot-check): 6 files vendored
+  from repack@c5df67f0 plugins/federationManifest (closed import graph — only
+  external dep is a type-only @rspack/core import, swapped for bridge-owned
+  structural types in rspack-compiler.ts). Upstream has NO per-file MIT headers
+  (added, allowed by skill) and NO standalone plugin class (FederationManifestPlugin
+  is an Atlas wrapper in repack-bridge/plugin.ts, exported as
+  `repack-atlas/plugin` for the demo story). A3: three type-only strict-TS
+  annotation fixes, no logic edits — all in VENDORED.md. core/manifest-types.ts
+  holds independent structural schema types (bridge adapts via toCoreManifest).
+  resolveRepack via createRequire, actionable error when absent. Bridge-fence
+  probe re-verified. build/typecheck/lint/test green (9 tests).
