@@ -1,0 +1,5 @@
+{"_provenance": "Hand-authored fixture manifest for repack-atlas tests (T6). Schema: src/core/manifest-types.ts (FederationManifestSchema v1). Not produced by a real rspack build; see fixtures/README.md.",
+  "manifestVersion": 1,
+  "id": "mini_store",
+  "name": "mini_store",
+  "shared": [ { "name": "react", "vers
