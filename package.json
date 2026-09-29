@@ -13,6 +13,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./plugin": {
+      "types": "./dist/repack-bridge/plugin.d.ts",
+      "default": "./dist/repack-bridge/plugin.js"
     }
   },
   "files": [
