@@ -1,0 +1,68 @@
+{
+  "manifestVersion": 1,
+  "id": "mini_store",
+  "name": "mini_store",
+  "metaData": {
+    "name": "mini_store",
+    "globalName": "mini_store",
+    "type": "remote",
+    "buildInfo": {
+      "buildVersion": "fixture00",
+      "buildName": "mini_store"
+    },
+    "remoteEntry": {
+      "name": "mini_store.container.js",
+      "path": "",
+      "type": "var"
+    },
+    "publicPath": "auto"
+  },
+  "shared": [
+    {
+      "name": "react",
+      "version": "19.0.0",
+      "singleton": true,
+      "eager": true,
+      "requiredVersion": "^19.0.0"
+    },
+    {
+      "name": "react-native",
+      "version": "0.79.2",
+      "singleton": true,
+      "eager": true,
+      "requiredVersion": "~0.79.2"
+    }
+  ],
+  "remotes": [
+    {
+      "federationContainerName": "mini_auth",
+      "moduleName": "mini_auth",
+      "alias": "mini_auth",
+      "entry": "http://127.0.0.1:8082/mini_auth.container.js"
+    }
+  ],
+  "exposes": [
+    {
+      "id": "mini_store:Catalog",
+      "name": "Catalog",
+      "path": "./src/Catalog"
+    }
+  ],
+  "reactNative": {
+    "version": "0.79.2",
+    "platforms": [
+      "ios",
+      "android"
+    ],
+    "nativeModules": [
+      {
+        "package": "react-native-reanimated",
+        "version": "3.17.1",
+        "turboModule": true,
+        "confidence": "static"
+      }
+    ],
+    "dynamicImportDetected": false
+  },
+  "_provenance": "Hand-authored fixture manifest for repack-atlas tests (T6). Schema: src/core/manifest-types.ts (FederationManifestSchema v1). Not produced by a real rspack build; see fixtures/README.md."
+}

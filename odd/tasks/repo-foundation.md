@@ -59,7 +59,7 @@ Out: showcase-fork integration (next feature), npm publish, MCP/Proxy (PRD §16)
       config-evaluation `extractShared`/dry-run — they load user rspack configs
       in-process, out of scope while introspection is the opt-in-plugin path
       (PRD §16.3). Typed seams already in place: core ports + `isUrlSource`.
-- [ ] T6. Fixture workspace: host + 2 mini-apps (Rspack, MF2, no UI) +
+- [x] T6. Fixture workspace: host + 2 mini-apps (Rspack, MF2, no UI) +
       broken variants one per finding (remote-cycle, version-drift,
       missing-native), each with README + expected exit code.
 - [ ] T7. CLI: bin `atlas` (name per T0) with `doctor`, `inspect`, `init`
@@ -121,3 +121,10 @@ Out: showcase-fork integration (next feature), npm publish, MCP/Proxy (PRD §16)
   probe proven). Upstream configFile fixtures copied (tests/fixtures/adapters).
   59 tests added (119 total). extractShared/dryRun/resolveFederationWorkspace/
   assertStandaloneSupported deferred to T7 (config evaluation = init surface).
+- 2026-09-29: T5 done: adapters (manifest sources file/url/dev-server w/ timeout+
+  size cap, workspace config walk-up, ProcessRunner kill-tree+port probes,
+  introspection reader) + adapter-boundary lint fence. init/dryRun/extractShared
+  deferred to T7 (opt-in plugin decision T0). 119 tests.
+- 2026-09-29: T6 done: fixtures/workspace clean + 5 broken variants w/ README
+  expectation tables; consistency test runs the REAL core engine + adapters over
+  all variants (155 tests). Config-import convention: relative ../../../../dist.
