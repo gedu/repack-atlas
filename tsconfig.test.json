@@ -1,0 +1,11 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    // Tests and scripts are typechecked but never emitted: no rootDir/outDir
+    // constraint and noEmit is driven from the `typecheck` script.
+    "rootDir": ".",
+    "noEmit": true
+  },
+  "include": ["src/**/*.ts", "tests/**/*.ts", "scripts/**/*.ts"],
+  "exclude": ["node_modules", "dist", "fixtures"]
+}
