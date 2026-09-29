@@ -46,7 +46,7 @@ Out: showcase-fork integration (next feature), npm publish, MCP/Proxy (PRD §16)
       symlinks, `scripts/agent-sync` with `--check`.
 - [x] T3. Bridge: `src/repack-bridge/index.ts` surface + `vendored/` manifest
       plugin (from #1463 `plugins/federationManifest/*`) + VENDORED.md +
-      `resolveRepack(projectRoot)` helper.- [ ] T4. Port core (agnostic): manifest schema types, doctor rules
+      `resolveRepack(projectRoot)` helper.- [x] T4. Port core (agnostic): manifest schema types, doctor rules
       (drift/singleton/eager/cycles via semverRange), findings model,
       `buildFederationGraph`. No repack/rspack imports (lint-enforced).
 - [ ] T5. Port adapters (Re.Pack-specific): workspace config reader
@@ -98,3 +98,7 @@ Out: showcase-fork integration (next feature), npm publish, MCP/Proxy (PRD §16)
   holds independent structural schema types (bridge adapts via toCoreManifest).
   resolveRepack via createRequire, actionable error when absent. Bridge-fence
   probe re-verified. build/typecheck/lint/test green (9 tests).
+- 2026-09-29: T4 done: core = doctor rules + semverRange + exit-codes + inspect
+  formatting + NEW REMOTE_CYCLE (Tarjan, deterministic) + ports (interfaces only).
+  38 upstream tests ported, 13 added (60 total). buildFederationGraph deferred
+  to T8/studio per layout decision.
