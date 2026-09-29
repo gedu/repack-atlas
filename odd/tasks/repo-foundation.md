@@ -62,7 +62,7 @@ Out: showcase-fork integration (next feature), npm publish, MCP/Proxy (PRD §16)
 - [x] T6. Fixture workspace: host + 2 mini-apps (Rspack, MF2, no UI) +
       broken variants one per finding (remote-cycle, version-drift,
       missing-native), each with README + expected exit code.
-- [ ] T7. CLI: bin `atlas` (name per T0) with `doctor`, `inspect`, `init`
+- [x] T7. CLI: bin `atlas` (name per T0) with `doctor`, `inspect`, `init`
       (init = port of #1466 dry-run/plan/apply, may lag), `--json`, exit codes
       0/1/2. Node integration tests spawn the bin against fixtures.
 - [ ] T8. Studio: `graph.ts` + `server.ts` (node:http 127.0.0.1, `/`,
@@ -128,3 +128,25 @@ Out: showcase-fork integration (next feature), npm publish, MCP/Proxy (PRD §16)
 - 2026-09-29: T6 done: fixtures/workspace clean + 5 broken variants w/ README
   expectation tables; consistency test runs the REAL core engine + adapters over
   all variants (155 tests). Config-import convention: relative ../../../../dist.
+- 2026-09-29: T7 done (delegated writer + parent spot-check): real
+  `repack-atlas` bin (doctor/inspect/init + --version/--help, hand-rolled
+  arg parser, zero new deps). Exit codes via core doctorExitCode (extended
+  with failOnWarnings option; heuristic advisories never escalate);
+  doctorReportToJson takes the same options so payload exitCode mirrors the
+  process. --fail-on-warnings implemented as a documented opt-in escalation
+  (core maps warnings to 0 by default — flag is CLI-requested deviation
+  surface). init = reduced scope: app discovery (apps/* with
+  rspack.config.*) + introspection facts → repack-federation.json skeleton,
+  --dry-run/--json; extractShared/feature-scan/resolveFederationWorkspace/
+  assertStandaloneSupported from #1466 remain DEFERRED (config evaluation
+  out of scope per T0). `dev` command deferred to T9 (runner). New fixture
+  fixture-missing-remote-manifest (exit 1, 0 with
+  --allow-missing-manifests). Expectation table extracted to
+  tests/fixtures/expectations.ts shared by consistency + spawned-bin CLI
+  tests (tests/cli/*). pretest=build added (bin tests need dist/). 204
+  tests.
+- 2026-09-29: T7 done: bin repack-atlas (doctor/inspect/init/--help/--version),
+  exit table verified on real spawns incl. --allow-missing-manifests and
+  --fail-on-warnings (advisories never escalate). New fixture
+  fixture-missing-remote-manifest. init = minimal skeleton (full #1466 deferred).
+  pretest builds dist. 204 tests.

@@ -20,13 +20,37 @@ export const EXIT_FOUND_ERRORS = 1;
 /** Exit code 2: could not answer (missing/corrupt input). */
 export const EXIT_NO_ANSWER = 2;
 
+/** Opt-in escalation switches mirrored from the CLI flags. */
+export interface DoctorExitCodeOptions {
+  /**
+   * Fail on warnings too (`doctor --fail-on-warnings`). Heuristic findings
+   * never escalate — they are advisories reporting what static analysis
+   * cannot check (AGENTS.md rule 7), and promoting them to gate failures
+   * would punish honesty.
+   */
+  failOnWarnings?: boolean;
+}
+
 /**
  * Map a doctor report to a process exit code. `2` wins over `1`: an answer
  * built on partially missing input is not an answer.
  */
-export function doctorExitCode(report: DoctorReport): 0 | 1 | 2 {
+export function doctorExitCode(
+  report: DoctorReport,
+  options: DoctorExitCodeOptions = {}
+): 0 | 1 | 2 {
   if (report.unableToAnswer) return EXIT_NO_ANSWER;
-  return report.findings.some((finding) => finding.severity === 'error')
-    ? EXIT_FOUND_ERRORS
-    : EXIT_CLEAN;
+  if (report.findings.some((finding) => finding.severity === 'error')) {
+    return EXIT_FOUND_ERRORS;
+  }
+  if (
+    options.failOnWarnings &&
+    report.findings.some(
+      (finding) =>
+        finding.severity === 'warning' && finding.confidence !== 'heuristic'
+    )
+  ) {
+    return EXIT_FOUND_ERRORS;
+  }
+  return EXIT_CLEAN;
 }
