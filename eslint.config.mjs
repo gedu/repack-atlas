@@ -130,6 +130,34 @@ export default tseslint.config(
     },
   },
 
+  // 3. adapter-boundary: adapters touch the world through Node builtins,
+  //    core, and the bridge index — never a bundler package directly. The
+  //    core fence cannot cover them (adapters are not src/core), so without
+  //    this block an adapter could `import { rspack } from '@rspack/core'`
+  //    and bypass the vendor→swap plan (PRD 6.2).
+  {
+    name: 'atlas/adapter-boundary',
+    files: ['src/adapters/**/*.ts'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            {
+              group: coreForbiddenPackagePatterns,
+              message:
+                'adapter-boundary: src/adapters/** may reach Re.Pack/rspack only through src/repack-bridge (docs/PRD.md 6.2). Extend the bridge index instead.',
+            },
+            {
+              group: vendoredPathPatterns,
+              message: BRIDGE_FENCE_MESSAGE,
+            },
+          ],
+        },
+      ],
+    },
+  },
+
   {
     // Node scripts run outside the published package; no type-aware linting.
     // They are plain JS, so `no-undef` is live and the Node globals they use
