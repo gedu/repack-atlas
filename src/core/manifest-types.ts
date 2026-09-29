@@ -76,3 +76,39 @@ export interface FederationManifestSchema {
   exposes: ManifestExposeEntry[];
   reactNative: ManifestNativeBlock;
 }
+
+/**
+ * A manifest document that passed only the minimal shape check (numeric
+ * `manifestVersion` plus a `name` or `id`): manifest content is untrusted
+ * input, so consumers treat every other field as possibly absent or shaped
+ * differently than the v1 schema. Provenance of the minimal check: upstream
+ * `commands/federation/loadManifest.ts` @ c5df67f0.
+ */
+export interface ParsedFederationManifest {
+  manifestVersion: number;
+  id: string;
+  name: string;
+  metaData?: FederationManifestSchema['metaData'];
+  shared?: ManifestSharedEntry[];
+  remotes?: ManifestRemoteEntry[];
+  exposes?: ManifestExposeEntry[];
+  reactNative?: Partial<ManifestNativeBlock>;
+}
+
+/**
+ * Minimal runtime check for an unknown JSON document: a numeric
+ * `manifestVersion` and a `name` or `id` to identify it by. Ported from the
+ * guard in upstream `commands/federation/loadManifest.ts` @ c5df67f0; the
+ * loading itself (fs/fetch) is adapter territory behind the `ManifestSource`
+ * port. `id`/`name` are normalized to strings for consumers.
+ */
+export function isParsedFederationManifest(
+  value: unknown
+): value is ParsedFederationManifest {
+  if (typeof value !== 'object' || value === null) return false;
+  const candidate = value as Record<string, unknown>;
+  return (
+    typeof candidate.manifestVersion === 'number' &&
+    (typeof candidate.name === 'string' || typeof candidate.id === 'string')
+  );
+}
