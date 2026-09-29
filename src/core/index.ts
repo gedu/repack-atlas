@@ -4,6 +4,8 @@
 // adapters or any bundler package — enforced by the `atlas/core-boundary`
 // lint rule.
 export * from './manifest-types.js';
+export * from './federation-config.js';
+export * from './introspection-types.js';
 export * from './findings.js';
 export * from './semverRange.js';
 export * from './cycle.js';

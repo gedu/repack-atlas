@@ -52,6 +52,13 @@ Out: showcase-fork integration (next feature), npm publish, MCP/Proxy (PRD §16)
 - [ ] T5. Port adapters (Re.Pack-specific): workspace config reader
       (`repack-federation.json`), config introspection (feature scan / extractShared
       from #1466), manifest sources (file/url/dev-server).
+      DECISION 2026-09-29 (owner): buildFederationGraph lives in `src/core/graph.ts`
+      (agnostic, per PRD G5); `src/studio/` only serves/renders it.
+      DEFERRED to T7 with init/plan/apply (#1466): `resolveFederationWorkspace`
+      (CLI-flag precedence merge), `assertStandaloneSupported`, and
+      config-evaluation `extractShared`/dry-run — they load user rspack configs
+      in-process, out of scope while introspection is the opt-in-plugin path
+      (PRD §16.3). Typed seams already in place: core ports + `isUrlSource`.
 - [ ] T6. Fixture workspace: host + 2 mini-apps (Rspack, MF2, no UI) +
       broken variants one per finding (remote-cycle, version-drift,
       missing-native), each with README + expected exit code.
@@ -102,3 +109,15 @@ Out: showcase-fork integration (next feature), npm publish, MCP/Proxy (PRD §16)
   formatting + NEW REMOTE_CYCLE (Tarjan, deterministic) + ports (interfaces only).
   38 upstream tests ported, 13 added (60 total). buildFederationGraph deferred
   to T8/studio per layout decision.
+- 2026-09-29: T5 done (delegated writer + parent spot-check): src/adapters =
+  ProjectFs, ProcessRunner (detached group + kill-tree, portPlanner probe port),
+  manifest sources (file/url/dev-server, timeout+size cap, 404→missing / 5xx→
+  corrupt), WorkspaceConfigReader (walk-up ported from configFile.ts),
+  ConfigIntrospector reader + `repack-atlas/introspection` opt-in plugin writer.
+  Pure configFile parts (schema, validator, describeJsonParseFailure) ported to
+  src/core/federation-config.ts; ports for ProjectFs/ProcessRunner/
+  ConfigIntrospector added to core/ports.ts (interfaces only). New lint block
+  `atlas/adapter-boundary` (adapters may not import bundler packages directly —
+  probe proven). Upstream configFile fixtures copied (tests/fixtures/adapters).
+  59 tests added (119 total). extractShared/dryRun/resolveFederationWorkspace/
+  assertStandaloneSupported deferred to T7 (config evaluation = init surface).

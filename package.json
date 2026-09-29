@@ -17,6 +17,10 @@
     "./plugin": {
       "types": "./dist/repack-bridge/plugin.d.ts",
       "default": "./dist/repack-bridge/plugin.js"
+    },
+    "./introspection": {
+      "types": "./dist/repack-bridge/introspection-plugin.d.ts",
+      "default": "./dist/repack-bridge/introspection-plugin.js"
     }
   },
   "files": [

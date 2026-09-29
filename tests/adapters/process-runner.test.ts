@@ -1,0 +1,145 @@
+// ProcessRunner adapter tests: real `node -e` children — streams, exit,
+// process-group kill without orphans, and the two-leg port probe (busy vs
+// free) against real loopback sockets. Ported semantics: busy-probe legs
+// and timeouts come from `portPlanner.ts` (branch feat/federation-dev-runner).
+
+import assert from 'node:assert/strict';
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
+import { after, describe, it } from 'node:test';
+import { createNodeProcessRunner } from '../../src/adapters/index.js';
+
+const runner = createNodeProcessRunner();
+const openHandles: { close(): void }[] = [];
+
+after(async () => {
+  for (const handle of openHandles) handle.close();
+});
+
+function isAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+describe('start / streams / exit', () => {
+  it('captures stdout and stderr line-wise and reports the exit code', async () => {
+    const handle = runner.start({
+      file: process.execPath,
+      args: [
+        '-e',
+        'console.log("out-1"); console.error("err-1"); console.log("out-2"); process.exit(3);',
+      ],
+    });
+    const out: string[] = [];
+    const err: string[] = [];
+    handle.subscribeToStdout((line) => out.push(line));
+    handle.subscribeToStderr((line) => err.push(line));
+    const exit = await handle.waitForExit();
+    // 'close' fires after stdio drains, so lines are complete here.
+    assert.deepEqual(out, ['out-1', 'out-2']);
+    assert.deepEqual(err, ['err-1']);
+    assert.equal(exit.code, 3);
+    assert.ok(typeof handle.pid === 'number');
+  });
+
+  it('waitForExit never rejects for a nonexistent executable', async () => {
+    const handle = runner.start({ file: 'definitely-not-a-binary-42' });
+    const exit = await handle.waitForExit();
+    assert.equal(exit.code, null);
+    assert.equal(exit.signal, 'spawn-error');
+  });
+
+  it('unsubscribe stops delivery', async () => {
+    const handle = runner.start({
+      file: process.execPath,
+      args: ['-e', 'console.log("a"); console.log("b");'],
+    });
+    const lines: string[] = [];
+    const unsubscribe = handle.subscribeToStdout((l) => lines.push(l));
+    unsubscribe();
+    await handle.waitForExit();
+    assert.deepEqual(lines, []);
+  });
+});
+
+describe('killTree', () => {
+  it('kills the whole process group: no orphan grandchild survives', async () => {
+    // The child spawns a grandchild that ignores SIGINT and lingers; both
+    // share the child's process group, which killTree signals.
+    const script = [
+      'const { spawn } = require("node:child_process");',
+      'const grand = spawn(process.execPath, ["-e",',
+      '  "process.on(\'SIGINT\', () => {}); setInterval(() => {}, 1000);",',
+      '  { stdio: "ignore" }]);',
+      'console.log(String(grand.pid));',
+      'process.on("SIGINT", () => process.exit(0));',
+      'setInterval(() => {}, 1000);',
+    ].join('\n');
+    const handle = runner.start({
+      file: process.execPath,
+      args: ['-e', script],
+    });
+    const grandchildPid = await new Promise<number>((resolve, reject) => {
+      const timer = setTimeout(
+        () => reject(new Error('grandchild pid never printed')),
+        10_000
+      );
+      handle.subscribeToStdout((line) => {
+        clearTimeout(timer);
+        resolve(Number(line));
+      });
+    });
+
+    assert.ok(handle.pid !== null && isAlive(handle.pid));
+    assert.ok(isAlive(grandchildPid));
+
+    await handle.killTree(1_500);
+
+    const exit = await handle.waitForExit();
+    assert.notDeepEqual(exit, { code: null, signal: null });
+    // Grace-window SIGINT reached the group: the child exited on it.
+    assert.equal(exit.code, 0);
+    assert.ok(!isAlive(handle.pid!), 'child survived killTree');
+    assert.ok(!isAlive(grandchildPid), 'orphaned grandchild survived killTree');
+  });
+
+  it('is a no-op on an already-exited child', async () => {
+    const handle = runner.start({
+      file: process.execPath,
+      args: ['-e', 'process.exit(0)'],
+    });
+    await handle.waitForExit();
+    await handle.killTree(200);
+    assert.ok(true);
+  });
+});
+
+describe('port probes', () => {
+  it('reports a listening port busy and a free port free', async () => {
+    const server = createServer((_req, res) => res.end('ok'));
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const port = (server.address() as AddressInfo).port;
+    openHandles.push(server);
+
+    assert.equal(await runner.isPortBusy(port), true);
+
+    const free = await runner.findFreePort();
+    assert.ok(free > 0 && free < 65_536);
+    assert.equal(await runner.isPortBusy(free), false);
+  });
+
+  it('findFreePort does not report a busy port', async () => {
+    const server = createServer();
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const busyPort = (server.address() as AddressInfo).port;
+    openHandles.push(server);
+    // Allocate several; none may collide with the listener above.
+    for (let i = 0; i < 3; i += 1) {
+      assert.notEqual(await runner.findFreePort(), busyPort);
+    }
+  });
+});
