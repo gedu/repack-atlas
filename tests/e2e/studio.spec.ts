@@ -400,4 +400,19 @@ test.describe('Studio over a stacked one-column workspace', () => {
     );
     for (const label of labels) expect(label.x + label.width).toBeLessThanOrEqual(viewBoxWidth);
   });
+
+  test('confidence badges never wrap inside their pill', async ({ page }) => {
+    await page.goto(preview.url);
+    await page.locator('svg.graph g.node[data-node="wallet"]').click();
+    await page.locator('.tab[data-tab="native"]').click();
+    const badge = page.locator('#tab-body .pill', { hasText: 'heuristic' });
+    await expect(badge).toHaveCount(1);
+    const size = await badge.evaluate((node) => {
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      return { lines: range.getClientRects().length, whiteSpace: getComputedStyle(node).whiteSpace };
+    });
+    expect(size.whiteSpace).toBe('nowrap');
+    expect(size.lines).toBe(1);
+  });
 });

@@ -201,8 +201,9 @@ export const STUDIO_PAGE_HTML = `<!doctype html>
   table.kv { width: 100%; border-collapse: collapse; font-size: 12.5px; }
   table.kv th { text-align: left; font-weight: 500; color: var(--ink-3); font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; padding: 4px 6px; border-bottom: 1px solid var(--line); }
   table.kv td { padding: 6px; border-bottom: 1px solid var(--line); font-family: var(--mono); font-variant-numeric: tabular-nums; vertical-align: top; overflow-wrap: anywhere; }
+  table.kv td.has-pill { white-space: nowrap; min-width: 88px; overflow-wrap: normal; }
   table.kv td.st { font-family: var(--sans); white-space: normal; }
-  .pill { display: inline-block; font-size: 11px; font-weight: 600; padding: 1px 7px; border-radius: 999px; }
+  .pill { display: inline-block; white-space: nowrap; font-size: 11px; font-weight: 600; padding: 1px 7px; border-radius: 999px; }
   .pill.ok { color: var(--ok); background: var(--ok-soft); }
   .pill.warn { color: var(--warn); background: var(--warn-soft); }
   .pill.bad { color: var(--bad); background: var(--bad-soft); }
@@ -737,7 +738,7 @@ export const STUDIO_PAGE_HTML = `<!doctype html>
     var rowNode = el('tr');
     for (var i = 0; i < cells.length; i++) {
       var cell = cells[i];
-      var td = el('td', cell.plain ? 'st' : null);
+      var td = el('td', cell.plain ? 'st' : cell.pill ? 'has-pill' : null);
       if (cell.pill) {
         var pill = el('span', 'pill ' + cell.pill, cell.text);
         td.appendChild(pill);
