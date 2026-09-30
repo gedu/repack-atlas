@@ -52,6 +52,7 @@ interface InitJson {
   dryRun: boolean;
   written: boolean;
   apps: { dir: string; name: string; role: string; facts: string }[];
+  warnings: string[];
   config: unknown;
 }
 
@@ -336,6 +337,9 @@ describe('init: bounded discovery (spawned bin)', () => {
       'packages/host/nested/rspack.config.js': '',
       'packages/group/build/rspack.config.js': '',
       'packages/group/dist/rspack.config.js': '',
+      'packages/group/ios/rspack.config.js': '',
+      'packages/group/android/rspack.config.js': '',
+      'packages/group/Pods/rspack.config.js': '',
       'packages/group/remote/rspack.config.js': '',
     });
     const payload = await run(workspace);
@@ -352,6 +356,25 @@ describe('init: bounded discovery (spawned bin)', () => {
     });
     const payload = await run(workspace);
     assert.deepEqual(payload.apps.map((app) => app.dir), ['apps/one']);
+    const excluded = await ws({
+      'pnpm-workspace.yaml': 'packages:\n  - "!apps/skip"\n',
+      'apps/one/rspack.config.js': '',
+      'apps/skip/rspack.config.js': '',
+    });
+    assert.deepEqual(
+      (await run(excluded)).apps.map((app) => app.dir),
+      ['apps/one']
+    );
+    // The same exclusions apply when the fallback scans the workspace root.
+    const rootScan = await ws({
+      'pnpm-workspace.yaml': 'packages:\n  - "!skip"\n',
+      'one/rspack.config.js': '',
+      'skip/rspack.config.js': '',
+    });
+    assert.deepEqual(
+      (await run(rootScan)).apps.map((app) => app.dir),
+      ['one']
+    );
     const empty = await ws({ 'pnpm-workspace.yaml': 'packages:\n  - "!x"\n' });
     const result = await runBin('init', '--workspace', empty);
     assert.equal(result.code, 2);
@@ -379,6 +402,63 @@ describe('init: bounded discovery (spawned bin)', () => {
     ];
     assert.equal(new Set(manifests).size, 3);
     assert.deepEqual(validateFederationConfig(payload.config), []);
+  });
+
+  it('dashed names that collide get a numeric suffix', async () => {
+    const workspace = await ws({
+      'pnpm-workspace.yaml':
+        'packages:\n  - "packages/*/*"\n  - "flat/*"\n  - "p/*/*/*"\n',
+      // Dashed vs plain: `packages/x/app` dashes to the plain name of
+      // `flat/packages-x-app`, which keeps it.
+      'packages/x/app/rspack.config.js': '',
+      'packages/y/app/rspack.config.js': '',
+      'flat/packages-x-app/rspack.config.js': '',
+      // Dashed vs dashed: both dash to `p-a-b-c-z`.
+      'p/a/b-c/z/rspack.config.js': '',
+      'p/a-b/c/z/rspack.config.js': '',
+    });
+    const payload = await run(workspace);
+    const byDir = new Map(payload.apps.map((app) => [app.dir, app.name]));
+    assert.equal(byDir.get('flat/packages-x-app'), 'packages-x-app');
+    assert.equal(byDir.get('packages/x/app'), 'packages-x-app-2');
+    assert.equal(byDir.get('packages/y/app'), 'packages-y-app');
+    // Sorted dir order decides: `-` sorts before `/`.
+    assert.equal(byDir.get('p/a-b/c/z'), 'p-a-b-c-z');
+    assert.equal(byDir.get('p/a/b-c/z'), 'p-a-b-c-z-2');
+    const names = payload.apps.map((app) => app.name);
+    assert.equal(new Set(names).size, names.length);
+    const config = payload.config as {
+      host: { manifest: string };
+      remotes: Record<string, { manifest: string }>;
+    };
+    const manifests = [
+      config.host.manifest,
+      ...Object.values(config.remotes).map((r) => r.manifest),
+    ];
+    assert.equal(new Set(manifests).size, payload.apps.length);
+    assert.deepEqual(validateFederationConfig(payload.config), []);
+  });
+
+  it('warns when the ** depth cap truncated a walk', async () => {
+    const deepDirs = Array.from({ length: 8 }, (_, i) => `d${i + 1}`).join('/');
+    const workspace = await ws({
+      'pnpm-workspace.yaml': 'packages:\n  - "packages/**"\n',
+      'packages/host/rspack.config.js': '',
+      [`packages/${deepDirs}/app/rspack.config.js`]: '',
+    });
+    const payload = await run(workspace);
+    assert.deepEqual(payload.apps.map((app) => app.dir), ['packages/host']);
+    assert.equal(payload.warnings.length, 1);
+    assert.match(payload.warnings[0]!, /"packages\/\*\*" stopped at depth 8/);
+    const text = await runBin('init', '--workspace', workspace, '--dry-run');
+    assert.equal(text.code, 0, text.stderr);
+    assert.match(text.stdout, /warning: workspace glob "packages\/\*\*" stopped at depth 8/);
+
+    const shallow = await ws({
+      'pnpm-workspace.yaml': 'packages:\n  - "packages/**"\n',
+      'packages/host/rspack.config.js': '',
+    });
+    assert.deepEqual((await run(shallow)).warnings, []);
   });
 });
 

@@ -478,6 +478,17 @@ test.describe('Studio over a workspace with a standalone-declaring remote', () =
     await expect(page.locator('svg.graph text.tag-standalone-t')).toHaveCount(1);
     await expect(page.locator('svg.graph g.node[data-node="wallet"] .tag-standalone')).toHaveCount(0);
 
+    // The pill sits left of the status dot without touching it.
+    const node = page.locator('svg.graph g.node[data-node="auth"]');
+    const pill = await node.locator('rect.tag-standalone').boundingBox();
+    const dot = await node.locator('circle:not(.badge-c):not(.badge-w)').first().boundingBox();
+    const label = await badge.boundingBox();
+    expect(pill).not.toBeNull();
+    expect(dot).not.toBeNull();
+    expect(label).not.toBeNull();
+    expect(pill!.x + pill!.width).toBeLessThanOrEqual(dot!.x);
+    expect(label!.x + label!.width).toBeLessThanOrEqual(dot!.x);
+
     // The badge is not a control: no extra interactive element appears.
     await expect(page.locator('svg.graph g.node[data-node="auth"] [role="button"]')).toHaveCount(0);
 
