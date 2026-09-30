@@ -38,6 +38,9 @@ jobs:
       - name: Check diff size
         env:
           PR: ${{ github.event.pull_request.number }}
+          # The runner's default GITHUB_TOKEN is not what the CLI reads; without
+          # this mapping every `gh api` call in this step fails outright.
+          GH_TOKEN: ${{ github.token }}
         run: |
           stat_json=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR}" \
             --jq '{additions, deletions}')
