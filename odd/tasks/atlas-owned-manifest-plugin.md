@@ -40,3 +40,8 @@ Mode: off (no project/session TDD config). Runner: `pnpm test`.
 ## Progress
 
 - Branch: `docs/atlas-owned-manifest-plugin` from `0f744b2`.
+- T1 `597951d` (11 files, docs and comments only). Route: delegated direct.
+- Evidence: `pnpm build`, `lint`, `typecheck` clean; `pnpm test` 362/362;
+  `agent:check` OK; `check:vendored` OK (6 files). Remaining `rg -i swap`
+  hits outside `odd/` are only the decision record (PRD, VENDORED.md,
+  AGENTS.md) and unrelated `swaps` in a Playwright comment.
