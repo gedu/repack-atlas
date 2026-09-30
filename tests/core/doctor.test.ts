@@ -491,6 +491,21 @@ describe('runDoctor REMOTE_CYCLE integration and exit-code 2 (Atlas additions)',
     assert.equal(doctorExitCode(report), 1);
   });
 
+  it('words NOTHING_COMPARED for one remote and for several', () => {
+    const one = runDoctor({ host, remotes: [{ name: 'store', missing: true }] });
+    const two = runDoctor({
+      host,
+      remotes: [
+        { name: 'payments', missing: true },
+        { name: 'store', missing: true },
+      ],
+    });
+    const message = (report: ReturnType<typeof runDoctor>) =>
+      report.findings.find((f) => f.code === 'NOTHING_COMPARED')?.message ?? '';
+    assert.ok(message(one).startsWith('The remote manifest was not compared'));
+    assert.ok(message(two).startsWith('None of the 2 remote manifests were compared'));
+  });
+
   it('does not warn NOTHING_COMPARED when there are no remotes', () => {
     assert.ok(!codes(runDoctor({ host, remotes: [] })).includes('NOTHING_COMPARED'));
   });

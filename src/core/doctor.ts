@@ -268,15 +268,31 @@ function checkNothingCompared(
     (remote) => !remote.missing && !remote.corrupt && remote.manifest
   );
   if (compared) return;
-  if (input.remotes.every((remote) => remote.corrupt)) return;
+  if (allRemotesUnreadable(input)) return;
+  const count = input.remotes.length;
+  const subject =
+    count === 1
+      ? 'The remote manifest was not'
+      : `None of the ${count} remote manifests were`;
   findings.push({
     severity: 'warning',
     code: 'NOTHING_COMPARED',
     message:
-      `None of the ${input.remotes.length} remote manifest${input.remotes.length === 1 ? ' was' : 's were'} compared against host "${input.host.name}", ` +
+      `${subject} compared against host "${input.host.name}", ` +
       'so a clean exit does not mean the federation was checked. Provide or generate the remote manifests and run doctor again.',
     confidence: 'static',
   });
+}
+
+/**
+ * Exit-2 condition: remotes exist and every one is unreadable. Missing
+ * remotes do not count: they keep MISSING_REMOTE_MANIFEST semantics (exit 1,
+ * or 0 with `allowMissingManifests`).
+ */
+function allRemotesUnreadable(input: DoctorInput): boolean {
+  return (
+    input.remotes.length > 0 && input.remotes.every((remote) => remote.corrupt)
+  );
 }
 
 /**
@@ -314,13 +330,9 @@ export function runDoctor(input: DoctorInput): DoctorReport {
   checkUnreadableManifests(input, findings);
   checkNothingCompared(input, findings);
 
-  // Exit 2 only when remotes exist and every one is unreadable. Missing
-  // remotes do not count: they keep MISSING_REMOTE_MANIFEST semantics
-  // (exit 1, or 0 with `allowMissingManifests`).
-  const nothingComparable =
-    input.remotes.length > 0 &&
-    input.remotes.every((remote) => remote.corrupt);
-  return nothingComparable ? { findings, unableToAnswer: true } : { findings };
+  return allRemotesUnreadable(input)
+    ? { findings, unableToAnswer: true }
+    : { findings };
 }
 
 /**
