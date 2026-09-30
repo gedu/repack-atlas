@@ -68,15 +68,29 @@ describe('start / streams / exit', () => {
 
 describe('killTree', () => {
   it('kills the whole process group: no orphan grandchild survives', async () => {
-    // The child spawns a grandchild that ignores SIGINT and lingers; both
-    // share the child's process group, which killTree signals.
+    // The child spawns a grandchild that ignores SIGINT; both share the
+    // child's process group, which killTree signals. Two CI-only races,
+    // both fixed by construction:
+    //  1. Signal handlers are installed BEFORE the pid is printed. stdout
+    //     flushes as soon as console.log runs, so a group SIGINT could land
+    //     while the child was still between statements — default handling
+    //     killed it (exit code null, the CI failure).
+    //  2. The child outlives the grandchild and REAPS it: an orphaned,
+    //     unreaped zombie still answers `kill(pid, 0)`, so the liveness
+    //     probe would see a dead grandchild as alive. The child exits only
+    //     from the grandchild's 'exit' event, and ignores SIGINT/SIGTERM
+    //     itself, so the deterministic path is: group SIGINT (ignored by
+    //     both or kills a not-yet-exec'd grandchild) → group SIGTERM kills
+    //     the grandchild → child reaps it and exits 0.
     const script = [
+      'process.on("SIGINT", () => {});',
+      'process.on("SIGTERM", () => {});',
       'const { spawn } = require("node:child_process");',
       'const grand = spawn(process.execPath, ["-e",',
       '  "process.on(\'SIGINT\', () => {}); setInterval(() => {}, 1000);",',
       '  { stdio: "ignore" }]);',
+      'grand.once("exit", () => process.exit(0));',
       'console.log(String(grand.pid));',
-      'process.on("SIGINT", () => process.exit(0));',
       'setInterval(() => {}, 1000);',
     ].join('\n');
     const handle = runner.start({
@@ -101,7 +115,8 @@ describe('killTree', () => {
 
     const exit = await handle.waitForExit();
     assert.notDeepEqual(exit, { code: null, signal: null });
-    // Grace-window SIGINT reached the group: the child exited on it.
+    // The child caught the group signals and exited only after reaping the
+    // grandchild the group SIGTERM killed.
     assert.equal(exit.code, 0);
     assert.ok(!isAlive(handle.pid!), 'child survived killTree');
     assert.ok(!isAlive(grandchildPid), 'orphaned grandchild survived killTree');
