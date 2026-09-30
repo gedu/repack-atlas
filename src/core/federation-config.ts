@@ -24,8 +24,13 @@ export interface FederationHostConfig {
    * cwd stays the config directory). Doctor, graph and Studio resolve
    * `manifest` relative to the config directory and ignore `root`. */
   root?: string;
-  /** Start command for `repack-atlas dev` (see `src/runner/**` for the
-   * exact resolution semantics). Absent → the runner skips the app. */
+  /** Bundler config file, relative to the config directory. Only the dev runner uses
+   * it: passed as `--config` and used to pick the bundler (`rspack.*` /
+   * `webpack.*` file name). Absent → the app's own config discovery applies. */
+  config?: string;
+  /** Explicit start command for `repack-atlas dev`, run verbatim through a
+   * shell. Overrides the default `react-native start` argv the runner builds
+   * from `root` (see `src/runner/**`). */
   command?: string;
   /** Dev-server port (consumed by the T9 runner; host counterpart of
    * `remotes.<name>.port`). */
@@ -43,8 +48,10 @@ export interface FederationRemoteConfig {
   standalone?: boolean;
   /** Dev-server port (consumed by the T9 runner). */
   port?: number;
-  /** Start command for `repack-atlas dev` (see `src/runner/**` for the
-   * exact resolution semantics). Absent → the runner skips the app. */
+  /** Bundler config file, relative to the config directory (see the host `config`). */
+  config?: string;
+  /** Explicit start command run verbatim through a shell; overrides the
+   * default `react-native start` argv (see the host `command`). */
   command?: string;
 }
 
@@ -117,7 +124,7 @@ function checkFields(
 /**
  * Validate an unknown JSON document against the `repack-federation.json`
  * schema: `{ host: { manifest, root?, command?, port? }, remotes: { name: {
- * manifest, root?, standalone?, port?, command? } } }`, strictly — unknown
+ * manifest, root?, standalone?, port?, config?, command? } } }`, strictly — unknown
  * keys anywhere are invalid.
  * Returns the reasons the document is invalid (empty when valid); every
  * reason names the offending field path. A `port` must be an integer in
@@ -148,6 +155,7 @@ export function validateFederationConfig(document: unknown): string[] {
       {
         manifest: requireString,
         root: optionalString,
+        config: optionalString,
         command: optionalString,
         port: optionalPort,
       },
@@ -181,6 +189,7 @@ export function validateFederationConfig(document: unknown): string[] {
           root: optionalString,
           standalone: optionalBoolean,
           port: optionalPort,
+          config: optionalString,
           command: optionalString,
         },
         where,

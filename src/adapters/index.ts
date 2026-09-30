@@ -19,3 +19,4 @@ export * from './manifest-source.js';
 export * from './workspace-config.js';
 export * from './process-runner.js';
 export * from './introspection.js';
+export * from './react-native-cli.js';

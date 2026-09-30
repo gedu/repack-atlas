@@ -1,6 +1,7 @@
 // `repack-atlas dev` (T9, docs/PRD.md §7.1/§7.2): argv → supervisor +
 // Studio composition. This is the interactive-but-demo-grade runner: no
-// wizard, no platforms, no launch — start what the workspace declares,
+// wizard, no launch — start what the workspace declares (an explicit
+// `command`, or the react-native start argv Atlas builds from `root`),
 // prefix its logs, probe ports for readiness, serve the read-only Studio
 // over the live graph, and shut everything down in order.
 //
@@ -16,6 +17,7 @@ import {
   createManifestSource,
   createNodeProcessRunner,
   createNodeProjectFs,
+  createReactNativeCliResolver,
   createWorkspaceConfigReader,
 } from '../adapters/index.js';
 import {
@@ -106,6 +108,8 @@ interface DryRunInput {
   processRunner: ReturnType<typeof createNodeProcessRunner>;
   configReader: ReturnType<typeof createWorkspaceConfigReader>;
   manifestSource: ReturnType<typeof createManifestSource>;
+  fs: ReturnType<typeof createNodeProjectFs>;
+  reactNativeCli: ReturnType<typeof createReactNativeCliResolver>;
 }
 
 /**
@@ -122,6 +126,8 @@ async function runDryRun(input: DryRunInput): Promise<number> {
     workspaceDir: input.workspace,
     configReader: input.configReader,
     manifestSource: input.manifestSource,
+    fs: input.fs,
+    reactNativeCli: input.reactNativeCli,
     ...(input.appNames !== undefined ? { apps: input.appNames } : {}),
     ...(input.hostPort !== undefined ? { hostPort: input.hostPort } : {}),
   });
@@ -201,7 +207,8 @@ export async function runDevCommand(
   let hostPort: number | undefined;
   if (parsed.options.has('port')) {
     const raw = lastValue(parsed, 'port');
-    const value = raw === undefined || raw.trim() === '' ? NaN : Number(raw);
+    // Plain decimal digits only: Number() would also take '0x50', '1e3', ' 80'.
+    const value = raw !== undefined && /^\d+$/.test(raw) ? Number(raw) : NaN;
     if (!Number.isInteger(value) || value < 1 || value > 65_535) {
       io.writeErr('dev: --port must be a TCP port number (1-65535)');
       return EXIT_NO_ANSWER;
@@ -227,6 +234,7 @@ export async function runDevCommand(
   const fs = createNodeProjectFs();
   const configReader = createWorkspaceConfigReader(fs);
   const manifestSource = createManifestSource(fs);
+  const reactNativeCli = createReactNativeCliResolver();
 
   if (parsed.flags.has('dry-run')) {
     return runDryRun({
@@ -240,6 +248,8 @@ export async function runDevCommand(
       processRunner,
       configReader,
       manifestSource,
+      fs,
+      reactNativeCli,
     });
   }
 
@@ -250,6 +260,8 @@ export async function runDevCommand(
     configReader,
     manifestSource,
     processRunner,
+    fs,
+    reactNativeCli,
     autoPorts,
     ...(appNames !== undefined ? { apps: appNames } : {}),
     ...(hostPort !== undefined ? { hostPort } : {}),
@@ -264,15 +276,7 @@ export async function runDevCommand(
     for (const note of plan.reassignments) io.writeErr(`dev: ${note}`);
   }
   // The plan event carries the final (allocated) ports, auto ones included.
-  emit({
-    event: 'plan',
-    apps: toPlanEventApps(
-      plan.entries.map((entry, index) => ({
-        ...entry,
-        declaredPort: plan.apps[index]!.port,
-      }))
-    ),
-  });
+  emit({ event: 'plan', apps: toPlanEventApps(plan.entries) });
 
   // 2. Studio before spawning: its bind failure must not orphan children.
   const supervisorRef: { current: ReturnType<typeof createDevSupervisor> | null } =

@@ -6,6 +6,8 @@
 
 import path from 'node:path';
 import { isUrlSource, type FederationConfig } from '../core/index.js';
+import { describeLaunch, type DevLaunch } from './start-argv.js';
+import type { Toolchains } from './toolchain.js';
 
 /** `--apps` / config key of the host entry (not its federation name). */
 export const HOST_APP_KEY = 'host';
@@ -20,8 +22,10 @@ export interface DevPlanEntry {
   /** Graph node name (host: its manifest `name`; remote: the config key). */
   name: string;
   role: 'host' | 'remote';
-  command: string;
-  /** Directory the command runs in (the config directory). */
+  /** `command` = verbatim shell override; `argv` = Atlas-built start argv. */
+  launch: DevLaunch;
+  /** Directory the app runs in: the config directory for a `command`, the
+   * app root for a built argv. */
   cwd: string;
   /** Declared TCP port (host: `--port` > config > 8081); `null` = runner picks. */
   declaredPort: number | null;
@@ -31,7 +35,7 @@ export interface DevPlanEntry {
   manifestPath?: string;
 }
 
-/** An app left out of the plan (listed in the config without a `command`). */
+/** An app left out of the plan (declares neither a `command` nor a `root`). */
 export interface DevSkippedApp {
   key: string;
   name: string;
@@ -57,6 +61,15 @@ export interface BuildDevPlanInput {
   apps?: string[];
   /** `--port`: overrides the HOST port only (already validated 1-65535). */
   hostPort?: number;
+  /** Resolved bundler + RN CLI per absolute app root (see `toolchain.ts`).
+   * Consulted only for apps that run the default argv. */
+  toolchains?: Toolchains;
+  /** `--platform` for built argvs (T4 wires the flag; `command` apps never
+   * receive it). */
+  platform?: 'ios' | 'android';
+  /** Config key of the remote started with `--standalone` (T4 wires the flag
+   * and its `standalone: true` gate). */
+  standalone?: string;
 }
 
 /** Resolve `root`/`manifest` refs the way the doctor does (URLs stay). */
@@ -68,9 +81,11 @@ const isTcpPort = (port: number): boolean =>
   Number.isInteger(port) && port >= 1 && port <= 65_535;
 
 /**
- * Build the spawn plan from the workspace config. Unknown `--apps` keys and
- * malformed declared ports come back as `reasons`; apps without a `command`
- * are skipped (reported in `skipped`), never guessed.
+ * Build the spawn plan from the workspace config. An app with a `command`
+ * runs it verbatim; one with only a `root` runs the built
+ * `react-native start` argv. Unknown `--apps` keys, malformed declared ports
+ * and unresolvable toolchains come back as `reasons`; apps with neither are
+ * skipped (reported in `skipped`), never guessed.
  */
 export function buildDevPlan(input: BuildDevPlanInput): BuildDevPlanResult {
   const { config, configDir, hostName } = input;
@@ -102,15 +117,16 @@ export function buildDevPlan(input: BuildDevPlanInput): BuildDevPlanResult {
 
   const entries: DevPlanEntry[] = [];
   const skipped: DevSkippedApp[] = [];
+  const reasons: string[] = [];
 
   for (const entry of selected) {
     const name = entry.role === 'host' ? hostName : entry.key;
-    if (entry.command === undefined) {
+    if (entry.command === undefined && entry.root === undefined) {
       skipped.push({
         key: entry.key,
         name,
         reason:
-          'no "command" in repack-federation.json — skipped (declare one to run it)',
+          'no "command" or "root" in repack-federation.json — skipped (declare one to run it)',
       });
       continue;
     }
@@ -120,25 +136,54 @@ export function buildDevPlan(input: BuildDevPlanInput): BuildDevPlanResult {
         reasons: [`${entry.key}.port must be a TCP port number (1-65535)`],
       };
     }
+    const root =
+      entry.root !== undefined ? path.resolve(configDir, entry.root) : undefined;
+
+    let launch: DevLaunch;
+    let cwd = configDir;
+    if (entry.command !== undefined) {
+      launch = { kind: 'command', command: entry.command };
+    } else {
+      // `root` is defined here: commandless + rootless apps were skipped.
+      const appRoot = root!;
+      const toolchain = input.toolchains?.[appRoot];
+      if (toolchain === undefined || !toolchain.ok) {
+        reasons.push(
+          `${entry.key}: ${toolchain?.reason ?? 'toolchain was not resolved'} (app root ${appRoot})`
+        );
+        continue;
+      }
+      launch = {
+        kind: 'argv',
+        file: process.execPath,
+        cli: toolchain.cli,
+        bundler: toolchain.bundler,
+        ...(entry.config !== undefined
+          ? { config: path.resolve(configDir, entry.config) }
+          : {}),
+        ...(input.platform !== undefined ? { platform: input.platform } : {}),
+        ...(input.standalone === entry.key ? { standalone: true } : {}),
+      };
+      cwd = appRoot;
+    }
+
+    const manifestRef = resolveRef(configDir, entry.manifest);
     entries.push({
       key: entry.key,
       name,
       role: entry.role,
-      command: entry.command,
-      cwd: configDir,
+      launch,
+      cwd,
       declaredPort:
         entry.role === 'host'
           ? (input.hostPort ?? entry.port ?? HOST_DEFAULT_PORT)
           : (entry.port ?? null),
-      ...(entry.root !== undefined
-        ? { root: path.resolve(configDir, entry.root) }
-        : {}),
-      ...(isUrlSource(entry.manifest)
-        ? {}
-        : { manifestPath: path.resolve(configDir, entry.manifest) }),
+      ...(root !== undefined ? { root } : {}),
+      ...(isUrlSource(manifestRef) ? {} : { manifestPath: manifestRef }),
     });
   }
 
+  if (reasons.length > 0) return { ok: false, reasons };
   return { ok: true, configDir, entries, skipped };
 }
 
@@ -147,6 +192,8 @@ export interface DevPlanEventApp {
   app: string;
   role: 'host' | 'remote';
   port: number | null;
+  /** Effective command line: verbatim `command`, or `node <cli> start ...`
+   * for a built argv (see `describeLaunch`). */
   command: string;
   cwd: string;
 }
@@ -157,7 +204,7 @@ export function toPlanEventApps(entries: DevPlanEntry[]): DevPlanEventApp[] {
     app: entry.name,
     role: entry.role,
     port: entry.declaredPort,
-    command: entry.command,
+    command: describeLaunch(entry.launch, entry.declaredPort, entry.cwd),
     cwd: entry.cwd,
   }));
 }

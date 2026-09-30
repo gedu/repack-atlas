@@ -183,3 +183,27 @@ export type IntrospectionResult =
 export interface ConfigIntrospector {
   read(appRoot: string): Promise<IntrospectionResult>;
 }
+
+// --- ReactNativeCliResolver ----------------------------------------------------
+//
+// `repack-atlas dev` runs each app with the `react-native` CLI installed in
+// that app's OWN root (no PATH lookup, no cross-app fallback). Resolution goes
+// through the user project's module graph, so it sits behind a port
+// (AGENTS.md rules 3 and 4). Typed result, never throws.
+
+export type ReactNativeCliResult =
+  | {
+      status: 'ok';
+      /** Absolute path of the CLI script (`bin.react-native`). */
+      cli: string;
+    }
+  | {
+      status: 'failed';
+      /** Human-readable cause, naming the app root. */
+      message: string;
+    };
+
+export interface ReactNativeCliResolver {
+  /** Resolve `react-native`'s CLI script as the app at `appRoot` would. */
+  resolve(appRoot: string): ReactNativeCliResult;
+}

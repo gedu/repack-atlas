@@ -12,7 +12,15 @@
 
 import assert from 'node:assert/strict';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import http from 'node:http';
 import net from 'node:net';
 import os from 'node:os';
@@ -25,6 +33,32 @@ const WORKSPACE = path.join(repoRoot, 'fixtures', 'workspace');
 // (often held by a real Metro). Tests on it pin the host with `--port`.
 const WORKSPACE_HOST_PORT = 8084;
 const CYCLE_WORKSPACE = path.join(repoRoot, 'fixtures', 'fixture-remote-cycle');
+
+/**
+ * A throwaway config over the cycle fixture's manifests (absolute refs) with
+ * every `root` dropped: the fixture's apps declare a root, which would run
+ * the default argv, and these tests are about apps with neither.
+ */
+function rootlessCycleWorkspace(): string {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'atlas-cycle-'));
+  cleanupDirs.push(dir);
+  const config = JSON.parse(
+    readFileSync(path.join(CYCLE_WORKSPACE, 'repack-federation.json'), 'utf8')
+  ) as {
+    host: Record<string, unknown>;
+    remotes: Record<string, Record<string, unknown>>;
+  };
+  for (const entry of [config.host, ...Object.values(config.remotes)]) {
+    delete entry.root;
+    entry.manifest = path.resolve(CYCLE_WORKSPACE, entry.manifest as string);
+  }
+  writeFileSync(
+    path.join(dir, 'repack-federation.json'),
+    JSON.stringify(config)
+  );
+  return dir;
+}
+const cleanupDirs: string[] = [];
 
 interface DevEvent {
   event: string;
@@ -326,6 +360,9 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  for (const dir of cleanupDirs.splice(0)) {
+    rmSync(dir, { recursive: true, force: true });
+  }
   const sessions = openSessions;
   openSessions = [];
   await Promise.all(sessions.map(reap));
@@ -464,10 +501,10 @@ describe('dev runner (spawned, stub apps)', () => {
     assert.equal((await s.exited).code, 0);
   });
 
-  it('dev over fixture-remote-cycle serves the cyclic graph (commandless apps warn and skip)', async () => {
+  it('dev over fixture-remote-cycle serves the cyclic graph (apps with no command or root warn and skip)', async () => {
     const s = await session(
       ['--ci', '--json', '--studio-port', '0'],
-      CYCLE_WORKSPACE
+      rootlessCycleWorkspace()
     );
     const studio = await s.waitForEvent((e) => e.event === 'studio');
     const graph = await getJson<{
@@ -480,8 +517,10 @@ describe('dev runner (spawned, stub apps)', () => {
       `cycle edges visible via the runner path: ${JSON.stringify(graph.edges)}`
     );
     assert.ok(
-      s.lines.some((l) => l.includes('no "command" in repack-federation.json')),
-      'commandless apps report a warning'
+      s.lines.some((l) =>
+        l.includes('no "command" or "root" in repack-federation.json')
+      ),
+      'apps without command or root report a warning'
     );
     s.child.kill('SIGINT');
     assert.equal((await s.exited).code, 0);
@@ -665,9 +704,12 @@ describe('dev --dry-run', () => {
     assert.match(unknown.stderr, /unknown apps: nope/);
   });
 
-  it('commandless apps surface their skip reason in dry-run', async () => {
-    const result = await runToCompletion(['--dry-run'], CYCLE_WORKSPACE);
-    assert.match(result.stderr, /warning\s+\S+: no "command" in repack-federation\.json/);
+  it('apps without command or root surface their skip reason in dry-run', async () => {
+    const result = await runToCompletion(['--dry-run'], rootlessCycleWorkspace());
+    assert.match(
+      result.stderr,
+      /warning\s+\S+: no "command" or "root" in repack-federation\.json/
+    );
   });
 
   it('a live session emits the additive plan event before spawning', async () => {
@@ -691,7 +733,7 @@ describe('dev --dry-run', () => {
 describe('dev ports (--port, --auto-ports, unified conflicts)', () => {
   const LISTEN = `node -e "require('net').createServer().listen(process.env.ATLAS_APP_PORT,'127.0.0.1')"`;
 
-  for (const bad of ['0', '65536', 'abc', '8081x', '-1', '1.5']) {
+  for (const bad of ['0', '65536', 'abc', '8081x', '-1', '1.5', '0x50', '1e3', ' 80', '+80']) {
     it(`--port ${bad} is rejected with exit 2`, async () => {
       const result = await runToCompletion(['--dry-run', '--port', bad]);
       assert.equal(result.code, 2, result.stderr);
@@ -884,3 +926,245 @@ async function waitGroupGone(pid: number, timeoutMs = 5_000): Promise<void> {
     await new Promise((r) => setTimeout(r, 100));
   }
 }
+
+// --- default argv (ODD dev-wizard-runner T3) ---------------------------------
+
+/** Stub `react-native` CLI: records its argv/cwd and listens on `--port`. */
+const STUB_RN_CLI = `#!/usr/bin/env node
+const args = process.argv.slice(2);
+const port = Number(args[args.indexOf('--port') + 1]);
+console.log('rn-stub ' + JSON.stringify({ args, cwd: process.cwd() }));
+require('net').createServer().listen(port, '127.0.0.1');
+process.on('SIGINT', () => process.exit(0));
+process.on('SIGTERM', () => process.exit(0));
+`;
+
+/** Install the stub react-native (package + cli) and a bundler config. */
+function makeApp(
+  workspace: string,
+  dir: string,
+  options: { rn?: boolean; configFiles?: string[] } = {}
+): string {
+  const root = path.join(workspace, dir);
+  mkdirSync(root, { recursive: true });
+  for (const file of options.configFiles ?? ['rspack.config.js']) {
+    mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
+    writeFileSync(path.join(root, file), '');
+  }
+  if (options.rn !== false) {
+    const pkg = path.join(root, 'node_modules', 'react-native');
+    mkdirSync(pkg, { recursive: true });
+    writeFileSync(
+      path.join(pkg, 'package.json'),
+      JSON.stringify({ name: 'react-native', bin: { 'react-native': './cli.js' } })
+    );
+    writeFileSync(path.join(pkg, 'cli.js'), STUB_RN_CLI);
+  }
+  return root;
+}
+
+describe('dev default argv (root without command)', () => {
+  const listenScript =
+    "require('net').createServer().listen(Number(process.env.ATLAS_APP_PORT), '127.0.0.1');\n";
+
+  function workspaceWith(
+    config: object,
+    build: (dir: string) => void
+  ): string {
+    const dir = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'atlas-argv-')));
+    cleanupDirs.push(dir);
+    build(dir);
+    writeFileSync(
+      path.join(dir, 'repack-federation.json'),
+      JSON.stringify(config)
+    );
+    return dir;
+  }
+
+  it('an app with only `root` starts through the built argv and reaches ready', async () => {
+    const port = await freePort();
+    const dir = workspaceWith(
+      { host: { manifest: './h.json', root: './apps/host' }, remotes: {} },
+      (d) => makeApp(d, 'apps/host')
+    );
+    const s = await session(
+      ['--ci', '--json', '--no-studio', '--port', String(port)],
+      dir
+    );
+    const ready = await s.waitForStatus('host', 'ready');
+    assert.equal(ready.port, port);
+    const plan = s.events.find((e) => e.event === 'plan')!;
+    assert.equal(
+      plan.apps![0]!.command,
+      `node node_modules/react-native/cli.js start --bundler rspack --port ${port} --no-interactive`
+    );
+    assert.equal(plan.apps![0]!.cwd, path.join(dir, 'apps', 'host'));
+    const line = s.lines.find((l) => l.startsWith('[host] rn-stub '))!;
+    const seen = JSON.parse(line.slice('[host] rn-stub '.length)) as {
+      args: string[];
+      cwd: string;
+    };
+    assert.deepEqual(seen.args, [
+      'start',
+      '--bundler',
+      'rspack',
+      '--port',
+      String(port),
+      '--no-interactive',
+    ]);
+    assert.equal(realpathSync(seen.cwd), path.join(dir, 'apps', 'host'));
+    s.child.kill('SIGINT');
+    assert.equal((await s.exited).code, 0);
+  });
+
+  it('a `command` still overrides the argv (verbatim, config-dir cwd, no RN CLI needed)', async () => {
+    const hostPort = await freePort();
+    const dir = workspaceWith(
+      {
+        host: { manifest: './h.json', root: './apps/host' },
+        remotes: {
+          legacy: {
+            manifest: './l.json',
+            // Has a root but NO react-native install: the override must win.
+            root: './apps/legacy',
+            command: 'node listen.cjs',
+          },
+        },
+      },
+      (d) => {
+        makeApp(d, 'apps/host');
+        makeApp(d, 'apps/legacy', { rn: false, configFiles: [] });
+        writeFileSync(path.join(d, 'listen.cjs'), listenScript);
+      }
+    );
+    const s = await session(
+      ['--ci', '--json', '--no-studio', '--port', String(hostPort)],
+      dir
+    );
+    await s.waitForStatus('host', 'ready');
+    await s.waitForStatus('legacy', 'ready');
+    const plan = s.events.find((e) => e.event === 'plan')!;
+    assert.equal(plan.apps![1]!.command, 'node listen.cjs');
+    assert.equal(plan.apps![1]!.cwd, dir);
+    s.child.kill('SIGINT');
+    assert.equal((await s.exited).code, 0);
+  });
+
+  it('`config` (relative to the config dir) picks the bundler and is passed as an absolute --config', async () => {
+    const dir = workspaceWith(
+      {
+        host: {
+          manifest: './h.json',
+          root: './apps/host',
+          config: 'apps/host/configs/webpack.dev.js',
+        },
+        remotes: {},
+      },
+      (d) => makeApp(d, 'apps/host', { configFiles: ['configs/webpack.dev.js'] })
+    );
+    const port = await freePort();
+    const result = await runToCompletion(
+      ['--dry-run', '--json', '--port', String(port)],
+      dir
+    );
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(
+      parseEvents(result.stdout)[0]!.apps![0]!.command,
+      `node node_modules/react-native/cli.js start --bundler webpack --config ${path.join(dir, 'apps', 'host', 'configs', 'webpack.dev.js')} --port ${port} --no-interactive`
+    );
+  });
+
+  it('detects webpack from .webpack/webpack.config.js', async () => {
+    const dir = workspaceWith(
+      { host: { manifest: './h.json', root: './apps/host' }, remotes: {} },
+      (d) => makeApp(d, 'apps/host', { configFiles: ['.webpack/webpack.config.js'] })
+    );
+    const port = await freePort();
+    const result = await runToCompletion(['--dry-run', '--json', '--port', String(port)], dir);
+    assert.equal(result.code, 0, result.stderr);
+    assert.match(parseEvents(result.stdout)[0]!.apps![0]!.command, /--bundler webpack /);
+  });
+
+  it('dry-run --json with a built argv is byte-identical across runs', async () => {
+    const dir = workspaceWith(
+      {
+        host: { manifest: './h.json', root: './apps/host', port: 59_991 },
+        remotes: { r: { manifest: './r.json', root: './apps/r' } },
+      },
+      (d) => {
+        makeApp(d, 'apps/host');
+        makeApp(d, 'apps/r');
+      }
+    );
+    const first = await runToCompletion(['--dry-run', '--json'], dir);
+    const second = await runToCompletion(['--dry-run', '--json'], dir);
+    assert.equal(first.code, 0, first.stderr);
+    assert.equal(first.stdout, second.stdout);
+    assert.match(first.stdout, /--port <auto>/);
+  });
+
+  it('a missing react-native CLI exits 2 naming the app (live and dry-run)', async () => {
+    const dir = workspaceWith(
+      {
+        host: { manifest: './h.json', command: 'true' },
+        remotes: { zeta: { manifest: './z.json', root: './apps/zeta' } },
+      },
+      (d) => makeApp(d, 'apps/zeta', { rn: false })
+    );
+    for (const args of [['--dry-run'], ['--ci', '--json', '--no-studio']]) {
+      const result = await runToCompletion([...args, '--port', '59992'], dir);
+      assert.equal(result.code, 2, result.stderr);
+      assert.match(result.stderr, /dev: zeta: cannot resolve the "react-native" package/);
+      assert.ok(result.stderr.includes(path.join(dir, 'apps', 'zeta')), result.stderr);
+      assert.doesNotMatch(result.stdout, /"event":"app"/, 'nothing spawned');
+    }
+  });
+
+  it('no cross-app fallback: an app without its own CLI fails even if a sibling has one', async () => {
+    const dir = workspaceWith(
+      {
+        host: { manifest: './h.json', root: './apps/host' },
+        remotes: { other: { manifest: './o.json', root: './apps/other' } },
+      },
+      (d) => {
+        makeApp(d, 'apps/host');
+        makeApp(d, 'apps/other', { rn: false });
+      }
+    );
+    const result = await runToCompletion(['--dry-run', '--port', '59993'], dir);
+    assert.equal(result.code, 2, result.stderr);
+    assert.match(result.stderr, /dev: other: cannot resolve/);
+    assert.doesNotMatch(result.stderr, /dev: host:/);
+  });
+
+  it('--apps skips the toolchain of unselected apps', async () => {
+    const dir = workspaceWith(
+      {
+        host: { manifest: './h.json', root: './apps/host' },
+        remotes: { other: { manifest: './o.json', root: './apps/other' } },
+      },
+      (d) => {
+        makeApp(d, 'apps/host');
+        makeApp(d, 'apps/other', { rn: false });
+      }
+    );
+    const port = await freePort();
+    const result = await runToCompletion(
+      ['--dry-run', '--apps', 'host', '--port', String(port)],
+      dir
+    );
+    assert.equal(result.code, 0, result.stderr);
+  });
+
+  it('no config file, or both kinds, fall back to rspack (upstream default)', async () => {
+    for (const configFiles of [[], ['rspack.config.js', 'webpack.config.js']]) {
+      const dir = workspaceWith(
+        { host: { manifest: './h.json', root: './apps/host' }, remotes: {} },
+        (d) => makeApp(d, 'apps/host', { configFiles })
+      );
+      const result = await runToCompletion(['--dry-run', '--json', '--port', '59994'], dir);
+      assert.equal(result.code, 0, result.stderr);
+      assert.match(parseEvents(result.stdout)[0]!.apps![0]!.command, /--bundler rspack /);
+    }
+  });
+});

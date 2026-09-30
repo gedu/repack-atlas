@@ -89,6 +89,8 @@ Usage
                       as subdirectories of <workspace>/apps containing a
                       rspack.config.* file; federation facts come from each
                       app's .repack-atlas/introspection.json when present.
+                      No "command" is written: \`dev\` builds each app's
+                      react-native start argv from its "root".
   --dry-run           Print the plan, write nothing
   --json              Machine-readable plan/result
   --help              Print this help
@@ -105,12 +107,20 @@ Usage
                    [--auto-ports] [--studio-port <n>] [--no-studio] [--ci]
                    [--dry-run] [--json]
 
-Each app starts only when its repack-federation.json entry declares a
-"command" (host.command or remotes.<name>.command). The command runs
-through a shell with the workspace config's directory as cwd, and the
-runner injects ATLAS_APP_NAME, ATLAS_APP_PORT, ATLAS_APP_ROOT and
-ATLAS_APP_MANIFEST (absolute file manifests only) into its environment.
-Apps without a command are skipped with a warning, never guessed.
+An app with a "root" starts through the argv Atlas builds, like upstream
+Re.Pack's federation dev runner: node <the app's own react-native CLI>
+start --bundler <rspack|webpack> [--config <path>] --port <n>
+--no-interactive, run without a shell and with the app root as cwd. The CLI
+is resolved from each app's own root (missing = exit 2 naming the app). The
+bundler comes from the entry's "config" file name (a path relative to the
+config directory, passed as an absolute --config), else from the
+rspack.config.* / webpack.config.* in the app root (rspack wins; webpack only
+when it alone exists; none = rspack). An explicit "command" (host.command or
+remotes.<name>.command) overrides that: it runs verbatim through a shell
+with the workspace config's directory as cwd. Both kinds get ATLAS_APP_NAME,
+ATLAS_APP_PORT, ATLAS_APP_ROOT and ATLAS_APP_MANIFEST (absolute file
+manifests only) in their environment. Apps with neither "command" nor
+"root" are skipped with a warning, never guessed.
 Readiness = the app's port answers on 127.0.0.1 (declared ports are
 probed free BEFORE spawning; remotes without one get a free port via
 ATLAS_APP_PORT). Host port: --port > host "port" in the config > 8081.
@@ -128,13 +138,15 @@ Options
                        8099)
   --no-studio          Do not serve the Studio
   --ci                 No key handling even on a TTY (browser never opens)
-  --dry-run            Print the plan (app, role, port or auto, command, cwd)
+  --dry-run            Print the plan (app, role, port or auto, effective
+                       command line, cwd)
                        and exit: nothing spawns, no Studio. Declared ports
                        are probed; every busy one is reported together and
                        exits 1 (--auto-ports reassigns them instead).
   --json               One JSON event per line: {event:'plan',apps} once
                        before anything spawns (app, role, final port;
-                       null = auto in --dry-run, command, cwd), {event:'studio',url} once,
+                       null = auto in --dry-run, effective command line, cwd),
+                       {event:'studio',url} once,
                        {event:'app',app,status,port} per status transition,
                        {event:'exit',code} last. With --dry-run only plan
                        and exit are emitted, identical across runs. Child

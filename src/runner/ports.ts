@@ -54,24 +54,34 @@ export async function allocatePorts(
     )
   );
 
-  async function nextFree(): Promise<number> {
-    for (let attempt = 0; attempt < MAX_FREE_PORT_TRIES; attempt += 1) {
-      const port = await probe.findFreePort();
-      if (!taken.has(port)) {
-        taken.add(port);
-        return port;
+  /** A free port not promised to another app, or `null` (never throws). */
+  async function nextFree(): Promise<number | null> {
+    try {
+      for (let attempt = 0; attempt < MAX_FREE_PORT_TRIES; attempt += 1) {
+        const port = await probe.findFreePort();
+        if (!taken.has(port)) {
+          taken.add(port);
+          return port;
+        }
       }
+    } catch {
+      // A failing probe is "no free port", reported like any other conflict.
     }
-    throw new Error('could not find a free port');
+    return null;
   }
 
   for (const entry of entries) {
     if (entry.declaredPort === null) {
-      assignments.push(
-        options.resolveAuto
-          ? { key: entry.key, port: await nextFree(), source: 'auto' }
-          : { key: entry.key, port: null, source: 'auto' }
-      );
+      if (!options.resolveAuto) {
+        assignments.push({ key: entry.key, port: null, source: 'auto' });
+        continue;
+      }
+      const port = await nextFree();
+      if (port === null) {
+        conflicts.push(`no free port available for ${entry.key}`);
+      } else {
+        assignments.push({ key: entry.key, port, source: 'auto' });
+      }
       continue;
     }
     if (!(await probe.isPortBusy(entry.declaredPort))) {
@@ -81,12 +91,19 @@ export async function allocatePorts(
         source: 'declared',
       });
     } else if (options.autoPorts) {
-      assignments.push({
-        key: entry.key,
-        port: await nextFree(),
-        source: 'reassigned',
-        requested: entry.declaredPort,
-      });
+      const port = await nextFree();
+      if (port === null) {
+        conflicts.push(
+          `port ${entry.declaredPort} declared by ${entry.key} is busy and no free port is available`
+        );
+      } else {
+        assignments.push({
+          key: entry.key,
+          port,
+          source: 'reassigned',
+          requested: entry.declaredPort,
+        });
+      }
     } else {
       conflicts.push(
         `port ${entry.declaredPort} declared by ${entry.key} is already busy`

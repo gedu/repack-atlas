@@ -124,6 +124,28 @@ describe('validateFederationConfig', () => {
     }
   });
 
+  it('accepts a string `config` and `command` on host and remotes', () => {
+    assert.deepStrictEqual(
+      validateFederationConfig({
+        host: { manifest: '.', config: 'rspack.config.mjs' },
+        remotes: {
+          store: { manifest: '.', config: 'webpack.config.js', command: 'x' },
+        },
+      }),
+      []
+    );
+  });
+
+  it('rejects a non-string `config` naming its path', () => {
+    assert.deepStrictEqual(
+      validateFederationConfig({
+        host: { manifest: '.', config: 1 },
+        remotes: { store: { manifest: '.', config: ['a'] } },
+      }),
+      ['host.config must be a string', 'remotes.store.config must be a string']
+    );
+  });
+
   it('rejects remotes as an array', () => {
     assert.deepStrictEqual(
       validateFederationConfig({

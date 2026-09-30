@@ -1,5 +1,5 @@
 // The `repack-atlas dev` supervisor (T9, docs/PRD.md §7.1): plans which apps
-// to run, spawns each app's start command through the `ProcessRunner` port,
+// to run, spawns each app (its command or built argv) through the `ProcessRunner` port,
 // and tracks one live status per app. This is a REIMPLEMENTATION of the
 // concept in upstream #1467 (`federation-dev`) at demo scope — not a port:
 // no wizard, no platforms, no launch, no adb. The upstream README
@@ -7,20 +7,20 @@
 // was consulted for concepts only (prefixed logs, port probes before spawn,
 // ordered SIGINT→grace→SIGTERM shutdown, one JSON event per transition).
 //
-// Command resolution semantics (locked here; mirrored in DEV_HELP and
-// fixtures/README.md):
-//   - An app runs only when its `repack-atlas.json` entry declares `command`
-//     (schema: `src/core/federation-config.ts`). No command → the app is
-//     skipped with a console warning, never silently guessed.
-//   - The command runs through a platform shell (`sh -c` / `cmd /c`) with the
-//     working directory set to the directory holding `repack-federation.json`
-//     (the workspace root), so `node tools/stub-bundler.mjs` style relative
-//     paths read naturally.
-//   - The child receives `ATLAS_APP_NAME` (graph node name), `ATLAS_APP_PORT`
+// Launch semantics (locked here; mirrored in DEV_HELP and fixtures/README.md):
+//   - An app declaring `command` runs it verbatim through a platform shell
+//     (`sh -c` / `cmd /c`) with the directory holding `repack-federation.json`
+//     as cwd, so `node tools/stub-bundler.mjs` style relative paths read
+//     naturally. A command that wants the runner's port must read
+//     `ATLAS_APP_PORT` — the runner never rewrites a user's command line.
+//   - An app with only a `root` runs the argv Atlas builds (`src/runner/
+//     start-argv.ts`, upstream #1467 parity): `node <the app's own
+//     react-native CLI> start --bundler <detected> [--config <path>] --port N
+//     --no-interactive`, spawned WITHOUT a shell and with the app root as cwd.
+//   - An app with neither is skipped with a console warning, never guessed.
+//   - Both kinds receive `ATLAS_APP_NAME` (graph node name), `ATLAS_APP_PORT`
 //     (the runner-resolved port), `ATLAS_APP_ROOT` (resolved `root`, may be
-//     empty) and, for file manifests, `ATLAS_APP_MANIFEST`. A command that
-//     wants the runner's port must read `ATLAS_APP_PORT` — the runner never
-//     rewrites the user's command line.
+//     empty) and, for file manifests, `ATLAS_APP_MANIFEST`.
 //
 // Readiness is ONE documented signal: the app's port answers on 127.0.0.1
 // (two-leg `isPortBusy` probe). `bundling` is deliberately never claimed —
@@ -35,6 +35,8 @@ import {
   type ManifestSource,
   type ProcessHandle,
   type ProcessRunner,
+  type ProjectFs,
+  type ReactNativeCliResolver,
 } from '../core/index.js';
 import type { AtlasWorkspaceConfigReader } from '../adapters/index.js';
 import {
@@ -46,9 +48,12 @@ import {
 } from './plan.js';
 import {
   allocatePorts,
+  applyAssignments,
   describeReassignments,
   PORT_CONFLICT_HINT,
 } from './ports.js';
+import { startArgs, type DevLaunch } from './start-argv.js';
+import { resolveToolchains } from './toolchain.js';
 
 /** Fallback node name when the host manifest cannot be read. */
 const HOST_FALLBACK_NAME = 'host';
@@ -61,7 +66,9 @@ export interface DevAppPlan {
   /** Graph node name (host: its manifest `name`; remote: the config key). */
   name: string;
   role: 'host' | 'remote';
-  command: string;
+  launch: DevLaunch;
+  /** Directory the app is spawned in. */
+  cwd: string;
   /** Runner-resolved port the readiness probe watches. */
   port: number;
   /** `reassigned`: a busy declared/default port moved by `--auto-ports`. */
@@ -105,10 +112,18 @@ export interface DevPlanOptions {
   configReader: AtlasWorkspaceConfigReader;
   manifestSource: ManifestSource;
   processRunner: ProcessRunner;
+  /** Lists the app roots' bundler config files (default-argv apps only). */
+  fs: ProjectFs;
+  /** Resolves each app's own `react-native` CLI (default-argv apps only). */
+  reactNativeCli: ReactNativeCliResolver;
   /** `--apps` list (config keys). Unknown keys fail the plan. */
   apps?: string[];
   /** `--port`: host port override (validated by the CLI). */
   hostPort?: number;
+  /** `--platform` for built argvs (T4 wires the flag). */
+  platform?: 'ios' | 'android';
+  /** Remote key started with `--standalone` (T4 wires the flag). */
+  standalone?: string;
   /** `--auto-ports`: busy declared ports move to a free port. */
   autoPorts?: boolean;
 }
@@ -154,12 +169,38 @@ export async function loadDevPlan(
     hostName = hostManifestResult.manifest.name;
   }
 
+  // Only the selected apps that run the default argv need a toolchain;
+  // resolving an unselected app's CLI could fail a run that never uses it.
+  const targets = [
+    { key: HOST_APP_KEY, ...config.host },
+    ...Object.entries(config.remotes).map(([key, remote]) => ({ key, ...remote })),
+  ]
+    .filter(
+      (app) =>
+        app.command === undefined &&
+        app.root !== undefined &&
+        (options.apps === undefined || options.apps.includes(app.key))
+    )
+    .map((app) => ({
+      root: path.resolve(configDir, app.root!),
+      ...(app.config !== undefined ? { config: app.config } : {}),
+    }));
+  const toolchains = await resolveToolchains(targets, {
+    fs: options.fs,
+    reactNativeCli: options.reactNativeCli,
+  });
+
   const built = buildDevPlan({
     config,
     configDir,
     hostName,
+    toolchains,
     ...(options.apps !== undefined ? { apps: options.apps } : {}),
     ...(options.hostPort !== undefined ? { hostPort: options.hostPort } : {}),
+    ...(options.platform !== undefined ? { platform: options.platform } : {}),
+    ...(options.standalone !== undefined
+      ? { standalone: options.standalone }
+      : {}),
   });
   if (!built.ok) return built;
   return {
@@ -194,13 +235,16 @@ export async function resolveDevPlan(
     };
   }
 
-  const apps: DevAppPlan[] = loaded.entries.map((entry, index) => {
+  // Entries carry the allocated ports (the plan event and argv read them).
+  const entries = applyAssignments(loaded.entries, allocation.assignments);
+  const apps: DevAppPlan[] = entries.map((entry, index) => {
     const assignment = allocation.assignments[index]!;
     return {
       key: entry.key,
       name: entry.name,
       role: entry.role,
-      command: entry.command,
+      launch: entry.launch,
+      cwd: entry.cwd,
       // resolveAuto: true → every assignment carries a concrete port.
       port: assignment.port!,
       portSource: assignment.source,
@@ -214,7 +258,7 @@ export async function resolveDevPlan(
   return {
     ok: true,
     configDir: loaded.configDir,
-    entries: loaded.entries,
+    entries,
     apps,
     skipped: loaded.skipped,
     commandless: loaded.skipped,
@@ -301,13 +345,24 @@ export function createDevSupervisor(options: DevSupervisorOptions) {
 
   async function startApp(app: ManagedApp): Promise<void> {
     if (shuttingDown) return;
-    const handle = options.processRunner.start({
-      file: app.plan.command,
-      args: [],
-      cwd: options.plan.configDir,
-      env: envFor(app.plan),
-      shell: true,
-    });
+    const { launch } = app.plan;
+    const handle = options.processRunner.start(
+      launch.kind === 'command'
+        ? {
+            file: launch.command,
+            args: [],
+            cwd: app.plan.cwd,
+            env: envFor(app.plan),
+            shell: true,
+          }
+        : {
+            file: launch.file,
+            args: startArgs(launch, app.plan.port),
+            cwd: app.plan.cwd,
+            env: envFor(app.plan),
+            shell: false,
+          }
+    );
     app.handle = handle;
     setStatus(app, 'starting');
 

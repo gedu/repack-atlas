@@ -462,7 +462,7 @@ describe('init: bounded discovery (spawned bin)', () => {
   });
 });
 
-describe('init: derived commands and port validation', () => {
+describe('init: port validation and no derived command', () => {
   const baseFiles = {
     [`${WS}/pnpm-workspace.yaml`]: 'packages:\n  - apps/*\n',
     [`${WS}/apps/host/rspack.config.js`]: '',
@@ -471,7 +471,7 @@ describe('init: derived commands and port validation', () => {
     [`${WS}/apps/auth/package.json`]: pkg('@x/auth'),
   };
 
-  it('derives a command where safe and the config validates', async () => {
+  it('never emits a command: dev builds the argv from root, and the config validates', async () => {
     const result = await buildInitPlan(
       WS,
       memoryFs(baseFiles),
@@ -480,43 +480,21 @@ describe('init: derived commands and port validation', () => {
     assert.ok(result.ok);
     const json = JSON.parse(initPlanToJson(result.plan, false)) as {
       apps: { name: string; command?: string; notes: string[] }[];
-      config: { host: { command?: string } };
+      config: {
+        host: { root?: string; command?: string };
+        remotes: Record<string, { root?: string; command?: string }>;
+      };
     };
-    const byName = new Map(json.apps.map((app) => [app.name, app]));
-    assert.equal(byName.get('host')?.command, 'pnpm --filter @x/host start');
-    assert.equal(json.config.host.command, 'pnpm --filter @x/host start');
-    // Missing start script: no command, and the reason is reported.
-    assert.equal(byName.get('auth')?.command, undefined);
-    assert.match(byName.get('auth')!.notes.join(' '), /no scripts\.start/);
+    for (const app of json.apps) {
+      assert.equal(app.command, undefined);
+      assert.deepEqual(app.notes, []);
+    }
+    assert.equal(json.config.host.command, undefined);
+    assert.equal(json.config.host.root, 'apps/host');
+    assert.equal(json.config.remotes.auth?.command, undefined);
+    assert.equal(json.config.remotes.auth?.root, 'apps/auth');
     assert.deepEqual(validateFederationConfig(result.plan.config), []);
-    assert.match(formatInitPlan(result.plan, false), /note: no command/);
-  });
-
-  it('picks the package manager from the workspace root', async () => {
-    const files = { ...baseFiles };
-    delete (files as Record<string, string>)[`${WS}/pnpm-workspace.yaml`];
-    const commandFor = async (lock: string): Promise<string | undefined> => {
-      const result = await buildInitPlan(
-        WS,
-        memoryFs({ ...files, [`${WS}/${lock}`]: '' }),
-        introspectorWith({})
-      );
-      assert.ok(result.ok);
-      return result.plan.host?.command;
-    };
-    assert.equal(await commandFor('yarn.lock'), 'yarn workspace @x/host start');
-    assert.equal(
-      await commandFor('package-lock.json'),
-      'npm --workspace @x/host run start'
-    );
-    const none = await buildInitPlan(
-      WS,
-      memoryFs(files),
-      introspectorWith({})
-    );
-    assert.ok(none.ok);
-    assert.equal(none.plan.host?.command, undefined);
-    assert.match(none.plan.host!.notes.join(' '), /package manager not detected/);
+    assert.doesNotMatch(formatInitPlan(result.plan, false), /command/);
   });
 
   it('drops out-of-range introspected ports and reports them', async () => {
@@ -545,71 +523,5 @@ describe('init: derived commands and port validation', () => {
     );
     assert.ok(result.ok);
     assert.equal(result.plan.host?.port, 8081);
-  });
-
-  describe('command derivation branches', () => {
-    const planFor = async (
-      host: { package?: string | undefined },
-      extra: Record<string, string> = {}
-    ) => {
-      const files: Record<string, string> = {
-        [`${WS}/pnpm-lock.yaml`]: '',
-        [`${WS}/apps/host/rspack.config.js`]: '',
-        ...extra,
-      };
-      if (host.package !== undefined) {
-        files[`${WS}/apps/host/package.json`] = host.package;
-      }
-      const result = await buildInitPlan(WS, memoryFs(files), introspectorWith({}));
-      assert.ok(result.ok);
-      return result.plan.host!;
-    };
-    const valid = pkg('@x/host', { start: 'go' });
-
-    it('omits with a note: no package.json, invalid JSON, no or empty name', async () => {
-      const cases: [string | undefined, RegExp][] = [
-        [undefined, /no package\.json/],
-        ['{nope', /not valid JSON/],
-        [JSON.stringify({ scripts: { start: 'go' } }), /has no name/],
-        [pkg('', { start: 'go' }), /has no name/],
-      ];
-      for (const [content, note] of cases) {
-        const host = await planFor({ package: content });
-        assert.equal(host.command, undefined);
-        assert.match(host.notes.join(' '), note);
-      }
-    });
-
-    it('omits the command for a name that is not a valid npm name', async () => {
-      for (const name of ['bad name; rm -rf', 'Upper', '$(id)', '.hidden', '_x', 'a'.repeat(215)]) {
-        const host = await planFor({ package: pkg(name, { start: 'go' }) });
-        assert.equal(host.command, undefined, name);
-        assert.match(host.notes.join(' '), /not a valid npm package name/);
-      }
-      const ok = await planFor({ package: pkg('plain-name_1.x', { start: 'go' }) });
-      assert.equal(ok.command, 'pnpm --filter plain-name_1.x start');
-    });
-
-    it('detects pnpm from pnpm-lock.yaml alone', async () => {
-      const host = await planFor({ package: valid });
-      assert.equal(host.command, 'pnpm --filter @x/host start');
-    });
-
-    it('prefers pnpm, then yarn, then npm when several lockfiles exist', async () => {
-      const all = await planFor(
-        { package: valid },
-        { [`${WS}/yarn.lock`]: '', [`${WS}/package-lock.json`]: '' }
-      );
-      assert.equal(all.command, 'pnpm --filter @x/host start');
-      const files = {
-        [`${WS}/apps/host/rspack.config.js`]: '',
-        [`${WS}/apps/host/package.json`]: valid,
-        [`${WS}/yarn.lock`]: '',
-        [`${WS}/package-lock.json`]: '',
-      };
-      const result = await buildInitPlan(WS, memoryFs(files), introspectorWith({}));
-      assert.ok(result.ok);
-      assert.equal(result.plan.host?.command, 'yarn workspace @x/host start');
-    });
   });
 });

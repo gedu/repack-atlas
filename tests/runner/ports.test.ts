@@ -15,7 +15,7 @@ function entry(key: string, declaredPort: number | null): DevPlanEntry {
     key,
     name: key,
     role: key === 'host' ? 'host' : 'remote',
-    command: 'true',
+    launch: { kind: 'command', command: 'true' },
     cwd: '/ws',
     declaredPort,
   };
@@ -122,5 +122,39 @@ describe('allocatePorts', () => {
       applyAssignments(ENTRIES, result.assignments).map((e) => e.declaredPort),
       [50_001, 8082, null]
     );
+  });
+
+  it('never throws when no free port exists: it reports a conflict', async () => {
+    const exhausted: PortProbe = {
+      async isPortBusy(port) {
+        return port === 8081;
+      },
+      // Always answers a port already promised to another app.
+      async findFreePort() {
+        return 8082;
+      },
+    };
+    const reassign = await allocatePorts(ENTRIES, exhausted, {
+      autoPorts: true,
+      resolveAuto: true,
+    });
+    assert.ok(!reassign.ok);
+    assert.match(reassign.conflicts.join('\n'), /host is busy and no free port/);
+    assert.match(reassign.conflicts.join('\n'), /no free port available for/);
+
+    const failing: PortProbe = {
+      async isPortBusy() {
+        return false;
+      },
+      async findFreePort() {
+        throw new Error('EMFILE');
+      },
+    };
+    const auto = await allocatePorts(ENTRIES, failing, {
+      autoPorts: false,
+      resolveAuto: true,
+    });
+    assert.ok(!auto.ok);
+    assert.match(auto.conflicts[0]!, /no free port available for/);
   });
 });

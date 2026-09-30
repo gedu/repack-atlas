@@ -3,6 +3,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import type { FederationConfig } from '../../src/core/index.js';
+import type { Toolchains } from '../../src/runner/toolchain.js';
 import {
   buildDevPlan,
   HOST_DEFAULT_PORT,
@@ -61,13 +62,13 @@ describe('buildDevPlan', () => {
     assert.equal(alpha!.root, undefined);
   });
 
-  it('skips apps without a command and reports them', () => {
+  it('skips apps with neither command nor root and reports them', () => {
     const plan = ok(build());
     assert.deepEqual(
       plan.skipped.map((s) => [s.key, s.name]),
       [['idle', 'idle']]
     );
-    assert.match(plan.skipped[0]!.reason, /no "command"/);
+    assert.match(plan.skipped[0]!.reason, /no "command" or "root"/);
   });
 
   it('--apps filters while keeping plan order', () => {
@@ -154,5 +155,108 @@ describe('host port precedence', () => {
       plan.entries.map((e) => e.declaredPort),
       [9200, 9001, null]
     );
+  });
+});
+
+describe('default argv (root without command)', () => {
+  const HOST_ROOT = '/ws/apps/host';
+  const toolchains: Toolchains = {
+    [HOST_ROOT]: { ok: true, bundler: 'rspack', cli: `${HOST_ROOT}/node_modules/react-native/cli.js` },
+    '/ws/apps/web': { ok: true, bundler: 'webpack', cli: '/store/rn/cli.js' },
+  };
+  const config: FederationConfig = {
+    host: { manifest: './m/host.json', root: './apps/host' },
+    remotes: {
+      web: {
+        manifest: './m/web.json',
+        root: './apps/web',
+        config: 'webpack.dev.js',
+        port: 9001,
+      },
+      legacy: {
+        manifest: './m/legacy.json',
+        root: './apps/legacy',
+        command: 'run legacy',
+      },
+    },
+  };
+  const plan = (extra: Partial<Parameters<typeof buildDevPlan>[0]> = {}) =>
+    buildDevPlan({
+      config,
+      configDir: CONFIG_DIR,
+      hostName: 'host_app',
+      toolchains,
+      ...extra,
+    });
+
+  it('runs a root-only app as an argv launch with cwd = its root', () => {
+    const [host, web, legacy] = ok(plan()).entries;
+    assert.deepEqual(host!.launch, {
+      kind: 'argv',
+      file: process.execPath,
+      cli: `${HOST_ROOT}/node_modules/react-native/cli.js`,
+      bundler: 'rspack',
+    });
+    assert.equal(host!.cwd, HOST_ROOT);
+    assert.equal(web!.cwd, '/ws/apps/web');
+    assert.deepEqual(web!.launch, {
+      kind: 'argv',
+      file: process.execPath,
+      cli: '/store/rn/cli.js',
+      bundler: 'webpack',
+      config: '/ws/webpack.dev.js',
+    });
+    // `command` stays an override: verbatim, config-dir cwd, no toolchain.
+    assert.deepEqual(legacy!.launch, { kind: 'command', command: 'run legacy' });
+    assert.equal(legacy!.cwd, CONFIG_DIR);
+  });
+
+  it('projects the effective command line (no node path, cli relative to cwd)', () => {
+    const apps = toPlanEventApps(ok(plan()).entries);
+    assert.equal(
+      apps[0]!.command,
+      'node node_modules/react-native/cli.js start --bundler rspack --port 8081 --no-interactive'
+    );
+    assert.match(apps[1]!.command, /^node \/store\/rn\/cli\.js start --bundler webpack --config \/ws\/webpack\.dev\.js --port 9001 /);
+    assert.equal(apps[2]!.command, 'run legacy');
+    assert.equal(apps[0]!.cwd, HOST_ROOT);
+  });
+
+  it('accepts platform and standalone for built argvs only (T4 wires the flags)', () => {
+    const entries = ok(plan({ platform: 'ios', standalone: 'web' })).entries;
+    const line = (i: number) =>
+      toPlanEventApps(entries)[i]!.command;
+    assert.match(line(0), /--platform ios$/);
+    assert.match(line(1), /--platform ios --standalone$/);
+    assert.equal(line(2), 'run legacy');
+  });
+
+  it('an unresolvable toolchain fails the plan naming every such app', () => {
+    const result = plan({
+      toolchains: {
+        [HOST_ROOT]: { ok: false, reason: 'cannot resolve the "react-native" package' },
+      },
+    });
+    assert.ok(!result.ok);
+    assert.equal(result.reasons.length, 2);
+    assert.match(result.reasons[0]!, /^host: cannot resolve the "react-native" package \(app root \/ws\/apps\/host\)$/);
+    assert.match(result.reasons[1]!, /^web: toolchain was not resolved/);
+  });
+
+  it('does not need a toolchain for apps with a command', () => {
+    const result = plan({ toolchains: {}, apps: ['legacy'] });
+    assert.ok(result.ok);
+  });
+
+  it('an unresolved manifest URL never becomes a manifestPath', () => {
+    const url = buildDevPlan({
+      config: {
+        host: { manifest: 'https://cdn.example/h.json', command: 'x' },
+        remotes: {},
+      },
+      configDir: CONFIG_DIR,
+      hostName: 'h',
+    });
+    assert.equal(ok(url).entries[0]!.manifestPath, undefined);
   });
 });
