@@ -45,7 +45,7 @@ part of the plan and must exist.
       `{event:'plan'}` (additive), human plan table, no spawn, no Studio.
 - [x] T2 Ports: `--port` host override, default 8081, `--auto-ports`, all
       conflicts reported (exit 1).
-- [ ] T3 Default argv: config `config` field, RN CLI resolver adapter
+- [x] T3 Default argv: config `config` field, RN CLI resolver adapter
       (`createRequire` from app root), `detectBundler`, `command` as override;
       `init` stops emitting `command`.
 - [ ] T4 `--platform ios|android`, `--standalone <remote>` (gated on
@@ -111,6 +111,29 @@ branch merges to main once at the end.
   design, document it); `resolveRef` inconsistency (`plan.ts:138`);
   hardcoded test host port (`dev-runner.test.ts:24-26`).
 
+- T3 done on `feat/dev-wizard-runner-t3`, commit `84d2b09`
+  (`feat(dev): build react-native start argv per app by default`), 1495
+  authored lines (schema `config`, `ReactNativeCliResolver` port + adapter,
+  `start-argv.ts`, `toolchain.ts`, init stops emitting `command`, tests).
+  Route: delegated direct. Amended once to match upstream bundler detection
+  (rspack fallback when both/none) and resolve `config` against the config
+  directory (parent decision: parity with PR #1467 + Atlas path consistency).
+  Checks: full chain green, 431/431; parent spot check start-argv + RN CLI
+  adapter + dev-runner (55/55). Native review: high, granted, 4 lenses,
+  approved, acknowledged. Accumulated-range reviews (main..`7d6fdea`,
+  main..`a1e14af`) also granted and approved.
+- Carried advisories into T4: duplicate declared ports across apps
+  (`ports.ts`); `--json` hides reassignments; document host 8081 hard fail;
+  hardcoded/fixed test host ports (`dev-runner.test.ts:24-26`, `:1091`);
+  toolchain target duplication (`supervisor.ts:172-187`); toolchain root-key
+  collision (`toolchain.ts:53-73`); one app missing RN CLI fails the whole
+  run (`plan.ts:150-154`, upstream parity, document it); index-coupled
+  assignment (`supervisor.ts:240-241`); `commandless` alias/semantics
+  (`supervisor.ts:264`); help exit-2 list incomplete (`help.ts:164-165`);
+  init JSON indent (`init.ts:444`).
+- Docs (T7) must say default `init` output needs `react-native` installed in
+  each app root.
+
 ## Next step
 
-T3 (default argv), stacked on `feat/dev-wizard-runner-t2`.
+T4 (platform, standalone, env), stacked on `feat/dev-wizard-runner-t3`.
