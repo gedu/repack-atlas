@@ -86,6 +86,13 @@ export const EXPECTATIONS: WorkspaceExpectation[] = [
     failOnWarningsExit: 0,
   },
   {
+    // Studio rendering probe (T8): every hostile string sits in a name/path,
+    // so the doctor stays clean while the page has to render them as text.
+    dir: 'fixture-xss',
+    findings: [],
+    exitCode: 0,
+  },
+  {
     dir: 'fixture-missing-remote-manifest',
     findings: [
       {

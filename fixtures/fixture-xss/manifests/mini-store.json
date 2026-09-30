@@ -1,0 +1,68 @@
+{
+  "manifestVersion": 1,
+  "id": "mini_store",
+  "name": "mini_store",
+  "metaData": {
+    "name": "mini_store",
+    "globalName": "mini_store",
+    "type": "remote",
+    "buildInfo": {
+      "buildVersion": "fixture00",
+      "buildName": "mini_store"
+    },
+    "remoteEntry": {
+      "name": "mini_store.container.js",
+      "path": "",
+      "type": "var"
+    },
+    "publicPath": "auto"
+  },
+  "shared": [
+    {
+      "name": "react",
+      "version": "19.0.0",
+      "singleton": true,
+      "eager": true,
+      "requiredVersion": "^19.0.0"
+    },
+    {
+      "name": "react-native",
+      "version": "0.79.2",
+      "singleton": true,
+      "eager": true,
+      "requiredVersion": "~0.79.2"
+    },
+    {
+      "name": "\"><svg onload=alert(3)>",
+      "version": "1.0.0",
+      "singleton": false,
+      "eager": false,
+      "requiredVersion": "^1.0.0"
+    }
+  ],
+  "remotes": [],
+  "exposes": [
+    {
+      "id": "mini_store:<script>alert(1)</script>",
+      "name": "<script>alert(1)</script>",
+      "path": "./src/<img src=x onerror=alert(2)>"
+    }
+  ],
+  "reactNative": {
+    "version": "0.79.2",
+    "platforms": [
+      "ios",
+      "android"
+    ],
+    "nativeModules": [
+      {
+        "package": "react-native-reanimated",
+        "version": "3.17.1",
+        "turboModule": true,
+        "confidence": "static"
+      }
+    ],
+    "dynamicImportDetected": false
+  },
+  "_provenance": "Hand-authored fixture manifest for repack-atlas tests (T8 studio rendering probe). Every string containing <script>, <svg onload> or <img onerror> is a DELIBERATE XSS probe: the Studio must render it as text. Schema: src/core/manifest-types.ts (FederationManifestSchema v1). Not produced by a real rspack build; see fixtures/README.md."
+}

@@ -43,6 +43,7 @@ and an `rspack.config.js` (see the convention below).
 | `fixture-corrupt-manifest/` | unparseable manifest → unable to answer | — | `2` |
 | `fixture-heuristic-downgrade/` | `HEURISTIC_ADVISORY` | warning (heuristic) | `0` |
 | `fixture-missing-remote-manifest/` | `MISSING_REMOTE_MANIFEST` | error (warning with `--allow-missing-manifests`) | `1` (`0` with the flag) |
+| `fixture-xss/` | nothing — Studio rendering probe (hostile strings in names/paths) | — | `0` |
 
 ## Manifest provenance (why there is no build step)
 

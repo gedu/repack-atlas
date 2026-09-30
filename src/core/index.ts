@@ -9,6 +9,7 @@ export * from './introspection-types.js';
 export * from './findings.js';
 export * from './semverRange.js';
 export * from './cycle.js';
+export * from './graph.js';
 export * from './exit-codes.js';
 export * from './doctor.js';
 export * from './inspect.js';

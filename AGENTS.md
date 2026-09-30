@@ -51,9 +51,11 @@ conventions).
 ```bash
 pnpm install     # Node >= 20, pnpm >= 10
 pnpm build       # tsc: src -> dist
-pnpm typecheck   # tsc --noEmit over src + tests
+pnpm typecheck   # tsc --noEmit over src + tests (+ tests/e2e with DOM lib)
 pnpm lint        # eslint incl. both architectural fences
 pnpm test        # node:test via tsx (fixtures run in seconds, no simulator)
+pnpm test:e2e    # Playwright + chromium over the Studio preview (needs the
+                 # browser: pnpm exec playwright install chromium)
 pnpm agent:sync  # regenerate skill symlinks + AGENTS.md tables
 pnpm agent:check # CI-mode verification of the above (exit 1 on drift)
 ```
@@ -65,8 +67,9 @@ src/
 ├── cli.ts               # `repack-atlas` bin: argv → adapters+core → exit code
 ├── cli/                 # bin internals: arg parser, help, doctor plan, init plan
 ├── core/                # bundler-agnostic domain: manifest schema types,
-│                        #   findings model, federation graph, cycle detection,
-│                        #   shared-drift analysis, ports (interfaces only)
+│                        #   findings model, buildFederationGraph (core/graph.ts),
+│                        #   cycle detection, shared-drift analysis, ports
+│                        #   (interfaces only)
 ├── repack-bridge/       # the ONLY Re.Pack import surface
 │   ├── index.ts         #   = the exports request (vendor -> swap)
 │   ├── plugin.ts        #   `repack-atlas/plugin` subpath: FederationManifestPlugin
@@ -74,9 +77,13 @@ src/
 │   └── vendored/        #   copied Re.Pack code, MIT headers, VENDORED.md
 ├── adapters/            # port implementations: workspace config reader,
 │                        #   manifest sources, ProjectFs, ProcessRunner
-├── studio/              # graph + node:http server (127.0.0.1) + page.ts
+├── studio/              # node:http server (127.0.0.1, GET-only) + page.ts +
+│                        #   workspace graph loader; serves core/graph.ts output
 └── runner/              # interactive dev runner (supervisor, keymap, SSE)
 tests/                   # node:test suites (unit + CLI integration on fixtures)
+tests/e2e/               # Playwright specs for Studio (own tsconfig with DOM lib)
+playwright.config.ts     # boots tools/studio-preview.mjs on a fixed port
+tools/                   # dev-only scripts, excluded from the build and package
 fixtures/                # throwaway user workspaces, one broken variant per finding
 docs/PRD.md              # source of truth
 odd/                     # internal planning notes (not user docs)

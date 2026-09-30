@@ -159,12 +159,13 @@ export default tseslint.config(
   },
 
   {
-    // Node scripts run outside the published package; no type-aware linting.
+    // Node scripts and dev-only tools run outside the published package; no
+    // type-aware linting.
     // They are plain JS, so `no-undef` is live and the Node globals they use
     // must be declared (kept explicit instead of pulling in the `globals`
     // package for a handful of names).
     name: 'atlas/scripts',
-    files: ['scripts/**/*.mjs'],
+    files: ['scripts/**/*.mjs', 'tools/**/*.mjs'],
     extends: [tseslint.configs.disableTypeChecked],
     languageOptions: {
       globals: {

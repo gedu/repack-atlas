@@ -65,7 +65,7 @@ Out: showcase-fork integration (next feature), npm publish, MCP/Proxy (PRD §16)
 - [x] T7. CLI: bin `atlas` (name per T0) with `doctor`, `inspect`, `init`
       (init = port of #1466 dry-run/plan/apply, may lag), `--json`, exit codes
       0/1/2. Node integration tests spawn the bin against fixtures.
-- [ ] T8. Studio: `graph.ts` + `server.ts` (node:http 127.0.0.1, `/`,
+- [x] T8. Studio: `graph.ts` + `server.ts` (node:http 127.0.0.1, `/`,
       `/api/graph`, SSE) + `page.ts` port of the mock (offline, textContent-only)
       + Playwright e2e incl. XSS fixture.
 - [ ] T9. Runner: supervisor port of #1467 (start workspace, keymap incl. `v`,
@@ -150,3 +150,9 @@ Out: showcase-fork integration (next feature), npm publish, MCP/Proxy (PRD §16)
   --fail-on-warnings (advisories never escalate). New fixture
   fixture-missing-remote-manifest. init = minimal skeleton (full #1466 deferred).
   pretest builds dist. 204 tests.
+- 2026-09-29: T8 done: core/graph.ts (owner call: agnostic, honesty note for
+  app-level vs module-level edges), studio server (127.0.0.1, SSE, 405/404
+  guards), page.ts (mock tokens, textContent-only), tools/studio-preview.mjs,
+  Playwright suite 7/7 incl. XSS rendering probe (fixture-xss). 268 unit tests.
+  Gotcha: reuseExistingServer + stale preview on 8099 caused false failures —
+  kill stale servers before trusting e2e.
