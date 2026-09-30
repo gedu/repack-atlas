@@ -21,10 +21,12 @@
 //   - `**` is bounded: it stops below a dir that already is an app, skips
 //     `ios`, `android`, `build`, `dist` and `Pods`, and is capped at depth 8
 //     (ProjectFs cannot identify symlinks, so the cap guards link cycles);
+//     when the cap cuts a walk short the plan carries a warning;
 //   - when there is no positive workspace glob (none declared, or only `!`
 //     exclusions), apps live in
 //     `<workspace>/apps/*` (the fixture layout); if that directory does not
-//     exist, the workspace's own subdirectories are scanned;
+//     exist, the workspace's own subdirectories are scanned. `!` exclusions
+//     apply to this fallback too;
 //   - a candidate counts as an app when it contains a `rspack.config.*` or
 //     `webpack.config.*` file, or `.repack-atlas/introspection.json`;
 //     other packages matched by the globs are skipped;
@@ -79,6 +81,8 @@ export interface InitPlan {
   existing: boolean;
   /** The config document a write would produce. */
   config: FederationConfig;
+  /** Plan-level caveats, e.g. a `**` walk truncated by the depth cap. */
+  warnings: string[];
 }
 
 export type InitPlanResult =
@@ -239,8 +243,9 @@ async function expandGlob(
   workspaceDir: string,
   segments: string[],
   fs: ProjectFs
-): Promise<string[]> {
+): Promise<{ dirs: string[]; truncated: boolean }> {
   const found = new Set<string>();
+  let truncated = false;
   const isDir = async (rel: string[]): Promise<boolean> =>
     (await fs.stat(path.join(workspaceDir, ...rel)))?.isDirectory === true;
 
@@ -253,13 +258,17 @@ async function expandGlob(
     if (head === '**') {
       await visit(base, tail);
       // Apps do not nest: stop below a dir that already is an app.
-      if (base.length >= MAX_GLOB_DEPTH) return;
       if (base.length > 0 && (await isAppDir(path.join(workspaceDir, ...base), fs))) {
         return;
       }
       for (const name of (await fs.readdir(path.join(workspaceDir, ...base))).sort()) {
         if (isPruned(name) || STAR_STAR_PRUNED.has(name)) continue;
         if (!(await isDir([...base, name]))) continue;
+        if (base.length >= MAX_GLOB_DEPTH) {
+          // A descendable dir exists below the cap: the walk is truncated.
+          truncated = true;
+          return;
+        }
         await visit([...base, name], rest);
       }
       return;
@@ -276,7 +285,7 @@ async function expandGlob(
   }
 
   await visit([], segments);
-  return [...found];
+  return { dirs: [...found], truncated };
 }
 
 /** Workspace globs from pnpm-workspace.yaml and package.json, in that order. */
@@ -308,24 +317,30 @@ async function isAppDir(appDir: string, fs: ProjectFs): Promise<boolean> {
 async function discoverAppDirs(
   workspaceDir: string,
   fs: ProjectFs
-): Promise<{ dirs: string[]; location: string }> {
+): Promise<{ dirs: string[]; location: string; warnings: string[] }> {
   const globs = await readWorkspaceGlobs(workspaceDir, fs);
   let candidates: string[];
   let location: string;
+  const warnings: string[] = [];
   const positive = globs.filter((glob) => !glob.startsWith('!'));
+  const negative = globs
+    .filter((glob) => glob.startsWith('!'))
+    .map((glob) => normalizePattern(glob.slice(1)));
+  const excluded = (dir: string): boolean =>
+    negative.some((neg) => matchesGlob(neg, dir.split('/')));
   if (positive.length > 0) {
-    const negative = globs
-      .filter((glob) => glob.startsWith('!'))
-      .map((glob) => normalizePattern(glob.slice(1)));
     const all = new Set<string>();
     for (const glob of positive) {
-      for (const dir of await expandGlob(workspaceDir, normalizePattern(glob), fs)) {
-        all.add(dir);
+      const expanded = await expandGlob(workspaceDir, normalizePattern(glob), fs);
+      for (const dir of expanded.dirs) all.add(dir);
+      if (expanded.truncated) {
+        warnings.push(
+          `workspace glob "${glob}" stopped at depth ${MAX_GLOB_DEPTH}: ` +
+            'deeper directories were not scanned, so apps below that depth may be missing'
+        );
       }
     }
-    candidates = [...all].filter(
-      (dir) => !negative.some((neg) => matchesGlob(neg, dir.split('/')))
-    );
+    candidates = [...all].filter((dir) => !excluded(dir));
     location = `the workspace globs (${positive.join(', ')})`;
   } else {
     const appsRoot = path.join(workspaceDir, 'apps');
@@ -337,7 +352,9 @@ async function discoverAppDirs(
     for (const name of await fs.readdir(scanDir)) {
       if (!hasApps && (name === 'apps' || isPruned(name))) continue;
       const stat = await fs.stat(path.join(scanDir, name));
-      if (stat !== null && stat.isDirectory) candidates.push(`${prefix}${name}`);
+      if (stat !== null && stat.isDirectory && !excluded(`${prefix}${name}`)) {
+        candidates.push(`${prefix}${name}`);
+      }
     }
     location = `the directory ${scanDir}`;
   }
@@ -345,7 +362,39 @@ async function discoverAppDirs(
   for (const dir of candidates.sort()) {
     if (await isAppDir(path.join(workspaceDir, dir), fs)) dirs.push(dir);
   }
-  return { dirs, location };
+  return { dirs, location, warnings };
+}
+
+/**
+ * Give every app a unique dir name. Unique basenames keep the plain one;
+ * apps sharing a basename get their whole dir (`a/x` -> `a-x`), and a dashed
+ * name that still collides (with a plain name or another dashed one, e.g.
+ * `a/b-c` vs `a-b/c`) gets `-2`, `-3`, ... in sorted dir order.
+ */
+function assignDirNames(dirs: string[]): { dir: string; dirName: string }[] {
+  const baseCounts = new Map<string, number>();
+  for (const dir of dirs) {
+    const base = path.posix.basename(dir);
+    baseCounts.set(base, (baseCounts.get(base) ?? 0) + 1);
+  }
+  const isPlain = (dir: string): boolean =>
+    baseCounts.get(path.posix.basename(dir)) === 1;
+  const used = new Set(
+    dirs.filter(isPlain).map((dir) => path.posix.basename(dir))
+  );
+  const names = new Map<string, string>();
+  for (const dir of [...dirs].sort()) {
+    if (isPlain(dir)) {
+      names.set(dir, path.posix.basename(dir));
+      continue;
+    }
+    const dashed = dir.replaceAll('/', '-');
+    let candidate = dashed;
+    for (let n = 2; used.has(candidate); n += 1) candidate = `${dashed}-${n}`;
+    used.add(candidate);
+    names.set(dir, candidate);
+  }
+  return dirs.map((dir) => ({ dir, dirName: names.get(dir)! }));
 }
 
 function isHostishName(name: string): boolean {
@@ -367,21 +416,8 @@ export async function buildInitPlan(
     return { ok: false, reason: `workspace does not exist: ${workspaceDir}` };
   }
 
-  const { dirs, location } = await discoverAppDirs(workspaceDir, fs);
-  // Apps sharing a dir basename get a distinct name from their whole dir
-  // (`a/x` -> `a-x`); unique basenames keep the plain one.
-  const baseCounts = new Map<string, number>();
-  for (const dir of dirs) {
-    const base = path.posix.basename(dir);
-    baseCounts.set(base, (baseCounts.get(base) ?? 0) + 1);
-  }
-  const discovered = dirs.map((dir) => {
-    const base = path.posix.basename(dir);
-    return {
-      dir,
-      dirName: (baseCounts.get(base) ?? 0) > 1 ? dir.replaceAll('/', '-') : base,
-    };
-  });
+  const { dirs, location, warnings } = await discoverAppDirs(workspaceDir, fs);
+  const discovered = assignDirNames(dirs);
 
   if (discovered.length === 0) {
     return {
@@ -459,6 +495,7 @@ export async function buildInitPlan(
       configPath,
       existing: await fs.exists(configPath),
       config,
+      warnings,
     },
   };
 }
@@ -484,6 +521,7 @@ export function initPlanToJson(plan: InitPlan, applied: boolean): string {
         ...(app.command !== undefined ? { command: app.command } : {}),
         notes: app.notes,
       })),
+      warnings: plan.warnings,
       config: plan.config,
     },
     null,
@@ -506,6 +544,7 @@ export function formatInitPlan(plan: InitPlan, applied: boolean): string {
     if (app.command !== undefined) lines.push(`    command: ${app.command}`);
     for (const note of app.notes) lines.push(`    note: ${note}`);
   }
+  for (const warning of plan.warnings) lines.push('', `warning: ${warning}`);
   if (!applied) {
     lines.push('', 'dry run: nothing was written.');
   }
