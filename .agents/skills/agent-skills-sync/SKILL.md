@@ -3,15 +3,15 @@ name: agent-skills-sync
 description: >-
   Keep the multi-agent surface consistent after touching any skill: run the sync
   script to rebuild .claude/skills symlinks and regenerate the AGENTS.md skills
-  and auto-invoke tables, and run the check mode the CI agent-files job uses.
+  and auto-invoke tables, and run the check mode the CI `Agent files sync check` step uses.
   Trigger: after creating or modifying a skill; skill missing from the AGENTS.md
-  table; agent-files or agent-sync --check failing in CI; adding a new skill
+  table; the `Agent files sync check` CI step or agent-sync --check failing; adding a new skill
   directory.
 metadata:
   auto_invoke:
     - "creating or modifying any file under .agents/skills/"
     - "adding or renaming a skill directory"
-    - "fixing a failing agent-files CI job"
+    - "fixing a failing Agent files sync check CI step"
 ---
 
 # Skill sync
@@ -62,7 +62,8 @@ Supported frontmatter shapes: single-line values, folded `>-` descriptions, and
 
 ## CI
 
-The `agent-files` job runs `pnpm agent:check`, which fails when a skill lacks its
+The `Agent files sync check` step of the `ci.yml` job
+`Lint, typecheck, build & test (Linux, Node 22)` runs `pnpm agent:check`, which fails when a skill lacks its
 symlink, the generated tables drifted, or a SKILL.md fails validation. Reproduce
 locally with the same command; the script resolves the repo root from its own
 file, so it works from any cwd:

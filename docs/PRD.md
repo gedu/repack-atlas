@@ -442,10 +442,10 @@ Single `ci.yml` + `pr-checks.yml` to start:
 
 - **lint + typecheck** — ESLint (incl. the bridge fence and core-boundary import
   rules), `tsc --noEmit`.
-- **agent-files** — `agent-sync --check`: every `.agents/skills/*` has its
+- **Agent files sync check** step — `pnpm agent:check` (`agent-sync --check`): every `.agents/skills/*` has its
   `.claude/skills` symlink, `AGENTS.md` table in sync, SKILL.md frontmatter valid
   (name/dir match, description bounds).
-- **vendored-provenance** — every file under `vendored/` appears in `VENDORED.md`
+- **Vendored provenance check** step — `pnpm check:vendored`: every file under `vendored/` appears in `VENDORED.md`
   with a commit SHA; fail otherwise.
 - **test** — unit + CLI integration (fixture workspaces) on macOS + Linux,
   Node LTS ×2.

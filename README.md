@@ -134,7 +134,7 @@ pnpm lint          # ESLint incl. bridge-fence and core-boundary rules
 pnpm typecheck     # tsc --noEmit over src + tests
 pnpm build         # src -> dist
 pnpm test          # node:test via tsx
-pnpm agent:check   # agent-files drift (exit 1 on drift)
+pnpm agent:check   # agent files sync drift (exit 1 on drift)
 pnpm check:vendored  # every vendored file is in VENDORED.md w/ a commit sha
 pnpm test:e2e      # Playwright over the Studio preview (needs:
                    #   pnpm exec playwright install chromium)

@@ -1,7 +1,7 @@
 # VENDORED.md — provenance ledger for `src/repack-bridge/vendored/`
 
 Every file under `src/repack-bridge/vendored/**` is listed here (CI
-`vendored-provenance` check). Upstream source of record for all entries:
+`Vendored provenance check` step, `pnpm check:vendored`). Upstream source of record for all entries:
 
 - **Upstream**: `callstack/repack`
 - **Branch**: `feat/federation-manifest`

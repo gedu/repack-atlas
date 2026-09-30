@@ -120,7 +120,7 @@ Direction of dependency: adapters → ports in core. Core never imports outward.
 
 | Skill | Trigger | Path |
 |---|---|---|
-| `agent-skills-sync` | Trigger: after creating or modifying a skill; skill missing from the AGENTS.md table; agent-files or agent-sync --check failing in CI; adding a new skill directory. | `.agents/skills/agent-skills-sync/SKILL.md` |
+| `agent-skills-sync` | Trigger: after creating or modifying a skill; skill missing from the AGENTS.md table; the `Agent files sync check` CI step or agent-sync --check failing; adding a new skill directory. | `.agents/skills/agent-skills-sync/SKILL.md` |
 | `atlas-bridge-vendoring` | Trigger: touching src/repack-bridge/, src/repack-bridge/vendored/, or VENDORED.md; copying code out of Re.Pack; the exports swap; a bridge import fails with ERR_PACKAGE_PATH_NOT_EXPORTED. | `.agents/skills/atlas-bridge-vendoring/SKILL.md` |
 | `atlas-dev-setup` | Trigger: set up, install, build, run, test, or debug this repo locally; "it does not build"; fresh clone; CI failing on a check you cannot reproduce locally. | `.agents/skills/atlas-dev-setup/SKILL.md` |
 | `atlas-doctor-finding` | Trigger: adding or changing a doctor check or finding, a finding code such as REMOTE_CYCLE or SHARED_VERSION_DRIFT, the doctor --json output shape, or a finding that has no fixture yet. | `.agents/skills/atlas-doctor-finding/SKILL.md` |
@@ -145,7 +145,7 @@ before writing code.
 |---|---|
 | creating or modifying any file under .agents/skills/ | `agent-skills-sync` |
 | adding or renaming a skill directory | `agent-skills-sync` |
-| fixing a failing agent-files CI job | `agent-skills-sync` |
+| fixing a failing Agent files sync check CI step | `agent-skills-sync` |
 | importing or copying any code from Re.Pack | `atlas-bridge-vendoring` |
 | modifying src/repack-bridge/** | `atlas-bridge-vendoring` |
 | removing a vendored block during the exports swap | `atlas-bridge-vendoring` |
