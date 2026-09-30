@@ -13,7 +13,7 @@ import type { AppIntrospectionFacts } from './introspection-types.js';
  * `MISSING_REMOTE_MANIFEST` finding), while `corrupt` means "an answer
  * exists but we cannot read it" → the doctor reports a named
  * `MANIFEST_UNREADABLE` error for a remote (exit 1) and only gives up
- * (`unableToAnswer`, exit 2) when nothing can be compared.
+ * (`unableToAnswer`, exit 2) when every remote is unreadable.
  */
 export type ManifestLoadFailure = 'missing' | 'corrupt';
 

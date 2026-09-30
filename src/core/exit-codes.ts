@@ -5,8 +5,8 @@
 //   1  ran and found errors ("bad answer"), including an unreadable remote
 //      manifest (`MANIFEST_UNREADABLE`) while other remotes could be checked
 //   2  could not answer — the doctor never ran against usable input (host
-//      unreadable, bad config, or no remote manifest can be compared: each is
-//      unreadable or missing)
+//      unreadable, bad config, or every remote manifest exists but is
+//      unreadable; missing manifests keep exit 1, or 0 when allowed)
 //
 // Upstream (`commands/federation/doctor.ts` @ c5df67f0) produces 0/1 here and
 // lets the caller map manifest load failures to 2 outside the report. Atlas

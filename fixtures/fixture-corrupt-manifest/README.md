@@ -7,8 +7,9 @@ behind it with a `MANIFEST_UNREADABLE` error (app name, manifest reference and
 parse reason), keeps checking the other remotes, and exits 1.
 
 Exit 2 ("could not answer") stays for runs with nothing to compare against: a
-missing or invalid config, an unreadable host manifest, or no remote
-manifest can be compared (each unreadable or missing) (AGENTS.md rule 6 keeps 1 and 2 distinguishable because
+missing or invalid config, an unreadable host manifest, or every remote
+manifest exists but is unreadable (missing manifests keep exit 1, or 0 with
+`--allow-missing-manifests`) (AGENTS.md rule 6 keeps 1 and 2 distinguishable because
 they imply different fixes).
 
 Delta vs the clean workspace: only `manifests/mini-store.json` is replaced

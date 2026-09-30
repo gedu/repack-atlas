@@ -160,8 +160,8 @@ EXIT=1
 ```
 
 Exit 2 is kept for runs that cannot compare anything: no config, an unreadable
-host manifest, or no remote manifest can be compared (each one unreadable or
-missing, even with `--allow-missing-manifests`).
+host manifest, or every remote manifest exists but is unreadable. Missing manifests keep
+exit 1 (0 with `--allow-missing-manifests`).
 
 Tamper recipes (all reversible; the manifests are gitignored dev artifacts —
 `cp x x.bak` first, restore after; never demo drift by editing source):

@@ -59,7 +59,7 @@ Work through it in order; every box is a file in the same PR.
 |---|---|---|
 | `0` | Clean. Warnings allowed. | pass |
 | `1` | Ran and found a problem: any error-severity finding (incl. `MISSING_REMOTE_MANIFEST` unless `--allow-missing-manifests`, and `MANIFEST_UNREADABLE` for a remote manifest that exists but cannot be read while other remotes can still be checked). | fail (bad answer) |
-| `2` | Could not answer: missing required option, missing/invalid config, host manifest missing or corrupt, or no remote manifest can be compared (each unreadable or missing). | fail (no answer) |
+| `2` | Could not answer: missing required option, missing/invalid config, host manifest missing or corrupt, or every remote manifest exists but is unreadable (a missing manifest never counts: it stays exit 1, or 0 with `--allow-missing-manifests`). | fail (no answer) |
 
 `1` and `2` must stay distinguishable — "bad answer" and "no answer" imply
 different fixes. Warnings and advisories never move the exit code off `0`.

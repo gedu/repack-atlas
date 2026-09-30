@@ -5,7 +5,7 @@
 // cannot be read means "no answer" (report `unableToAnswer`, exit 2), while a
 // missing *remote* manifest is an answer ("that remote was never checked",
 // `MISSING_REMOTE_MANIFEST`, exit 1) and an unreadable remote manifest is a
-// named `MANIFEST_UNREADABLE` error (exit 1) unless no remote can be compared
+// named `MANIFEST_UNREADABLE` error (exit 1) unless every remote is unreadable
 // at all (exit 2). Encoding that in the CLI
 // handler itself would spread the asymmetry across commands.
 
