@@ -23,7 +23,7 @@ to delete the vendored code once core exports it.
 
 ## Tasks
 
-- [ ] T1 (#32) PRD (R2, 6.2, 8.2, checklist), VENDORED.md, bridge skill,
+- [x] T1 (#32) PRD (R2, 6.2, 8.2, checklist), VENDORED.md, bridge skill,
       AGENTS.md, README, demo-showcase and code comments. Route: delegated
       direct (single writer; 2+ non-trivial files).
 
