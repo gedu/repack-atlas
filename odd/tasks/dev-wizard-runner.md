@@ -41,7 +41,7 @@ part of the plan and must exist.
 
 ## Tasks
 
-- [ ] T1 Pure plan + `--dry-run`: extract a pure `buildDevPlan`, add
+- [x] T1 Pure plan + `--dry-run`: extract a pure `buildDevPlan`, add
       `{event:'plan'}` (additive), human plan table, no spawn, no Studio.
 - [ ] T2 Ports: `--port` host override, default 8081, `--auto-ports`, all
       conflicts reported (exit 1).
@@ -82,7 +82,19 @@ branch merges to main once at the end.
 ## Progress
 
 - Branch `feat/dev-wizard-runner` created. Gap analysis vs PR #1467 done.
+- T1 done on `feat/dev-wizard-runner-t1`, commit `6f74c15`
+  (`feat(dev): add pure plan builder and --dry-run`), 695 authored lines
+  (over the advisory; mostly tests + new `src/runner/plan.ts`). Route:
+  delegated direct. Checks: full chain green, 374/374 tests; parent spot
+  check re-ran plan + dev-runner tests (18/18). Native review: high risk,
+  granted, 4 lenses, approved with no blockers, acknowledged.
+- T1 advisory findings carried into T2: unify busy-port exit code (dry-run 1
+  vs live 2 → 1, upstream parity); duplicated ref resolution in
+  `supervisor.ts:130-132`; misleading shared-probe comment
+  `supervisor.ts:158-159`; exit-code wording in `help.ts:143-144`; dry-run
+  `--json` test depends on a free host port (`dev-runner.test.ts:524-544`);
+  busy probe is loopback-only in tests.
 
 ## Next step
 
-T1.
+T2 (ports), stacked on `feat/dev-wizard-runner-t1`.
