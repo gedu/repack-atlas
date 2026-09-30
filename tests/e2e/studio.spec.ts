@@ -315,7 +315,7 @@ test.describe('Studio over a stacked one-column workspace', () => {
   });
   test.afterAll(async () => {
     await preview?.stop();
-    await rm(workspace, { recursive: true, force: true });
+    if (workspace) await rm(workspace, { recursive: true, force: true });
   });
 
   interface Box {
@@ -327,33 +327,37 @@ test.describe('Studio over a stacked one-column workspace', () => {
   const boxesOverlap = (a: Box, b: Box): boolean =>
     a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
 
+  const boxOf = (page: Page, selector: string): Promise<Box> =>
+    page.locator(selector).evaluate((node) => {
+      const box = (node as SVGGraphicsElement).getBBox();
+      return { x: box.x, y: box.y, width: box.width, height: box.height };
+    });
+  const nodeBoxesOf = async (page: Page): Promise<Record<string, Box>> => {
+    const boxes: Record<string, Box> = {};
+    for (const name of ['host', 'auth', 'trading', 'wallet']) {
+      boxes[name] = await boxOf(page, `svg.graph g.node[data-node="${name}"] rect.box`);
+    }
+    return boxes;
+  };
+  const pathPoints = (page: Page, edge: string) =>
+    page.locator(`svg.graph path.edge[data-edge="${edge}"]`).evaluate((node) => {
+      const path = node as unknown as SVGGeometryElement;
+      const total = path.getTotalLength();
+      return Array.from({ length: 41 }, (_, step) => {
+        const point = path.getPointAtLength((total * step) / 40);
+        return { x: point.x, y: point.y };
+      });
+    });
+
   test('same-column edges route around the nodes between their ends', async ({ page }) => {
     await page.goto(preview.url);
     await expect(page.locator('svg.graph g.node')).toHaveCount(4);
     await expect(page.locator('svg.graph path.edge')).toHaveCount(5);
-
-    const boxOf = (selector: string) =>
-      page.locator(selector).evaluate((node) => {
-        const box = (node as SVGGraphicsElement).getBBox();
-        return { x: box.x, y: box.y, width: box.width, height: box.height };
-      });
-    const nodeBoxes: Record<string, Box> = {};
-    for (const name of ['host', 'auth', 'trading', 'wallet']) {
-      nodeBoxes[name] = await boxOf(`svg.graph g.node[data-node="${name}"] rect.box`);
-    }
+    const nodeBoxes = await nodeBoxesOf(page);
 
     // wallet -> auth spans the trading node: its curve must bow out to the
     // right of the column instead of crossing the trading rectangle.
-    const points = await page
-      .locator('svg.graph path.edge[data-edge="wallet->auth"]')
-      .evaluate((node) => {
-        const path = node as unknown as SVGGeometryElement;
-        const total = path.getTotalLength();
-        return Array.from({ length: 41 }, (_, step) => {
-          const point = path.getPointAtLength((total * step) / 40);
-          return { x: point.x, y: point.y };
-        });
-      });
+    const points = await pathPoints(page, 'wallet->auth');
     const trading = nodeBoxes['trading']!;
     for (const point of points) {
       const inside =
@@ -368,37 +372,50 @@ test.describe('Studio over a stacked one-column workspace', () => {
     expect(last.y).toBeGreaterThan(auth.y);
     expect(last.y).toBeLessThan(auth.y + auth.height);
 
+    // Overlapping same-column edges use distinct lanes: wallet -> auth bows
+    // further out than trading -> auth and the two curves never coincide.
+    const short = await pathPoints(page, 'trading->auth');
+    const farthest = (list: { x: number }[]) => Math.max(...list.map((point) => point.x));
+    expect(farthest(points)).toBeGreaterThan(farthest(short) + 10);
+    const shared = points.filter((point) =>
+      short.some((other) => Math.hypot(point.x - other.x, point.y - other.y) < 1)
+    );
+    expect(shared, 'the two same-column curves share points').toHaveLength(0);
   });
 
-  test('edge labels are never occluded by a node and stay inside the viewBox', async ({ page }) => {
+  test('rendered edge labels clear every node, sit in their background and the viewBox', async ({ page }) => {
     await page.goto(preview.url);
     await expect(page.locator('svg.graph g.node')).toHaveCount(4);
-    const nodeBoxes: Record<string, Box> = {};
-    for (const name of ['host', 'auth', 'trading', 'wallet']) {
-      nodeBoxes[name] = await page
-        .locator(`svg.graph g.node[data-node="${name}"] rect.box`)
-        .evaluate((node) => {
-          const box = (node as SVGGraphicsElement).getBBox();
-          return { x: box.x, y: box.y, width: box.width, height: box.height };
-        });
-    }
-    const labels = await page.locator('svg.graph rect.elabel-bg').evaluateAll((rects) =>
-      rects.map((rect) => {
-        const box = (rect as SVGGraphicsElement).getBBox();
-        return { x: box.x, y: box.y, width: box.width, height: box.height };
+    const nodeBoxes = await nodeBoxesOf(page);
+    // Measure the rendered glyphs, not the background rect sized from an estimate.
+    const labels = await page.locator('svg.graph text.elabel').evaluateAll((texts) =>
+      texts.map((text) => {
+        const box = (text as SVGGraphicsElement).getBBox();
+        const bg = (text.parentElement!.querySelector('rect') as SVGGraphicsElement).getBBox();
+        return {
+          text: { x: box.x, y: box.y, width: box.width, height: box.height },
+          bg: { x: bg.x, y: bg.y, width: bg.width, height: bg.height },
+        };
       })
     );
     expect(labels).toHaveLength(5);
-    for (const label of labels) {
+    const view = await page.locator('svg.graph').evaluate((node) => {
+      const box = (node as unknown as SVGSVGElement).viewBox.baseVal;
+      return { x: box.x, y: box.y, width: box.width, height: box.height };
+    });
+    for (const { text, bg } of labels) {
       for (const [name, nodeBox] of Object.entries(nodeBoxes)) {
-        expect(boxesOverlap(label, nodeBox), `a label overlaps node ${name}`).toBe(false);
+        expect(boxesOverlap(text, nodeBox), `a label overlaps node ${name}`).toBe(false);
       }
+      expect(text.x).toBeGreaterThanOrEqual(bg.x);
+      expect(text.y).toBeGreaterThanOrEqual(bg.y);
+      expect(text.x + text.width).toBeLessThanOrEqual(bg.x + bg.width);
+      expect(text.y + text.height).toBeLessThanOrEqual(bg.y + bg.height);
+      expect(text.x).toBeGreaterThanOrEqual(view.x);
+      expect(text.y).toBeGreaterThanOrEqual(view.y);
+      expect(text.x + text.width).toBeLessThanOrEqual(view.x + view.width);
+      expect(text.y + text.height).toBeLessThanOrEqual(view.y + view.height);
     }
-    // ...and every label stays inside the viewBox (no clipping).
-    const viewBoxWidth = await page.locator('svg.graph').evaluate(
-      (node) => (node as unknown as SVGSVGElement).viewBox.baseVal.width
-    );
-    for (const label of labels) expect(label.x + label.width).toBeLessThanOrEqual(viewBoxWidth);
   });
 
   test('confidence badges never wrap inside their pill', async ({ page }) => {

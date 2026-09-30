@@ -388,14 +388,19 @@ export const STUDIO_PAGE_HTML = `<!doctype html>
   // ends: they leave the right side, bow out into the margin (one lane per
   // overlapping edge so parallel edges never coincide) and come back onto the
   // target's right side, arrowhead pointing left at the target.
+  var ARROW_GAP = 6;      // px the arrow tip stops short of the target border
+  var BULGE_BASE = 30;    // how far lane 0 bows out past the column edge
+  var LANE_STEP = 22;     // extra bow per lane so nested edges stay apart
+  var ANCHOR_STEP = 10;   // vertical spread of the attach points per lane...
+  var ANCHOR_LANES = 3;   // ...capped so they stay well inside the node (H = 78)
   function edgeGeometry(from, to, sameColumn, lane) {
     if (sameColumn) {
       var x1 = from.x + W;
-      var x2 = to.x + W + 6;
-      var shift = Math.min(lane, 3) * 10;
+      var x2 = to.x + W + ARROW_GAP;
+      var shift = Math.min(lane, ANCHOR_LANES) * ANCHOR_STEP;
       var y1 = from.y + H / 2 + shift;
       var y2 = to.y + H / 2 + shift;
-      var bulge = 30 + lane * 22;
+      var bulge = BULGE_BASE + lane * LANE_STEP;
       var reach = bulge / 0.75; // a cubic peaks at 3/4 of its control offset
       return {
         d: 'M' + x1 + ',' + y1 + ' C' + (x1 + reach) + ',' + y1 + ' ' +
@@ -404,7 +409,7 @@ export const STUDIO_PAGE_HTML = `<!doctype html>
       };
     }
     var cx1 = from.x + W, cy1 = from.y + H / 2;
-    var cx2 = to.x - 6, cy2 = to.y + H / 2;
+    var cx2 = to.x - ARROW_GAP, cy2 = to.y + H / 2;
     var mx = (cx1 + cx2) / 2;
     return {
       d: 'M' + cx1 + ',' + cy1 + ' C' + mx + ',' + cy1 + ' ' + mx + ',' + cy2 + ' ' + cx2 + ',' + cy2,
@@ -443,49 +448,65 @@ export const STUDIO_PAGE_HTML = `<!doctype html>
     return a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
   }
 
-  // Geometry and label slot for every edge, plus the width the labels need.
-  // A label never sits under a node or another label: it starts at the curve
-  // midpoint and is nudged vertically to the nearest free slot.
-  function planEdges(box) {
+  function overlapArea(a, b) {
+    var w = Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x);
+    var h = Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y);
+    return w > 0 && h > 0 ? w * h : 0;
+  }
+
+  // Geometry and label slot for every edge, plus the bounds the labels need.
+  // A label starts at the curve midpoint and is nudged vertically to the
+  // nearest slot that touches no node or earlier label. If every slot within
+  // reach is taken, the slot with the least overlap wins: placement is best
+  // effort, not a guarantee. The bounds grow (also upwards) to hold every label.
+  function planEdges(box, edges) {
     var obstacles = [];
     var placeNames = Object.keys(box.places);
     for (var o = 0; o < placeNames.length; o++) {
       var at = box.places[placeNames[o]];
       obstacles.push({ x: at.x, y: at.y, width: W, height: H });
     }
-    var lanes = assignLanes(graph.edges, box.places);
-    var nudges = [0, -20, 20, -40, 40, -60, 60];
+    var lanes = assignLanes(edges, box.places);
+    var nudges = [0];
+    for (var step = 1; step <= 8; step++) nudges.push(-20 * step, 20 * step);
     var items = [];
-    var width = box.width;
-    for (var e = 0; e < graph.edges.length; e++) {
-      var edge = graph.edges[e];
+    var maxX = box.width;
+    var minY = 0;
+    var maxY = box.height;
+    for (var e = 0; e < edges.length; e++) {
+      var edge = edges[e];
       var from = box.places[edge.from];
       var to = box.places[edge.to];
       if (!from || !to) continue;
       var geometry = edgeGeometry(from, to, from.x === to.x, lanes[e]);
       var text = edge.label || '(app-level)';
       var baseY = geometry.ly;
-      var rect = labelRect(geometry, text);
-      for (var t = 0; t < nudges.length; t++) {
+      var bestY = baseY;
+      var bestScore = Infinity;
+      for (var t = 0; t < nudges.length && bestScore > 0; t++) {
         geometry.ly = baseY + nudges[t];
-        rect = labelRect(geometry, text);
-        var blocked = false;
-        for (var k = 0; k < obstacles.length && !blocked; k++) blocked = overlaps(rect, obstacles[k]);
-        if (!blocked) break;
+        var candidate = labelRect(geometry, text);
+        var score = 0;
+        for (var k = 0; k < obstacles.length; k++) score += overlapArea(candidate, obstacles[k]);
+        if (score < bestScore) { bestScore = score; bestY = geometry.ly; }
       }
+      geometry.ly = bestY;
+      var rect = labelRect(geometry, text);
       obstacles.push(rect);
-      width = Math.max(width, rect.x + rect.width + 16);
+      maxX = Math.max(maxX, rect.x + rect.width + 16);
+      minY = Math.min(minY, rect.y - 8);
+      maxY = Math.max(maxY, rect.y + rect.height + 8);
       items.push({ edge: edge, geometry: geometry, text: text, rect: rect });
     }
-    return { items: items, width: width };
+    return { items: items, width: maxX, top: minY, height: maxY - minY };
   }
 
   function drawGraph() {
     clear(svg);
     var box = layout();
-    var plan = planEdges(box);
+    var plan = planEdges(box, graph.edges);
     box.width = plan.width;
-    svg.setAttribute('viewBox', '0 0 ' + box.width + ' ' + box.height);
+    svg.setAttribute('viewBox', '0 ' + plan.top + ' ' + box.width + ' ' + plan.height);
 
     var defs = svgEl('defs', {}, svg);
     var markers = [['arr', 'var(--ink-3)'], ['arr-hi', 'var(--accent)'], ['arr-bad', 'var(--bad-fill)']];
@@ -497,7 +518,7 @@ export const STUDIO_PAGE_HTML = `<!doctype html>
       svgEl('path', { d: 'M0,0 L10,5 L0,10 z', fill: markers[m][1] }, marker);
     }
     for (var x = 20; x < box.width; x += 28) {
-      for (var y = 16; y < box.height; y += 28) {
+      for (var y = plan.top + 16; y < plan.top + plan.height; y += 28) {
         svgEl('circle', { cx: x, cy: y, r: 1, 'class': 'grid-dot' }, svg);
       }
     }
