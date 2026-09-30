@@ -68,4 +68,10 @@ Mode: off (no project/session TDD config found in AGENTS.md). Runner:
   `pnpm lint` clean, `pnpm typecheck` clean.
 - Size: 575+/40- total, over the 400 budget; delivery plan is two chained
   PRs, one per commit (#9 then #8).
-- Next: RDD review per commit, then push/PR on owner decision.
+- RDD slice 1 (`main..c8a93c1`, branch `feat/init-commands`): medium, 1 lens
+  (reliability), granted, approved and acknowledged (lineage
+  review-df0b87f54e861276). Advisory WARNING: package name interpolated
+  unquoted into the command; SUGGESTION: untested deriveCommand branches.
+- Follow-up `8e1310b` (+76): command only for valid npm package names, tests
+  for the missing branches. Parent re-run: `pnpm test` 311/311 pass.
+- Next: RDD slice 2 (`c8a93c1..HEAD`), then push/PR on owner decision.
