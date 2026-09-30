@@ -51,6 +51,10 @@ Two checkouts side by side:
      ];
      ```
 
+     The snippet is simplified: the real configs pass the object returned by
+     `getSharedDependencies({ eager })` (host `eager: true`) to all three
+     plugins.
+
      An entry without `version` is resolved from the installed package and
      marked `versionConfidence: "heuristic"` in
      `.repack-atlas/introspection.json`; a string value is read as the
@@ -83,10 +87,13 @@ Gotchas to know before you present:
   (CodeSigningPlugin). Demo everything in dev mode.
 - `repack-atlas init` discovers apps from the workspace globs
   (`pnpm-workspace.yaml` `packages:` or `package.json` `workspaces`), so the
-  showcase's `packages/*` apps are found. It still points manifest refs at
-  `manifests/<app dir>.json`, which is not how the showcase lays out its
-  manifests, so the demo config stays hand-authored (the file is 30 lines —
-  show it, don't generate it).
+  showcase's `packages/*` apps are found. `init --dry-run --json` discovers all four
+  `packages/*` apps with the same root, port and command
+  (`pnpm --filter <name> start`) as the hand-written config. Only the manifest
+  refs differ: init emits `manifests/<name>.json`, the showcase keeps
+  `packages/<name>/repack-federation-manifest.json`. That is why the demo
+  config stays hand-authored (the file is 30 lines — show it, don't generate
+  it).
 
 ## 1. Beat one: the manifest exists and is reachable
 
@@ -144,7 +151,9 @@ The exit-code contract — show all four states, each with its real trigger:
 
 Real output of the corrupt state (run on `fixtures/fixture-corrupt-manifest`,
 where the `mini_store` manifest is truncated JSON; absolute paths shortened).
-With the showcase, the finding names `wallet` the same way:
+With the showcase, the finding names `wallet` the same way and the summary
+is `1 error, 42 warnings, 0 info` (wallet is not compared, so warnings drop
+from 62 to 42), exit 1:
 
 ```
 $ node dist/cli.js doctor --workspace fixtures/fixture-corrupt-manifest; echo "EXIT=$?"
@@ -233,6 +242,8 @@ kill <dev-supervisor-pid>          # tears down all four children
 git status --porcelain             # showcase stays clean (demo files are gitignored)
 ```
 
-The showcase side lives entirely on the `atlas-demo` branch (5 commits:
-deps, plugins, writeToDisk, workspace config, lock refresh) and is never pushed or sent
+The showcase side lives entirely on the `atlas-demo` branch (6 commits:
+deps, plugins, writeToDisk, workspace config, lock refresh, and the
+shared-map refactor `d80e172 refactor(atlas): pass the federation shared map
+to introspection`) and is never pushed or sent
 upstream without the owner's call.
