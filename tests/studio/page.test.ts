@@ -142,7 +142,7 @@ describe('Studio page keeps badges on one line', () => {
 });
 
 describe('Studio page standalone badge', () => {
-  it('draws the badge from app.standalone as an SVG text node, with no control', () => {
+  it('source draws the badge from app.standalone with a literal label', () => {
     assert.match(page, /app\.standalone === true/);
     assert.match(page, /'standalone'\);/, 'literal label, never data');
     assert.match(page, /\.tag-standalone-t/);

@@ -295,6 +295,8 @@ export const STUDIO_PAGE_HTML = `<!doctype html>
 
   var NS = 'http://www.w3.org/2000/svg';
   var W = 168, H = 78;
+  // Standalone pill: right edge sits 32px inside the node, left of the status dot.
+  var TAG_W = 62, TAG_RIGHT = 32;
   var graph = { apps: [], edges: [], findings: [] };
   var selected = null;
   var tab = 'exposes';
@@ -577,11 +579,11 @@ export const STUDIO_PAGE_HTML = `<!doctype html>
         // Read-only declaration from the config; text node only, nowrap by
         // construction (fixed-width pill, single SVG text).
         svgEl('rect', {
-          x: place.x + W - 94, y: place.y + 8, width: 62, height: 16, rx: 8,
+          x: place.x + W - TAG_RIGHT - TAG_W, y: place.y + 8, width: TAG_W, height: 16, rx: 8,
           'class': 'tag-standalone'
         }, node);
         svgText(node, {
-          x: place.x + W - 63, y: place.y + 19, 'text-anchor': 'middle',
+          x: place.x + W - TAG_RIGHT - TAG_W / 2, y: place.y + 19, 'text-anchor': 'middle',
           'class': 'tag-standalone-t'
         }, 'standalone');
       }

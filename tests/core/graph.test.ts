@@ -127,11 +127,19 @@ describe('buildFederationGraph over the clean workspace fixture', () => {
 
   it('carries standalone only for a remote that declares it', async () => {
     const { config, inputs, findings } = await loadWorkspace('workspace');
-    const none = buildFederationGraph(config, inputs, findings);
+    const explicitFalse: FederationConfig = {
+      ...config,
+      remotes: {
+        ...config.remotes,
+        mini_store: { ...config.remotes['mini_store']!, standalone: false },
+      },
+    };
+    const none = buildFederationGraph(explicitFalse, inputs, findings);
+    assert.equal(explicitFalse.remotes['mini_store']?.standalone, false);
     assert.equal(
       none.apps.every((app) => !('standalone' in app)),
       true,
-      'standalone: false in the config is not carried'
+      'an explicit standalone: false is not carried'
     );
 
     const declared: FederationConfig = {
@@ -145,7 +153,12 @@ describe('buildFederationGraph over the clean workspace fixture', () => {
     assert.equal(graph.apps.find((app) => app.name === 'mini_auth')?.standalone, true);
     assert.equal('standalone' in graph.apps.find((app) => app.name === 'mini_store')!, false);
     assert.equal('standalone' in graph.apps.find((app) => app.name === 'host')!, false);
-    assert.equal(JSON.parse(JSON.stringify(graph)).apps[1].standalone, true, 'reaches /api/graph JSON');
+    const wire = JSON.parse(JSON.stringify(graph)) as { apps: { name: string; standalone?: boolean }[] };
+    assert.equal(
+      wire.apps.find((app) => app.name === 'mini_auth')?.standalone,
+      true,
+      'reaches /api/graph JSON'
+    );
   });
 
   it('injects statuses only when the caller supplies them', async () => {
