@@ -143,6 +143,33 @@ describe('init (spawned bin, reduced scope)', () => {
     assert.equal(config.remotes['mini_auth']?.port, 8082);
   });
 
+  it('introspection facts keep the host port in the generated host entry', async () => {
+    const workspace = await freshWorkspaceCopy();
+    await mkdir(path.join(workspace, 'apps', 'host', '.repack-atlas'), {
+      recursive: true,
+    });
+    await writeFile(
+      path.join(workspace, 'apps', 'host', '.repack-atlas', 'introspection.json'),
+      JSON.stringify({
+        schemaVersion: 1,
+        name: 'SuperHost',
+        role: 'host',
+        port: 8081,
+        exposes: [],
+        remotes: {},
+        shared: [],
+      }),
+      'utf-8'
+    );
+
+    const result = await runBin('init', '--workspace', workspace, '--dry-run', '--json');
+    assert.equal(result.code, 0, result.stderr);
+    const payload = parseJson<InitJson>(result.stdout);
+    const config = payload.config as { host: { port?: number } };
+    assert.equal(config.host.port, 8081);
+    assert.deepEqual(validateFederationConfig(payload.config), []);
+  });
+
   it('a workspace without apps is exit 2', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'atlas-init-empty-'));
     tmpRoots.push(root);
