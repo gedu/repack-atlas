@@ -34,7 +34,27 @@ Two checkouts side by side:
      `ModuleFederationPluginV2`:
      `FederationManifestPlugin` from `repack-atlas/plugin` with
      `{ manifest: true, writeToDisk: true, ...same shared/remotes/exposes }`
-     and `IntrospectionPlugin` from `repack-atlas/introspection`;
+     and `IntrospectionPlugin` from `repack-atlas/introspection`. Both
+     plugins receive the very same `shared` object as
+     `ModuleFederationPluginV2` (the Module Federation map), so there is no
+     second hand-written copy:
+
+     ```ts
+     const shared = {
+       react: { singleton: true, eager: false, requiredVersion: '19.2.8' },
+       'react-native': { singleton: true, eager: false, requiredVersion: '0.86.2' },
+     };
+     plugins: [
+       new ModuleFederationPluginV2({ name, shared, remotes, exposes }),
+       new FederationManifestPlugin({ manifest: true, writeToDisk: true, name, shared, remotes, exposes }),
+       new IntrospectionPlugin({ name, role, shared, remotes, exposes, port }),
+     ];
+     ```
+
+     An entry without `version` is resolved from the installed package and
+     marked `versionConfidence: "heuristic"` in
+     `.repack-atlas/introspection.json`; a string value is read as the
+     `requiredVersion`, and an array of package names works too;
    - `repack-federation.json` at the showcase root with the host + 3 remotes,
      file manifest refs, ports and start commands.
 3. Install and warm up:
@@ -119,8 +139,29 @@ The exit-code contract — show all four states, each with its real trigger:
 | clean | untouched workspace | 0 errors, 62 warnings, exit 0 |
 | drift | edit a gitignored manifest: auth `shared[react].version` 19.2.8 → 19.1.0 | `SHARED_VERSION_DRIFT [static]` error, **exit 1** |
 | cycle | synth: auth manifest `remotes`→trading, trading→auth | `REMOTE_CYCLE [static]` warning, **exit 0** (cycles are advisory by design) |
-| corrupt | overwrite wallet manifest with garbage | run degrades, `could not answer`, **exit 2** |
+| corrupt | overwrite wallet manifest with garbage | `MANIFEST_UNREADABLE [static]` error naming `wallet`, other apps still checked, **exit 1** |
 | no config | run from a dir with no `repack-federation.json` up the tree | `no repack-federation.json found…`, **exit 2** |
+
+Real output of the corrupt state (run on `fixtures/fixture-corrupt-manifest`,
+where the `mini_store` manifest is truncated JSON; absolute paths shortened).
+With the showcase, the finding names `wallet` the same way:
+
+```
+$ node dist/cli.js doctor --workspace fixtures/fixture-corrupt-manifest; echo "EXIT=$?"
+host:   host  fixtures/fixture-corrupt-manifest/manifests/host.json
+remote: mini_auth  fixtures/fixture-corrupt-manifest/manifests/mini-auth.json
+remote: mini_store  ./manifests/mini-store.json
+
+errors (1):
+  MANIFEST_UNREADABLE [static] Remote "mini_store" has a manifest that exists but could not be read: Manifest at fixtures/fixture-corrupt-manifest/manifests/mini-store.json is not valid JSON. It was not checked; fix or regenerate that manifest.
+
+summary: 1 error, 0 warnings, 0 info
+EXIT=1
+```
+
+Exit 2 is kept for runs that cannot compare anything: no config, an unreadable
+host manifest, or every remote manifest exists but is unreadable. Missing manifests keep
+exit 1 (0 with `--allow-missing-manifests`).
 
 Tamper recipes (all reversible; the manifests are gitignored dev artifacts —
 `cp x x.bak` first, restore after; never demo drift by editing source):
@@ -182,8 +223,8 @@ the voiceover.
 - Honest limits to state rather than dodge: static analysis reports
   `confidence: static | heuristic` and heuristic results downgrade to
   advisories; `SHARED_VERSION_DRIFT` needs manifests that were actually
-  built; a corrupt remote currently surfaces as `could not answer` rather
-  than a named finding (known UX gap).
+  built; an unreadable remote manifest is reported by name
+  (`MANIFEST_UNREADABLE`) but that remote is not compared.
 
 ## 5. Cleanup
 

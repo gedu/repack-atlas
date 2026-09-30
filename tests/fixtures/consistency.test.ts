@@ -86,7 +86,7 @@ async function loadWorkspace(dir: string): Promise<{
     if (result.status === 'ok') {
       remotes.push({ name, manifest: result.manifest });
     } else if (result.failure === 'corrupt') {
-      remotes.push({ name, corrupt: true });
+      remotes.push({ name, corrupt: true, reason: result.message });
     } else {
       remotes.push({ name, missing: true });
     }
@@ -190,8 +190,8 @@ describe('fixture manifests satisfy the core schema', () => {
       for (const name of names) {
         const label = `${expectation.dir}/manifests/${name}`;
         if (expectation.corrupt && name === 'mini-store.json') {
-          // The exit-2 provoker must stay unparseable — otherwise the
-          // variant silently starts claiming an answer again.
+          // The MANIFEST_UNREADABLE provoker must stay unparseable —
+          // otherwise the variant silently starts claiming an answer again.
           const raw = await readFile(path.join(manifestDir, name), 'utf-8');
           assert.throws(
             () => JSON.parse(raw),
@@ -244,11 +244,23 @@ describe('fixture workspaces reproduce their expectation table', () => {
             confidence: f.confidence,
           }))
           .sort((a, b) => a.code.localeCompare(b.code)),
-        [...expectation.findings].sort((a, b) =>
-          a.code.localeCompare(b.code)
-        ),
+        expectation.findings
+          .map(({ code, severity, confidence }) => ({
+            code,
+            severity,
+            confidence,
+          }))
+          .sort((a, b) => a.code.localeCompare(b.code)),
         `${expectation.dir}: finding set`
       );
+      for (const expected of expectation.findings) {
+        if (!expected.app) continue;
+        const finding = report.findings.find((f) => f.code === expected.code);
+        assert.ok(
+          finding?.message.includes(`"${expected.app}"`),
+          `${expectation.dir}: ${expected.code} must name "${expected.app}"`
+        );
+      }
     });
   }
 });

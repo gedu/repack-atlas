@@ -260,8 +260,10 @@ subcommand tree). In the demo phase the same commands ship as an `repack-atlas` 
 
 Doctor exit codes (locked in the fork's design doc, kept here): `0` clean
 (warnings allowed) · `1` drift — any error finding (`MISSING_REMOTE_MANIFEST`
-unless `--allow-missing-manifests`) · `2` could not run — missing option, host
-manifest missing/corrupt. `2` means "no answer", `1` means "bad answer"; CI
+unless `--allow-missing-manifests`; `MANIFEST_UNREADABLE` when a remote manifest
+exists but cannot be read, while other remotes can still be checked) · `2` could
+not run — missing option, no/invalid config, host manifest missing/corrupt, or
+every remote manifest exists but is unreadable (missing manifests keep `1`, or `0` with `--allow-missing-manifests`). `2` means "no answer", `1` means "bad answer"; CI
 treats both as failure. Heuristic honesty is preserved: `dynamicImportDetected`
 or `confidence: heuristic` downgrades missing-native findings to advisories —
 Atlas reports what it cannot check instead of guessing.

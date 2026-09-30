@@ -109,7 +109,12 @@ export function createWorkspaceGraphSource(
         inputs.push({ name, role: 'remote', manifest: result.manifest });
         remotes.push({ name, manifest: result.manifest });
       } else if (result.failure === 'corrupt') {
-        remotes.push({ name, corrupt: true });
+        remotes.push({
+          name,
+          corrupt: true,
+          ref: remote.manifest,
+          reason: result.message,
+        });
       } else {
         remotes.push({ name, missing: true });
       }

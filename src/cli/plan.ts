@@ -4,8 +4,9 @@
 // rules below are what makes the exit-code contract honest — a *host* that
 // cannot be read means "no answer" (report `unableToAnswer`, exit 2), while a
 // missing *remote* manifest is an answer ("that remote was never checked",
-// `MISSING_REMOTE_MANIFEST`, exit 1) and a corrupt remote manifest is "an
-// answer exists but we cannot read it" (exit 2). Encoding that in the CLI
+// `MISSING_REMOTE_MANIFEST`, exit 1) and an unreadable remote manifest is a
+// named `MANIFEST_UNREADABLE` error (exit 1) unless every remote is unreadable
+// at all (exit 2). Encoding that in the CLI
 // handler itself would spread the asymmetry across commands.
 
 import path from 'node:path';
@@ -178,7 +179,12 @@ export async function runDoctorFromPlan(
       remotes.push({ name: remote.name, manifest: result.manifest });
       remoteSources.push({ name: remote.name, resolvedFrom: result.resolvedFrom });
     } else if (result.failure === 'corrupt') {
-      remotes.push({ name: remote.name, corrupt: true });
+      remotes.push({
+        name: remote.name,
+        corrupt: true,
+        ref: remote.manifest,
+        reason: result.message,
+      });
       remoteSources.push({ name: remote.name });
     } else {
       remotes.push({ name: remote.name, missing: true });

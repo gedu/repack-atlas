@@ -10,6 +10,8 @@ export interface ExpectedFinding {
   code: string;
   severity: 'error' | 'warning' | 'info';
   confidence: 'static' | 'heuristic';
+  /** When set, the finding message must name this app in double quotes. */
+  app?: string;
 }
 
 export interface WorkspaceExpectation {
@@ -18,7 +20,7 @@ export interface WorkspaceExpectation {
   findings: ExpectedFinding[];
   /** Doctor exit code: 0 clean · 1 found errors · 2 could not answer. */
   exitCode: 0 | 1 | 2;
-  /** True when a manifest exists but must fail to parse (exit-2 provoker). */
+  /** True when a manifest exists but must fail to parse (`MANIFEST_UNREADABLE`). */
   corrupt?: boolean;
   /** True when a remote's manifest file was deleted from the workspace. */
   missingManifest?: boolean;
@@ -68,8 +70,15 @@ export const EXPECTATIONS: WorkspaceExpectation[] = [
   },
   {
     dir: 'fixture-corrupt-manifest',
-    findings: [],
-    exitCode: 2,
+    findings: [
+      {
+        code: 'MANIFEST_UNREADABLE',
+        severity: 'error',
+        confidence: 'static',
+        app: 'mini_store',
+      },
+    ],
+    exitCode: 1,
     corrupt: true,
   },
   {

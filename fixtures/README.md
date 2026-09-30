@@ -63,7 +63,7 @@ tests (e.g. the remote-cycle graph test) rely on.
 | `fixture-remote-cycle/` | `REMOTE_CYCLE` | warning | `0` |
 | `fixture-version-drift/` | `SHARED_VERSION_DRIFT` | error | `1` |
 | `fixture-missing-native/` | `MISSING_NATIVE_MODULE` | error | `1` |
-| `fixture-corrupt-manifest/` | unparseable manifest → unable to answer | — | `2` |
+| `fixture-corrupt-manifest/` | `MANIFEST_UNREADABLE` (names the app; other remotes still checked) | error | `1` |
 | `fixture-heuristic-downgrade/` | `HEURISTIC_ADVISORY` | warning (heuristic) | `0` |
 | `fixture-missing-remote-manifest/` | `MISSING_REMOTE_MANIFEST` | error (warning with `--allow-missing-manifests`) | `1` (`0` with the flag) |
 | `fixture-xss/` | nothing — Studio rendering probe (hostile strings in names/paths) | — | `0` |
