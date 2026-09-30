@@ -34,7 +34,27 @@ Two checkouts side by side:
      `ModuleFederationPluginV2`:
      `FederationManifestPlugin` from `repack-atlas/plugin` with
      `{ manifest: true, writeToDisk: true, ...same shared/remotes/exposes }`
-     and `IntrospectionPlugin` from `repack-atlas/introspection`;
+     and `IntrospectionPlugin` from `repack-atlas/introspection`. Both
+     plugins receive the very same `shared` object as
+     `ModuleFederationPluginV2` (the Module Federation map), so there is no
+     second hand-written copy:
+
+     ```ts
+     const shared = {
+       react: { singleton: true, eager: false, requiredVersion: '19.2.8' },
+       'react-native': { singleton: true, eager: false, requiredVersion: '0.86.2' },
+     };
+     plugins: [
+       new ModuleFederationPluginV2({ name, shared, remotes, exposes }),
+       new FederationManifestPlugin({ manifest: true, writeToDisk: true, name, shared, remotes, exposes }),
+       new IntrospectionPlugin({ name, role, shared, remotes, exposes, port }),
+     ];
+     ```
+
+     An entry without `version` is resolved from the installed package and
+     marked `versionConfidence: "heuristic"` in
+     `.repack-atlas/introspection.json`; a string value is read as the
+     `requiredVersion`, and an array of package names works too;
    - `repack-federation.json` at the showcase root with the host + 3 remotes,
      file manifest refs, ports and start commands.
 3. Install and warm up:

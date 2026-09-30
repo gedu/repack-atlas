@@ -24,6 +24,11 @@ export interface IntrospectionSharedEntry {
   singleton?: boolean;
   eager?: boolean;
   requiredVersion?: string;
+  /**
+   * Set to `heuristic` when `version` was inferred from the installed package
+   * rather than declared; absent means the version was declared (static).
+   */
+  versionConfidence?: 'heuristic';
 }
 
 /** Coarse native scope: what an app declares about its native surface. */
@@ -102,6 +107,12 @@ export function validateIntrospectionFacts(document: unknown): string[] {
         if (v !== undefined && typeof v !== 'string') {
           reasons.push(`shared[${i}].${key} must be a string`);
         }
+      }
+      if (
+        entry.versionConfidence !== undefined &&
+        entry.versionConfidence !== 'heuristic'
+      ) {
+        reasons.push(`shared[${i}].versionConfidence must be "heuristic"`);
       }
       for (const key of ['singleton', 'eager'] as const) {
         const v = entry[key];

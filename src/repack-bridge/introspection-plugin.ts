@@ -16,11 +16,14 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import {
+  normalizeShared,
+  type IntrospectionSharedInput,
+} from './shared-map.js';
+import {
   INTROSPECTION_RELATIVE_PATH,
   validateIntrospectionFacts,
   type AppIntrospectionFacts,
   type IntrospectionNativeScope,
-  type IntrospectionSharedEntry,
 } from '../core/introspection-types.js';
 
 /** What a user declares in their rspack config. */
@@ -30,7 +33,13 @@ export interface IntrospectionPluginOptions {
   role?: 'host' | 'remote';
   exposes?: string[];
   remotes?: Record<string, string>;
-  shared?: IntrospectionSharedEntry[];
+  /**
+   * Either the facts array or the same Module Federation `shared` object
+   * given to ModuleFederationPlugin (map, name array, string values). A
+   * missing `version` is resolved from the installed package and marked
+   * `versionConfidence: 'heuristic'`.
+   */
+  shared?: IntrospectionSharedInput;
   /** Dev-server port this app serves on. */
   port?: number;
   native?: IntrospectionNativeScope;
@@ -45,16 +54,19 @@ export class IntrospectionPlugin {
   constructor(private readonly options: IntrospectionPluginOptions) {}
 
   /** The exact document the plugin writes (also what tests assert). */
-  buildDocument(): AppIntrospectionFacts {
+  buildDocument(compilerContext?: string): AppIntrospectionFacts {
     const {
       name,
       role,
       exposes = [],
       remotes = {},
-      shared = [],
       port,
       native,
     } = this.options;
+    const shared = normalizeShared(
+      this.options.shared,
+      this.options.appRoot ?? compilerContext
+    );
     const document: Record<string, unknown> = {
       schemaVersion: 1,
       name,
@@ -82,8 +94,8 @@ export class IntrospectionPlugin {
    * declaration behind.
    */
   apply(compiler: unknown): void {
-    const document = this.buildDocument();
     const context = (compiler as { context?: string } | undefined)?.context;
+    const document = this.buildDocument(context);
     const appRoot = this.options.appRoot ?? context;
     if (!appRoot) {
       throw new Error(
