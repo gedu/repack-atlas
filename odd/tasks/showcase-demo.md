@@ -111,7 +111,33 @@ bridge changes follow existing test patterns.
   commit `35f3604`; build/lint/typecheck 277 tests/check:vendored all
   green; parent re-ran `pnpm test`: 277/277.
 
+- 2026-09-30 D4 (showcase side): `writeToDisk: true` in 4 configs; commit
+  `3138380`. Manifest written at app root on every compilation; watch
+  rebuild updates mtime. Later A/B (parent): served 200 only while the
+  on-disk file exists (delete→404, rebuild→200) — dev server serves the
+  app-root file once writeToDisk created it.
+- 2026-09-30 D5: config commit `4186a5d`; `init --dry-run` cannot see
+  packages/ layout (exit 2) — hand-authored config documented.
+- 2026-09-30 D6: clean-showcase doctor = 0 errors / 62 warnings
+  (57 EAGER_ADVISORY + 5 HEURISTIC_ADVISORY) / exit 0, static and live
+  identical. No natural drift/cycle in the real repo — error codes proven
+  via reversible tamper in D6b instead.
+- 2026-09-30 D6b: DRIFT exit 1; cycle → REMOTE_CYCLE warning exit 0 (by
+  design); corrupt + no-config → exit 2. UX gap noted: corrupt remote has
+  no named finding, only trailing "could not answer" + its warnings vanish.
+  All restored byte-identical; tree clean.
+- 2026-09-30 D7: dev supervisor PID 84461 live, Studio :8099, graph 4 ready
+  apps / 5 real edges / 62 findings, SSE works; left running for GIF.
+  Parent corrected worker's 9001/9002 mislabel (9001=trading, 9002=wallet,
+  verified via served manifest ids).
+- 2026-09-30 D8: docs/demo-showcase.md written; repack-atlas commits
+  `35f3604` (bridge) + `e98f745` (docs). Showcase branch `atlas-demo`:
+  `2b2bcb9`/`443ba51`/`3138380`/`4186a5d`. Nothing pushed anywhere.
+
 ## Next step
 
-Finish D4 on the showcase (enable `writeToDisk`, confirm on-disk manifest
-under the live dev server), then D5 config + D6 doctor.
+Owner records the GIF (Studio live at 127.0.0.1:8099, runner PID 84461 —
+kill to stop). Open follow-ups surfaced by the demo: (1) doctor UX —
+corrupt remote has no named finding (exit-2 line only); (2) `init` app
+discovery does not cover non-`apps/` layouts; (3) IntrospectionPlugin
+static shared arrays could accept the map + version resolver.
