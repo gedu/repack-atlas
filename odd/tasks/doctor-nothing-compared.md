@@ -27,7 +27,7 @@ run looks green.
 
 ## Tasks
 
-- [ ] T1 (#26) Core rule, fixture `fixture-nothing-compared`, expectation
+- [x] T1 (#26) Core rule, fixture `fixture-nothing-compared`, expectation
       table, core + CLI tests, README/PRD/skill docs. Route: delegated direct
       (single writer; core + fixture + tests + docs).
 
@@ -45,3 +45,9 @@ Mode: off (no project/session TDD config). Runner: `pnpm test`.
 ## Progress
 
 - Branch: `feat/doctor-nothing-compared` from `3248541`.
+- T1 `e4c66c4` (+489/-20, 27 files). Route: delegated direct (single writer).
+- Evidence: `pnpm build`, `typecheck`, `lint`, `agent:check` clean; `pnpm test`
+  361/361. `fixture-nothing-compared`: exit 1 (2 errors, 1 warning), exit 0
+  with `--allow-missing-manifests` (0 errors, 3 warnings, `NOTHING_COMPARED`
+  present). `fixture-missing-remote-manifest`: exit 1 / 0, no new finding.
+- Note: `--fail-on-warnings` escalates `NOTHING_COMPARED` like any warning.
