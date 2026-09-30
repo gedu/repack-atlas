@@ -51,3 +51,5 @@ Mode: off (no project/session TDD config). Runner: `pnpm test`.
   with `--allow-missing-manifests` (0 errors, 3 warnings, `NOTHING_COMPARED`
   present). `fixture-missing-remote-manifest`: exit 1 / 0, no new finding.
 - Note: `--fail-on-warnings` escalates `NOTHING_COMPARED` like any warning.
+- Parent follow-up `7b46c84`: shared `allRemotesUnreadable` predicate for the exit-2 rule and the NOTHING_COMPARED skip; singular wording ("The remote manifest was not compared") with a test. `pnpm test` 362/362; nothing-compared fixture exit 1 / 0 with --allow; corrupt fixture exit 1.
+- RDD: `main..66f5d5c` four lenses approved + ack (review-b2989fc010d827c3); `66f5d5c..7b46c84` approved + ack (review-3d7e644f2aab40e6). Its WARNING about an empty-remotes guard is a false positive: the guard is at src/core/doctor.ts:266 and the no-remotes test passes.
