@@ -12,6 +12,11 @@ without a simulator:
 - **Can I run it?** An interactive dev runner that starts the whole workspace
   and serves a read-only **Federation Studio** page.
 
+![Federation Studio on the super-app-showcase workspace: a host and three mini-apps, all ready, with five consumption edges and 62 doctor findings](docs/assets/federation-studio.gif)
+
+_Federation Studio on a real Re.Pack workspace (host + 3 mini-apps). The
+walkthrough is in [`docs/demo-showcase.md`](docs/demo-showcase.md)._
+
 Atlas grew out of three stacked Re.Pack PRs
 ([#1463](https://github.com/callstack/repack/pull/1463),
 [#1466](https://github.com/callstack/repack/pull/1466),
