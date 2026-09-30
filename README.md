@@ -90,7 +90,7 @@ point it at a real project, add two plugins to each app's rspack config:
 upstream change this works around. Then:
 
 ```bash
-npx repack-atlas init --workspace /path/to/workspace   # discovers apps
+npx repack-atlas init --workspace /path/to/workspace   # discovers apps, derives commands
 npx repack-atlas doctor --workspace /path/to/workspace
 ```
 

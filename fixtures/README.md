@@ -32,6 +32,12 @@ fixtures/<name>/
 Each app carries a minimal `package.json`, one or two trivial `src/` modules,
 and an `rspack.config.js` (see the convention below).
 
+## Discovery-only fixture
+
+`discovery-packages/` is not a doctor fixture (no manifests, not in the
+expectation table). It exercises `repack-atlas init` workspace-glob discovery:
+apps under `packages/*` plus one non-app package. See its README.
+
 ## Dev-runner commands (`repack-atlas dev`)
 
 `workspace/` is the only fixture whose config entries declare a `command`

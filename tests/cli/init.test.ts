@@ -249,6 +249,139 @@ const WS = '/ws';
 const pkg = (name: string, scripts?: Record<string, string>): string =>
   JSON.stringify({ name, ...(scripts ? { scripts } : {}) });
 
+describe('init: workspace-glob discovery (spawned bin)', () => {
+  async function discoveryCopy(): Promise<string> {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'atlas-init-disc-'));
+    tmpRoots.push(root);
+    const workspace = path.join(root, 'workspace');
+    await copyTree(path.join(fixturesDir, 'discovery-packages'), workspace);
+    return workspace;
+  }
+
+  async function discover(workspace: string): Promise<InitJson> {
+    const result = await runBin('init', '--workspace', workspace, '--dry-run', '--json');
+    assert.equal(result.code, 0, result.stderr);
+    return parseJson<InitJson>(result.stdout);
+  }
+
+  it('discovers apps under packages/* and skips non-app packages', async () => {
+    const payload = await discover(await discoveryCopy());
+    assert.deepEqual(
+      payload.apps.map((app) => app.dir),
+      ['packages/feature-auth', 'packages/host']
+    );
+    assert.equal(payload.apps.find((app) => app.name === 'host')?.role, 'host');
+    assert.deepEqual(validateFederationConfig(payload.config), []);
+  });
+
+  it('reads package.json workspaces (array) and honors negation', async () => {
+    const workspace = await discoveryCopy();
+    await rm(path.join(workspace, 'pnpm-workspace.yaml'));
+    await writeFile(
+      path.join(workspace, 'package.json'),
+      JSON.stringify({ private: true, workspaces: ['packages/*', '!packages/host'] }),
+      'utf-8'
+    );
+    const payload = await discover(workspace);
+    assert.deepEqual(
+      payload.apps.map((app) => app.dir),
+      ['packages/feature-auth']
+    );
+  });
+
+  it('reads package.json workspaces ({ packages }) with ** and skips node_modules', async () => {
+    const workspace = await discoveryCopy();
+    await rm(path.join(workspace, 'pnpm-workspace.yaml'));
+    await writeFile(
+      path.join(workspace, 'package.json'),
+      JSON.stringify({ workspaces: { packages: ['packages/**'] } }),
+      'utf-8'
+    );
+    const nested = path.join(workspace, 'packages', 'ui-kit', 'node_modules', 'dep');
+    await mkdir(nested, { recursive: true });
+    await writeFile(path.join(nested, 'webpack.config.js'), '', 'utf-8');
+    const deep = path.join(workspace, 'packages', 'group', 'deep-app');
+    await mkdir(deep, { recursive: true });
+    await writeFile(path.join(deep, 'webpack.config.js'), '', 'utf-8');
+    const payload = await discover(workspace);
+    assert.deepEqual(
+      payload.apps.map((app) => app.dir),
+      ['packages/feature-auth', 'packages/group/deep-app', 'packages/host']
+    );
+  });
+});
+
+describe('init: bounded discovery (spawned bin)', () => {
+  async function ws(files: Record<string, string>): Promise<string> {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'atlas-init-bound-'));
+    tmpRoots.push(root);
+    for (const [rel, content] of Object.entries(files)) {
+      const file = path.join(root, rel);
+      await mkdir(path.dirname(file), { recursive: true });
+      await writeFile(file, content, 'utf-8');
+    }
+    return root;
+  }
+  const run = async (workspace: string): Promise<InitJson> => {
+    const result = await runBin('init', '--workspace', workspace, '--dry-run', '--json');
+    assert.equal(result.code, 0, result.stderr);
+    return parseJson<InitJson>(result.stdout);
+  };
+
+  it('** does not descend below an app or into native/build dirs', async () => {
+    const workspace = await ws({
+      'pnpm-workspace.yaml': 'packages:\n  - "packages/**"\n',
+      'packages/host/rspack.config.js': '',
+      'packages/host/ios/rspack.config.js': '',
+      'packages/host/nested/rspack.config.js': '',
+      'packages/group/build/rspack.config.js': '',
+      'packages/group/dist/rspack.config.js': '',
+      'packages/group/remote/rspack.config.js': '',
+    });
+    const payload = await run(workspace);
+    assert.deepEqual(
+      payload.apps.map((app) => app.dir),
+      ['packages/group/remote', 'packages/host']
+    );
+  });
+
+  it('negation-only globs fall back to apps/*', async () => {
+    const workspace = await ws({
+      'pnpm-workspace.yaml': 'packages:\n  - "!apps/skip"\n',
+      'apps/one/rspack.config.js': '',
+    });
+    const payload = await run(workspace);
+    assert.deepEqual(payload.apps.map((app) => app.dir), ['apps/one']);
+    const empty = await ws({ 'pnpm-workspace.yaml': 'packages:\n  - "!x"\n' });
+    const result = await runBin('init', '--workspace', empty);
+    assert.equal(result.code, 2);
+    assert.match(result.stderr, /no apps discovered under the directory /);
+  });
+
+  it('apps sharing a basename get distinct names and manifests', async () => {
+    const workspace = await ws({
+      'pnpm-workspace.yaml': 'packages:\n  - "packages/*/*"\n',
+      'packages/a/app/rspack.config.js': '',
+      'packages/b/app/rspack.config.js': '',
+      'packages/b/other/rspack.config.js': '',
+    });
+    const payload = await run(workspace);
+    const names = payload.apps.map((app) => app.name);
+    assert.deepEqual(names, ['packages-a-app', 'packages-b-app', 'other']);
+    assert.equal(new Set(names).size, names.length);
+    const config = payload.config as {
+      host: { manifest: string };
+      remotes: Record<string, { manifest: string }>;
+    };
+    const manifests = [
+      config.host.manifest,
+      ...Object.values(config.remotes).map((r) => r.manifest),
+    ];
+    assert.equal(new Set(manifests).size, 3);
+    assert.deepEqual(validateFederationConfig(payload.config), []);
+  });
+});
+
 describe('init: derived commands and port validation', () => {
   const baseFiles = {
     [`${WS}/pnpm-workspace.yaml`]: 'packages:\n  - apps/*\n',
@@ -332,5 +465,71 @@ describe('init: derived commands and port validation', () => {
     );
     assert.ok(result.ok);
     assert.equal(result.plan.host?.port, 8081);
+  });
+
+  describe('command derivation branches', () => {
+    const planFor = async (
+      host: { package?: string | undefined },
+      extra: Record<string, string> = {}
+    ) => {
+      const files: Record<string, string> = {
+        [`${WS}/pnpm-lock.yaml`]: '',
+        [`${WS}/apps/host/rspack.config.js`]: '',
+        ...extra,
+      };
+      if (host.package !== undefined) {
+        files[`${WS}/apps/host/package.json`] = host.package;
+      }
+      const result = await buildInitPlan(WS, memoryFs(files), introspectorWith({}));
+      assert.ok(result.ok);
+      return result.plan.host!;
+    };
+    const valid = pkg('@x/host', { start: 'go' });
+
+    it('omits with a note: no package.json, invalid JSON, no or empty name', async () => {
+      const cases: [string | undefined, RegExp][] = [
+        [undefined, /no package\.json/],
+        ['{nope', /not valid JSON/],
+        [JSON.stringify({ scripts: { start: 'go' } }), /has no name/],
+        [pkg('', { start: 'go' }), /has no name/],
+      ];
+      for (const [content, note] of cases) {
+        const host = await planFor({ package: content });
+        assert.equal(host.command, undefined);
+        assert.match(host.notes.join(' '), note);
+      }
+    });
+
+    it('omits the command for a name that is not a valid npm name', async () => {
+      for (const name of ['bad name; rm -rf', 'Upper', '$(id)', '.hidden', '_x', 'a'.repeat(215)]) {
+        const host = await planFor({ package: pkg(name, { start: 'go' }) });
+        assert.equal(host.command, undefined, name);
+        assert.match(host.notes.join(' '), /not a valid npm package name/);
+      }
+      const ok = await planFor({ package: pkg('plain-name_1.x', { start: 'go' }) });
+      assert.equal(ok.command, 'pnpm --filter plain-name_1.x start');
+    });
+
+    it('detects pnpm from pnpm-lock.yaml alone', async () => {
+      const host = await planFor({ package: valid });
+      assert.equal(host.command, 'pnpm --filter @x/host start');
+    });
+
+    it('prefers pnpm, then yarn, then npm when several lockfiles exist', async () => {
+      const all = await planFor(
+        { package: valid },
+        { [`${WS}/yarn.lock`]: '', [`${WS}/package-lock.json`]: '' }
+      );
+      assert.equal(all.command, 'pnpm --filter @x/host start');
+      const files = {
+        [`${WS}/apps/host/rspack.config.js`]: '',
+        [`${WS}/apps/host/package.json`]: valid,
+        [`${WS}/yarn.lock`]: '',
+        [`${WS}/package-lock.json`]: '',
+      };
+      const result = await buildInitPlan(WS, memoryFs(files), introspectorWith({}));
+      assert.ok(result.ok);
+      assert.equal(result.plan.host?.command, 'yarn workspace @x/host start');
+    });
   });
 });
