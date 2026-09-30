@@ -20,7 +20,16 @@ export type ToolchainResolution =
   | { ok: true; bundler: Bundler; cli: string }
   | { ok: false; reason: string };
 
-/** Absolute app root → its resolved toolchain (or why it has none). */
+/**
+ * Key of one resolution. The bundler depends on the app's `config` field as
+ * well as its root, so two apps sharing a root (a monorepo root hosting two
+ * bundler configs) must not share an entry.
+ */
+export function toolchainKey(root: string, config?: string): string {
+  return config === undefined ? root : `${root}\u0000${config}`;
+}
+
+/** `toolchainKey` → its resolved toolchain (or why it has none). */
 export type Toolchains = Readonly<Record<string, ToolchainResolution>>;
 
 /** Root-relative posix paths of the bundler config files present in `root`. */
@@ -51,13 +60,16 @@ export async function resolveToolchains(
 ): Promise<Toolchains> {
   const resolved: Record<string, ToolchainResolution> = {};
   for (const target of targets) {
+    const key = toolchainKey(target.root, target.config);
+    // Apps with the same root and config resolve once.
+    if (key in resolved) continue;
     const files = await listConfigFiles(deps.fs, target.root);
     const bundler = detectBundler({
       files,
       ...(target.config !== undefined ? { config: target.config } : {}),
     });
     const cli = deps.reactNativeCli.resolve(target.root);
-    resolved[target.root] =
+    resolved[key] =
       cli.status === 'ok'
         ? { ok: true, bundler, cli: cli.cli }
         : { ok: false, reason: cli.message };

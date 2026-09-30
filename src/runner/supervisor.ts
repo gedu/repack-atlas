@@ -2,7 +2,7 @@
 // to run, spawns each app (its command or built argv) through the `ProcessRunner` port,
 // and tracks one live status per app. This is a REIMPLEMENTATION of the
 // concept in upstream #1467 (`federation-dev`) at demo scope — not a port:
-// no wizard, no platforms, no launch, no adb. The upstream README
+// no wizard, no launch, no adb. The upstream README
 // (`website/src/latest/api/cli/federation-dev.mdx` @ feat/federation-dev-runner)
 // was consulted for concepts only (prefixed logs, port probes before spawn,
 // ordered SIGINT→grace→SIGTERM shutdown, one JSON event per transition).
@@ -20,7 +20,10 @@
 //   - An app with neither is skipped with a console warning, never guessed.
 //   - Both kinds receive `ATLAS_APP_NAME` (graph node name), `ATLAS_APP_PORT`
 //     (the runner-resolved port), `ATLAS_APP_ROOT` (resolved `root`, may be
-//     empty) and, for file manifests, `ATLAS_APP_MANIFEST`.
+//     empty) and, for file manifests, `ATLAS_APP_MANIFEST`. With `--platform`
+//     they also get `ATLAS_APP_PLATFORM`, and the `--standalone` remote gets
+//     `ATLAS_APP_STANDALONE=1`: a `command` is never rewritten, so env is
+//     its only channel; built argvs carry the flags themselves.
 //
 // Readiness is ONE documented signal: the app's port answers on 127.0.0.1
 // (two-leg `isPortBusy` probe). `bundling` is deliberately never claimed —
@@ -44,6 +47,7 @@ import {
   HOST_APP_KEY,
   resolveRef,
   type DevPlanEntry,
+  type DevPlatform,
   type DevSkippedApp,
 } from './plan.js';
 import {
@@ -73,6 +77,12 @@ export interface DevAppPlan {
   port: number;
   /** `reassigned`: a busy declared/default port moved by `--auto-ports`. */
   portSource: 'declared' | 'auto' | 'reassigned';
+  /** The port a `reassigned` app gave up. */
+  reassignedFrom?: number;
+  /** Session `--platform` (env `ATLAS_APP_PLATFORM`). */
+  platform?: DevPlatform;
+  /** The `--standalone` remote (env `ATLAS_APP_STANDALONE=1`). */
+  standalone?: true;
   root?: string;
   /** Absolute path of a file manifest; absent for URLs/unreadable refs. */
   manifestPath?: string;
@@ -100,9 +110,8 @@ export type DevPlanResult =
       /** Pure plan entries the live apps were allocated from. */
       entries: DevPlanEntry[];
       apps: DevAppPlan[];
+      /** Apps with neither `command` nor `root` (left out, warned). */
       skipped: DevSkippedApp[];
-      /** Apps listed in the config without a `command` (skipped, warned). */
-      commandless: DevSkippedApp[];
       /** One line per `--auto-ports` reassignment (empty when none). */
       reassignments: string[];
     };
@@ -120,9 +129,9 @@ export interface DevPlanOptions {
   apps?: string[];
   /** `--port`: host port override (validated by the CLI). */
   hostPort?: number;
-  /** `--platform` for built argvs (T4 wires the flag). */
-  platform?: 'ios' | 'android';
-  /** Remote key started with `--standalone` (T4 wires the flag). */
+  /** `--platform` (validated by the CLI). */
+  platform?: DevPlatform;
+  /** Remote key started with `--standalone` (gated on `standalone: true`). */
   standalone?: string;
   /** `--auto-ports`: busy declared ports move to a free port. */
   autoPorts?: boolean;
@@ -179,12 +188,15 @@ export async function loadDevPlan(
       (app) =>
         app.command === undefined &&
         app.root !== undefined &&
-        (options.apps === undefined || options.apps.includes(app.key))
+        (options.apps === undefined ||
+          options.apps.includes(app.key) ||
+          options.standalone === app.key)
     )
     .map((app) => ({
       root: path.resolve(configDir, app.root!),
       ...(app.config !== undefined ? { config: app.config } : {}),
     }));
+  // Apps sharing a root and config resolve once (`resolveToolchains` dedupes).
   const toolchains = await resolveToolchains(targets, {
     fs: options.fs,
     reactNativeCli: options.reactNativeCli,
@@ -237,8 +249,9 @@ export async function resolveDevPlan(
 
   // Entries carry the allocated ports (the plan event and argv read them).
   const entries = applyAssignments(loaded.entries, allocation.assignments);
-  const apps: DevAppPlan[] = entries.map((entry, index) => {
-    const assignment = allocation.assignments[index]!;
+  const assignmentByKey = new Map(allocation.assignments.map((a) => [a.key, a]));
+  const apps: DevAppPlan[] = entries.map((entry) => {
+    const assignment = assignmentByKey.get(entry.key)!;
     return {
       key: entry.key,
       name: entry.name,
@@ -248,6 +261,11 @@ export async function resolveDevPlan(
       // resolveAuto: true → every assignment carries a concrete port.
       port: assignment.port!,
       portSource: assignment.source,
+      ...(entry.reassignedFrom !== undefined
+        ? { reassignedFrom: entry.reassignedFrom }
+        : {}),
+      ...(entry.platform !== undefined ? { platform: entry.platform } : {}),
+      ...(entry.standalone === true ? { standalone: true as const } : {}),
       ...(entry.root !== undefined ? { root: entry.root } : {}),
       ...(entry.manifestPath !== undefined
         ? { manifestPath: entry.manifestPath }
@@ -261,7 +279,6 @@ export async function resolveDevPlan(
     entries,
     apps,
     skipped: loaded.skipped,
-    commandless: loaded.skipped,
     reassignments: describeReassignments(allocation.assignments),
   };
 }
@@ -340,6 +357,8 @@ export function createDevSupervisor(options: DevSupervisorOptions) {
     if (plan.manifestPath !== undefined) {
       env.ATLAS_APP_MANIFEST = plan.manifestPath;
     }
+    if (plan.platform !== undefined) env.ATLAS_APP_PLATFORM = plan.platform;
+    if (plan.standalone === true) env.ATLAS_APP_STANDALONE = '1';
     return env;
   }
 
@@ -461,6 +480,8 @@ export const DEV_ENV_VARS = [
   'ATLAS_APP_PORT',
   'ATLAS_APP_ROOT',
   'ATLAS_APP_MANIFEST',
+  'ATLAS_APP_PLATFORM',
+  'ATLAS_APP_STANDALONE',
 ] as const;
 
 /** Re-export so consumers can type plans without importing core twice. */

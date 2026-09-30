@@ -5,9 +5,18 @@
 // declaration order.
 
 import path from 'node:path';
-import { isUrlSource, type FederationConfig } from '../core/index.js';
+import {
+  FEDERATION_CONFIG_FILENAME,
+  isUrlSource,
+  type FederationConfig,
+} from '../core/index.js';
 import { describeLaunch, type DevLaunch } from './start-argv.js';
-import type { Toolchains } from './toolchain.js';
+import { toolchainKey, type Toolchains } from './toolchain.js';
+
+/** Platforms `--platform` accepts (the two native compile scopes). */
+export type DevPlatform = 'ios' | 'android';
+
+export const DEV_PLATFORMS: readonly DevPlatform[] = ['ios', 'android'];
 
 /** `--apps` / config key of the host entry (not its federation name). */
 export const HOST_APP_KEY = 'host';
@@ -29,6 +38,15 @@ export interface DevPlanEntry {
   cwd: string;
   /** Declared TCP port (host: `--port` > config > 8081); `null` = runner picks. */
   declaredPort: number | null;
+  /** The busy port `--auto-ports` moved this app away from (set by
+   * `applyAssignments`, never by the plan builder). */
+  reassignedFrom?: number;
+  /** `--platform` of the session; built argvs get `--platform`, `command`
+   * apps only the `ATLAS_APP_PLATFORM` env var. */
+  platform?: DevPlatform;
+  /** True on the one remote started with `--standalone` (argv flag, or the
+   * `ATLAS_APP_STANDALONE=1` env var for a `command` app). */
+  standalone?: true;
   /** Absolute app root; absent when the config declares none. */
   root?: string;
   /** Absolute path of a file manifest; absent for URLs. */
@@ -64,11 +82,12 @@ export interface BuildDevPlanInput {
   /** Resolved bundler + RN CLI per absolute app root (see `toolchain.ts`).
    * Consulted only for apps that run the default argv. */
   toolchains?: Toolchains;
-  /** `--platform` for built argvs (T4 wires the flag; `command` apps never
-   * receive it). */
-  platform?: 'ios' | 'android';
-  /** Config key of the remote started with `--standalone` (T4 wires the flag
-   * and its `standalone: true` gate). */
+  /** `--platform` (already validated). Built argvs get `--platform`; a
+   * `command` is never rewritten and sees only the env var. */
+  platform?: DevPlatform;
+  /** Config key of the remote started with `--standalone`. It must be a
+   * declared remote with `standalone: true` (else the plan fails) and joins
+   * the session even when `--apps` omitted it, as upstream #1467 does. */
   standalone?: string;
 }
 
@@ -111,8 +130,34 @@ export function buildDevPlan(input: BuildDevPlanInput): BuildDevPlanResult {
       };
     }
   }
+
+  if (input.standalone !== undefined) {
+    const remote = config.remotes[input.standalone];
+    if (remote === undefined) {
+      return {
+        ok: false,
+        reasons: [
+          `--standalone names an unknown remote: ${input.standalone} (known remotes: ${Object.keys(config.remotes).join(', ') || '(none)'})`,
+        ],
+      };
+    }
+    // Upstream `assertRemoteStandalone`: only `standalone: true` passes.
+    if (remote.standalone !== true) {
+      return {
+        ok: false,
+        reasons: [
+          `--standalone refused: remote "${input.standalone}" does not declare standalone support. Set "standalone": true for it in ${path.join(configDir, FEDERATION_CONFIG_FILENAME)}.`,
+        ],
+      };
+    }
+  }
+
+  // `--standalone r` implies r is in the session even when `--apps` omitted it.
   const selected = input.apps
-    ? roster.filter((entry) => input.apps!.includes(entry.key))
+    ? roster.filter(
+        (entry) =>
+          input.apps!.includes(entry.key) || input.standalone === entry.key
+      )
     : roster;
 
   const entries: DevPlanEntry[] = [];
@@ -122,6 +167,15 @@ export function buildDevPlan(input: BuildDevPlanInput): BuildDevPlanResult {
   for (const entry of selected) {
     const name = entry.role === 'host' ? hostName : entry.key;
     if (entry.command === undefined && entry.root === undefined) {
+      if (input.standalone === entry.key) {
+        // A silent skip would drop the very app the user asked to run.
+        return {
+          ok: false,
+          reasons: [
+            `--standalone ${entry.key}: the remote declares neither "command" nor "root" in repack-federation.json, so it cannot run`,
+          ],
+        };
+      }
       skipped.push({
         key: entry.key,
         name,
@@ -146,7 +200,7 @@ export function buildDevPlan(input: BuildDevPlanInput): BuildDevPlanResult {
     } else {
       // `root` is defined here: commandless + rootless apps were skipped.
       const appRoot = root!;
-      const toolchain = input.toolchains?.[appRoot];
+      const toolchain = input.toolchains?.[toolchainKey(appRoot, entry.config)];
       if (toolchain === undefined || !toolchain.ok) {
         reasons.push(
           `${entry.key}: ${toolchain?.reason ?? 'toolchain was not resolved'} (app root ${appRoot})`
@@ -179,6 +233,8 @@ export function buildDevPlan(input: BuildDevPlanInput): BuildDevPlanResult {
           ? (input.hostPort ?? entry.port ?? HOST_DEFAULT_PORT)
           : (entry.port ?? null),
       ...(root !== undefined ? { root } : {}),
+      ...(input.platform !== undefined ? { platform: input.platform } : {}),
+      ...(input.standalone === entry.key ? { standalone: true as const } : {}),
       ...(isUrlSource(manifestRef) ? {} : { manifestPath: manifestRef }),
     });
   }
@@ -196,6 +252,12 @@ export interface DevPlanEventApp {
    * for a built argv (see `describeLaunch`). */
   command: string;
   cwd: string;
+  /** Additive: the busy port `--auto-ports` moved this app away from. */
+  reassignedFrom?: number;
+  /** Additive: the session `--platform`, when one was given. */
+  platform?: DevPlatform;
+  /** Additive: true on the `--standalone` remote. */
+  standalone?: true;
 }
 
 /** Project plan entries to the stable `--json` / table shape. */
@@ -206,16 +268,35 @@ export function toPlanEventApps(entries: DevPlanEntry[]): DevPlanEventApp[] {
     port: entry.declaredPort,
     command: describeLaunch(entry.launch, entry.declaredPort, entry.cwd),
     cwd: entry.cwd,
+    ...(entry.reassignedFrom !== undefined
+      ? { reassignedFrom: entry.reassignedFrom }
+      : {}),
+    ...(entry.platform !== undefined ? { platform: entry.platform } : {}),
+    ...(entry.standalone === true ? { standalone: true as const } : {}),
   }));
 }
 
-/** Human plan table (`--dry-run`): app, role, port or `auto`, command, cwd. */
+/**
+ * Human plan table (`--dry-run`): app, role, port or `auto`, command, cwd. A
+ * `--platform` adds a `platform` column (it is the only place a `command`
+ * app shows it, as `ATLAS_APP_PLATFORM`); the `--standalone` remote's role
+ * reads `remote (standalone)`.
+ */
 export function formatPlanTable(entries: DevPlanEntry[]): string {
-  const header = ['app', 'role', 'port', 'command', 'cwd'];
+  const withPlatform = entries.some((entry) => entry.platform !== undefined);
+  const header = [
+    'app',
+    'role',
+    'port',
+    ...(withPlatform ? ['platform'] : []),
+    'command',
+    'cwd',
+  ];
   const rows = toPlanEventApps(entries).map((app) => [
     app.app,
-    app.role,
+    app.standalone === true ? `${app.role} (standalone)` : app.role,
     app.port === null ? 'auto' : String(app.port),
+    ...(withPlatform ? [app.platform ?? '-'] : []),
     app.command,
     app.cwd,
   ]);

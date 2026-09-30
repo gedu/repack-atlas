@@ -34,9 +34,11 @@ import {
   type DevSkippedApp,
 } from '../runner/supervisor.js';
 import {
+  DEV_PLATFORMS,
   formatPlanTable,
   toPlanEventApps,
   type DevPlanEventApp,
+  type DevPlatform,
 } from '../runner/plan.js';
 import {
   allocatePorts,
@@ -52,7 +54,7 @@ const EXIT_FOUND_ERRORS = 1;
 const EXIT_NO_ANSWER = 2;
 
 export const DEV_SPEC: ArgSpec = {
-  valueOptions: ['apps', 'port'],
+  valueOptions: ['apps', 'port', 'platform', 'standalone'],
   optionalValueOptions: ['workspace', 'studio-port'],
   booleanFlags: ['json', 'ci', 'no-studio', 'dry-run', 'auto-ports', 'help'],
 };
@@ -61,7 +63,15 @@ export const DEV_SPEC: ArgSpec = {
 export type DevEvent =
   | { event: 'plan'; apps: DevPlanEventApp[] }
   | { event: 'studio'; url: string }
-  | { event: 'app'; app: string; status: string; port: number; pid?: number }
+  | {
+      event: 'app';
+      app: string;
+      status: string;
+      port: number;
+      pid?: number;
+      /** Additive: the busy port `--auto-ports` moved this app away from. */
+      reassignedFrom?: number;
+    }
   | { event: 'exit'; code: number };
 
 export interface DevIo {
@@ -101,6 +111,8 @@ interface DryRunInput {
   workspace: string;
   appNames: string[] | undefined;
   hostPort: number | undefined;
+  platform: DevPlatform | undefined;
+  standalone: string | undefined;
   autoPorts: boolean;
   json: boolean;
   io: DevIo;
@@ -130,6 +142,8 @@ async function runDryRun(input: DryRunInput): Promise<number> {
     reactNativeCli: input.reactNativeCli,
     ...(input.appNames !== undefined ? { apps: input.appNames } : {}),
     ...(input.hostPort !== undefined ? { hostPort: input.hostPort } : {}),
+    ...(input.platform !== undefined ? { platform: input.platform } : {}),
+    ...(input.standalone !== undefined ? { standalone: input.standalone } : {}),
   });
   if (!plan.ok) {
     for (const reason of plan.reasons) io.writeErr(`dev: ${reason}`);
@@ -217,6 +231,29 @@ export async function runDevCommand(
   }
   const autoPorts = parsed.flags.has('auto-ports');
 
+  let platform: DevPlatform | undefined;
+  if (parsed.options.has('platform')) {
+    const raw = lastValue(parsed, 'platform');
+    platform = DEV_PLATFORMS.find((candidate) => candidate === raw);
+    if (platform === undefined) {
+      io.writeErr(
+        `dev: --platform must be one of: ${DEV_PLATFORMS.join(', ')} (got ${JSON.stringify(raw)})`
+      );
+      return EXIT_NO_ANSWER;
+    }
+  }
+
+  // Whether the remote exists and declares `standalone: true` needs the
+  // config, so that gate lives in the plan (same exit 2, nothing spawned).
+  let standalone: string | undefined;
+  if (parsed.options.has('standalone')) {
+    standalone = lastValue(parsed, 'standalone')?.trim();
+    if (standalone === undefined || standalone === '') {
+      io.writeErr('dev: --standalone requires a remote name');
+      return EXIT_NO_ANSWER;
+    }
+  }
+
   const appsFlag = lastValue(parsed, 'apps');
   const appNames =
     appsFlag !== undefined
@@ -241,6 +278,8 @@ export async function runDevCommand(
       workspace,
       appNames,
       hostPort,
+      platform,
+      standalone,
       autoPorts,
       json,
       io,
@@ -265,6 +304,8 @@ export async function runDevCommand(
     autoPorts,
     ...(appNames !== undefined ? { apps: appNames } : {}),
     ...(hostPort !== undefined ? { hostPort } : {}),
+    ...(platform !== undefined ? { platform } : {}),
+    ...(standalone !== undefined ? { standalone } : {}),
   });
   if (!plan.ok) {
     for (const reason of plan.reasons) io.writeErr(`dev: ${reason}`);
@@ -325,12 +366,16 @@ export async function runDevCommand(
       io.writeOut(`[${app}] ${line}`);
     },
     onStatus(app, status, port, pid) {
+      const reassignedFrom = plan.apps.find(
+        (candidate) => candidate.name === app
+      )?.reassignedFrom;
       emit({
         event: 'app',
         app,
         status,
         port,
         ...(pid !== undefined ? { pid } : {}),
+        ...(reassignedFrom !== undefined ? { reassignedFrom } : {}),
       });
       if (!json) io.writeOut(`dev: ${app} → ${status} (port ${port})`);
       void studio?.notify();

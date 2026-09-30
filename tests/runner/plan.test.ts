@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import type { FederationConfig } from '../../src/core/index.js';
-import type { Toolchains } from '../../src/runner/toolchain.js';
+import { toolchainKey, type Toolchains } from '../../src/runner/toolchain.js';
 import {
   buildDevPlan,
   HOST_DEFAULT_PORT,
@@ -162,7 +162,7 @@ describe('default argv (root without command)', () => {
   const HOST_ROOT = '/ws/apps/host';
   const toolchains: Toolchains = {
     [HOST_ROOT]: { ok: true, bundler: 'rspack', cli: `${HOST_ROOT}/node_modules/react-native/cli.js` },
-    '/ws/apps/web': { ok: true, bundler: 'webpack', cli: '/store/rn/cli.js' },
+    [toolchainKey('/ws/apps/web', 'webpack.dev.js')]: { ok: true, bundler: 'webpack', cli: '/store/rn/cli.js' },
   };
   const config: FederationConfig = {
     host: { manifest: './m/host.json', root: './apps/host' },
@@ -222,13 +222,54 @@ describe('default argv (root without command)', () => {
     assert.equal(apps[0]!.cwd, HOST_ROOT);
   });
 
-  it('accepts platform and standalone for built argvs only (T4 wires the flags)', () => {
-    const entries = ok(plan({ platform: 'ios', standalone: 'web' })).entries;
-    const line = (i: number) =>
-      toPlanEventApps(entries)[i]!.command;
+  it('forwards platform to built argvs and --standalone to the one remote', () => {
+    const standaloneConfig: FederationConfig = {
+      ...config,
+      remotes: {
+        ...config.remotes,
+        web: { ...config.remotes.web!, standalone: true },
+      },
+    };
+    const entries = ok(
+      plan({ config: standaloneConfig, platform: 'ios', standalone: 'web' })
+    ).entries;
+    const line = (i: number) => toPlanEventApps(entries)[i]!.command;
     assert.match(line(0), /--platform ios$/);
     assert.match(line(1), /--platform ios --standalone$/);
+    // A command is never rewritten: it sees platform/standalone as env only.
     assert.equal(line(2), 'run legacy');
+    assert.deepEqual(
+      entries.map((e) => [e.platform, e.standalone]),
+      [
+        ['ios', undefined],
+        ['ios', true],
+        ['ios', undefined],
+      ]
+    );
+  });
+
+  it('two apps sharing a root keep their own bundler (no toolchain key collision)', () => {
+    const shared: FederationConfig = {
+      host: { manifest: './m/h.json', root: './apps/shared', config: 'rspack.a.js' },
+      remotes: {
+        r: { manifest: './m/r.json', root: './apps/shared', config: 'webpack.b.js' },
+      },
+    };
+    const result = ok(
+      buildDevPlan({
+        config: shared,
+        configDir: CONFIG_DIR,
+        hostName: 'h',
+        toolchains: {
+          [toolchainKey('/ws/apps/shared', 'rspack.a.js')]: { ok: true, bundler: 'rspack', cli: '/c.js' },
+          [toolchainKey('/ws/apps/shared', 'webpack.b.js')]: { ok: true, bundler: 'webpack', cli: '/c.js' },
+        },
+      })
+    );
+    assert.deepEqual(
+      result.entries.map((e) => e.launch.kind === 'argv' && e.launch.bundler),
+      ['rspack', 'webpack']
+    );
   });
 
   it('an unresolvable toolchain fails the plan naming every such app', () => {
@@ -258,5 +299,75 @@ describe('default argv (root without command)', () => {
       hostName: 'h',
     });
     assert.equal(ok(url).entries[0]!.manifestPath, undefined);
+  });
+});
+
+describe('--platform / --standalone in the plan', () => {
+  const config: FederationConfig = {
+    host: { manifest: './m/host.json', command: 'run host' },
+    remotes: {
+      solo: { manifest: './m/solo.json', standalone: true, command: 'run solo' },
+      plain: { manifest: './m/plain.json', command: 'run plain' },
+      declined: { manifest: './m/d.json', standalone: false, command: 'run d' },
+      rootless: { manifest: './m/r.json', standalone: true },
+    },
+  };
+  const plan = (extra: Partial<Parameters<typeof buildDevPlan>[0]> = {}) =>
+    buildDevPlan({ config, configDir: CONFIG_DIR, hostName: 'h', ...extra });
+
+  it('an unknown --standalone remote fails the plan listing known remotes', () => {
+    const result = plan({ standalone: 'nope' });
+    assert.ok(!result.ok);
+    assert.match(result.reasons[0]!, /unknown remote: nope \(known remotes: solo, plain, declined, rootless\)/);
+  });
+
+  it('refuses a remote without standalone: true (absent or false), naming the file', () => {
+    for (const name of ['plain', 'declined']) {
+      const result = plan({ standalone: name });
+      assert.ok(!result.ok);
+      assert.equal(
+        result.reasons[0],
+        `--standalone refused: remote "${name}" does not declare standalone support. Set "standalone": true for it in /ws/repack-federation.json.`
+      );
+    }
+  });
+
+  it('refuses a standalone remote that cannot run (no command, no root)', () => {
+    const result = plan({ standalone: 'rootless' });
+    assert.ok(!result.ok);
+    assert.match(result.reasons[0]!, /rootless: the remote declares neither/);
+  });
+
+  it('adds the standalone remote to a session that --apps omitted it from', () => {
+    const entries = ok(plan({ apps: ['host'], standalone: 'solo' })).entries;
+    assert.deepEqual(
+      entries.map((e) => [e.key, e.standalone]),
+      [
+        ['host', undefined],
+        ['solo', true],
+      ]
+    );
+  });
+
+  it('omits platform/standalone when not requested', () => {
+    const [host] = ok(plan({ apps: ['host'] })).entries;
+    assert.equal('platform' in host!, false);
+    assert.equal('standalone' in host!, false);
+    assert.equal('platform' in toPlanEventApps([host!])[0]!, false);
+  });
+
+  it('projects platform and standalone (additive) and shows them in the table', () => {
+    const entries = ok(plan({ apps: ['host', 'solo'], platform: 'android', standalone: 'solo' })).entries;
+    const apps = toPlanEventApps(entries);
+    assert.deepEqual(
+      apps.map((a) => [a.platform, a.standalone]),
+      [
+        ['android', undefined],
+        ['android', true],
+      ]
+    );
+    const table = formatPlanTable(entries);
+    assert.match(table, /^app\s+role\s+port\s+platform\s+command\s+cwd$/m);
+    assert.match(table, /^solo\s+remote \(standalone\)\s+auto\s+android\s+run solo/m);
   });
 });

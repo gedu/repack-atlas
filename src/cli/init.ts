@@ -441,7 +441,7 @@ export function initPlanToJson(plan: InitPlan, applied: boolean): string {
         manifest: app.manifest,
         facts: app.facts,
         ...(app.port !== undefined ? { port: app.port } : {}),
-          notes: app.notes,
+        notes: app.notes,
       })),
       warnings: plan.warnings,
       config: plan.config,

@@ -104,8 +104,9 @@ export const DEV_HELP = `repack-atlas dev — supervised workspace runner + read
 
 Usage
   repack-atlas dev [--workspace [dir]] [--apps <list>] [--port <n>]
-                   [--auto-ports] [--studio-port <n>] [--no-studio] [--ci]
-                   [--dry-run] [--json]
+                   [--auto-ports] [--platform <ios|android>]
+                   [--standalone <remote>] [--studio-port <n>] [--no-studio]
+                   [--ci] [--dry-run] [--json]
 
 An app with a "root" starts through the argv Atlas builds, like upstream
 Re.Pack's federation dev runner: node <the app's own react-native CLI>
@@ -119,7 +120,10 @@ when it alone exists; none = rspack). An explicit "command" (host.command or
 remotes.<name>.command) overrides that: it runs verbatim through a shell
 with the workspace config's directory as cwd. Both kinds get ATLAS_APP_NAME,
 ATLAS_APP_PORT, ATLAS_APP_ROOT and ATLAS_APP_MANIFEST (absolute file
-manifests only) in their environment. Apps with neither "command" nor
+manifests only) in their environment, plus ATLAS_APP_PLATFORM with
+--platform and ATLAS_APP_STANDALONE=1 on the --standalone remote: a "command"
+is never rewritten, so env is its only channel (built argvs carry
+--platform / --standalone as flags). Apps with neither "command" nor
 "root" are skipped with a warning, never guessed.
 Readiness = the app's port answers on 127.0.0.1 (declared ports are
 probed free BEFORE spawning; remotes without one get a free port via
@@ -134,6 +138,14 @@ Options
                        port, else a free one.
   --auto-ports         Move a busy declared/default port to a free one
                        (reported on stderr) instead of failing
+  --platform <p>       ios or android (anything else exits 2). Built argvs
+                       start with --platform <p>; "command" apps get
+                       ATLAS_APP_PLATFORM=<p>. Shown in the plan.
+  --standalone <name>  Run that remote standalone. It must be declared in
+                       "remotes" with "standalone": true (else exit 2) and
+                       joins the session even when --apps omits it. Only it
+                       gets --standalone (ATLAS_APP_STANDALONE=1 for a
+                       "command"); the rest of the session is unchanged.
   --studio-port <n>    Studio port (0 = ephemeral; default: first free from
                        8099)
   --no-studio          Do not serve the Studio
@@ -147,7 +159,9 @@ Options
                        before anything spawns (app, role, final port;
                        null = auto in --dry-run, effective command line, cwd),
                        {event:'studio',url} once,
-                       {event:'app',app,status,port} per status transition,
+                       {event:'app',app,status,port} per status transition
+                       (additive: reassignedFrom on an app --auto-ports
+                       moved; platform / standalone:true on plan apps),
                        {event:'exit',code} last. With --dry-run only plan
                        and exit are emitted, identical across runs. Child
                        logs stay [name]-prefixed plain lines: keep only
@@ -161,7 +175,11 @@ Keys (interactive TTY only; degrades to Ctrl-C without one)
 Exit codes
   0  clean shutdown, no app died unexpectedly
   1  an app died unexpectedly during the session, or declared ports are
-     busy (all conflicts reported together; live and --dry-run)
-  2  could not answer (bad argv incl. invalid --port, no/invalid config,
-     unknown --apps name, Studio could not listen)
+     busy or declared by two apps (all conflicts reported together; live
+     and --dry-run)
+  2  could not answer (bad argv incl. invalid --port / --platform /
+     --studio-port, no/invalid config, unknown --apps name, unknown
+     --standalone remote or one without "standalone": true, an app whose
+     react-native CLI cannot be resolved, no free Studio port, Studio could
+     not listen)
 `;

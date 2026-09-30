@@ -30,8 +30,9 @@ import { binPath, ensureBin, repoRoot } from '../cli/run-bin.js';
 
 const WORKSPACE = path.join(repoRoot, 'fixtures', 'workspace');
 // The fixture's host declares no port, so the runner default would be 8081
-// (often held by a real Metro). Tests on it pin the host with `--port`.
-const WORKSPACE_HOST_PORT = 8084;
+// (often held by a real Metro). Tests on it pin the host with `--port`, a
+// free port allocated once per run in `before` (never a fixed number).
+let WORKSPACE_HOST_PORT = 0;
 const CYCLE_WORKSPACE = path.join(repoRoot, 'fixtures', 'fixture-remote-cycle');
 
 /**
@@ -69,6 +70,16 @@ interface DevEvent {
   port?: number;
   pid?: number;
   code?: number;
+}
+
+/** Additive plan-app fields T4 asserts on (the base interface stays loose). */
+interface PlanApp {
+  app: string;
+  port: number | null;
+  command: string;
+  platform?: string;
+  standalone?: boolean;
+  reassignedFrom?: number;
 }
 
 interface Session {
@@ -296,11 +307,14 @@ async function waitPortFree(port: number, timeoutMs = 5_000): Promise<void> {
   }
 }
 
-before(ensureBin);
+before(async () => {
+  ensureBin();
+  WORKSPACE_HOST_PORT = await freePort();
+});
 
 // The stub apps keep the ports the fixture declares (remotes 8082/8083, host via --port), so every test
 // must start from released ports even if the previous one failed midway.
-const STUB_PORTS = [8082, 8083, WORKSPACE_HOST_PORT];
+const stubPorts = (): number[] => [8082, 8083, WORKSPACE_HOST_PORT];
 
 // Close over every session so `afterEach` can always reap children, even if a
 // test fails midway (a leaked stub bundler holds 8082 for the next test).
@@ -356,7 +370,7 @@ async function reap(s: Session): Promise<void> {
 }
 
 beforeEach(async () => {
-  for (const port of STUB_PORTS) await waitPortFree(port);
+  for (const port of stubPorts()) await waitPortFree(port);
 });
 
 afterEach(async () => {
@@ -366,7 +380,7 @@ afterEach(async () => {
   const sessions = openSessions;
   openSessions = [];
   await Promise.all(sessions.map(reap));
-  for (const port of STUB_PORTS) await waitPortFree(port);
+  for (const port of stubPorts()) await waitPortFree(port);
 });
 
 describe('dev runner (spawned, stub apps)', () => {
@@ -645,7 +659,7 @@ describe('dev --dry-run', () => {
     assert.deepEqual(
       events[0]!.apps!.map((a) => [a.app, a.role, a.port]),
       [
-        ['host', 'host', 8084],
+        ['host', 'host', WORKSPACE_HOST_PORT],
         ['mini_auth', 'remote', 8082],
         ['mini_store', 'remote', 8083],
       ]
@@ -1088,7 +1102,7 @@ describe('dev default argv (root without command)', () => {
   it('dry-run --json with a built argv is byte-identical across runs', async () => {
     const dir = workspaceWith(
       {
-        host: { manifest: './h.json', root: './apps/host', port: 59_991 },
+        host: { manifest: './h.json', root: './apps/host', port: await freePort() },
         remotes: { r: { manifest: './r.json', root: './apps/r' } },
       },
       (d) => {
@@ -1112,7 +1126,7 @@ describe('dev default argv (root without command)', () => {
       (d) => makeApp(d, 'apps/zeta', { rn: false })
     );
     for (const args of [['--dry-run'], ['--ci', '--json', '--no-studio']]) {
-      const result = await runToCompletion([...args, '--port', '59992'], dir);
+      const result = await runToCompletion([...args, '--port', String(await freePort())], dir);
       assert.equal(result.code, 2, result.stderr);
       assert.match(result.stderr, /dev: zeta: cannot resolve the "react-native" package/);
       assert.ok(result.stderr.includes(path.join(dir, 'apps', 'zeta')), result.stderr);
@@ -1131,7 +1145,7 @@ describe('dev default argv (root without command)', () => {
         makeApp(d, 'apps/other', { rn: false });
       }
     );
-    const result = await runToCompletion(['--dry-run', '--port', '59993'], dir);
+    const result = await runToCompletion(['--dry-run', '--port', String(await freePort())], dir);
     assert.equal(result.code, 2, result.stderr);
     assert.match(result.stderr, /dev: other: cannot resolve/);
     assert.doesNotMatch(result.stderr, /dev: host:/);
@@ -1162,9 +1176,233 @@ describe('dev default argv (root without command)', () => {
         { host: { manifest: './h.json', root: './apps/host' }, remotes: {} },
         (d) => makeApp(d, 'apps/host', { configFiles })
       );
-      const result = await runToCompletion(['--dry-run', '--json', '--port', '59994'], dir);
+      const result = await runToCompletion(['--dry-run', '--json', '--port', String(await freePort())], dir);
       assert.equal(result.code, 0, result.stderr);
       assert.match(parseEvents(result.stdout)[0]!.apps![0]!.command, /--bundler rspack /);
+    }
+  });
+});
+
+// --- --platform / --standalone (ODD dev-wizard-runner T4) --------------------
+
+describe('dev --platform and --standalone', () => {
+  // Prints what a `command` app can see, then listens on its runner port.
+  const ENV_STUB = `console.log('env-stub ' + JSON.stringify({
+    platform: process.env.ATLAS_APP_PLATFORM ?? null,
+    standalone: process.env.ATLAS_APP_STANDALONE ?? null,
+  }));
+  require('net').createServer().listen(Number(process.env.ATLAS_APP_PORT), '127.0.0.1');
+  process.on('SIGINT', () => process.exit(0));
+  process.on('SIGTERM', () => process.exit(0));
+  `;
+
+  function workspaceWith(config: object, build: (dir: string) => void): string {
+    const dir = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'atlas-plat-')));
+    cleanupDirs.push(dir);
+    writeFileSync(path.join(dir, 'env-stub.cjs'), ENV_STUB);
+    build(dir);
+    writeFileSync(path.join(dir, 'repack-federation.json'), JSON.stringify(config));
+    return dir;
+  }
+
+  const rnArgs = (s: Session, app: string): string[] => {
+    const line = s.lines.find((l) => l.startsWith(`[${app}] rn-stub `))!;
+    assert.ok(line, `no rn-stub line for ${app}: ${s.lines.join('\n')}`);
+    return (JSON.parse(line.slice(`[${app}] rn-stub `.length)) as { args: string[] }).args;
+  };
+  const envSeen = (s: Session, app: string): { platform: string | null; standalone: string | null } => {
+    const line = s.lines.find((l) => l.startsWith(`[${app}] env-stub `))!;
+    assert.ok(line, `no env-stub line for ${app}: ${s.lines.join('\n')}`);
+    return JSON.parse(line.slice(`[${app}] env-stub `.length));
+  };
+
+  const mixed = () =>
+    workspaceWith(
+      {
+        host: { manifest: './h.json', root: './apps/host' },
+        remotes: {
+          solo: { manifest: './s.json', root: './apps/solo', standalone: true },
+          cmd: { manifest: './c.json', command: 'node env-stub.cjs', standalone: true },
+          other: { manifest: './o.json', command: 'node env-stub.cjs' },
+        },
+      },
+      (d) => {
+        makeApp(d, 'apps/host');
+        makeApp(d, 'apps/solo');
+      }
+    );
+
+  for (const bad of ['web', 'IOS']) {
+    it(`--platform ${JSON.stringify(bad)} exits 2 and spawns nothing`, async () => {
+      const dir = mixed();
+      const result = await runToCompletion(
+        ['--ci', '--json', '--no-studio', '--platform', bad, '--port', String(await freePort())],
+        dir
+      );
+      assert.equal(result.code, 2, result.stderr);
+      assert.match(result.stderr, /--platform must be one of: ios, android/);
+      assert.doesNotMatch(result.stdout, /"event":"(app|plan)"/);
+    });
+  }
+
+  it('--platform ios reaches every built argv and ATLAS_APP_PLATFORM every command app', async () => {
+    const dir = mixed();
+    const s = await session(
+      ['--ci', '--json', '--no-studio', '--platform', 'ios', '--port', String(await freePort())],
+      dir
+    );
+    for (const app of ['host', 'solo', 'cmd', 'other']) await s.waitForStatus(app, 'ready');
+    const tail = ['--no-interactive', '--platform', 'ios'];
+    assert.deepEqual(rnArgs(s, 'host').slice(-3), tail);
+    assert.deepEqual(rnArgs(s, 'solo').slice(-3), tail);
+    assert.equal(envSeen(s, 'cmd').platform, 'ios');
+    assert.equal(envSeen(s, 'other').platform, 'ios');
+    const plan = s.events.find((e) => e.event === 'plan')!.apps as unknown as PlanApp[];
+    assert.ok(plan.every((a) => a.platform === 'ios'));
+    // The command line itself is never rewritten.
+    assert.equal(plan.find((a) => a.app === 'cmd')!.command, 'node env-stub.cjs');
+    s.child.kill('SIGINT');
+    assert.equal((await s.exited).code, 0);
+  });
+
+  it('without --platform nothing is forwarded and the env var stays unset', async () => {
+    const dir = mixed();
+    const s = await session(
+      ['--ci', '--json', '--no-studio', '--apps', 'host,other', '--port', String(await freePort())],
+      dir
+    );
+    await s.waitForStatus('other', 'ready');
+    await s.waitForStatus('host', 'ready');
+    assert.ok(!rnArgs(s, 'host').includes('--platform'));
+    assert.deepEqual(envSeen(s, 'other'), { platform: null, standalone: null });
+    s.child.kill('SIGINT');
+    assert.equal((await s.exited).code, 0);
+  });
+
+  it('--standalone adds the remote to an --apps session; only it gets the flag / env', async () => {
+    const dir = mixed();
+    const s = await session(
+      ['--ci', '--json', '--no-studio', '--apps', 'host', '--standalone', 'solo', '--port', String(await freePort())],
+      dir
+    );
+    await s.waitForStatus('host', 'ready');
+    await s.waitForStatus('solo', 'ready');
+    assert.ok(!rnArgs(s, 'host').includes('--standalone'));
+    assert.equal(rnArgs(s, 'solo').at(-1), '--standalone');
+    const plan = s.events.find((e) => e.event === 'plan')!.apps as unknown as PlanApp[];
+    assert.deepEqual(
+      plan.map((a) => [a.app, a.standalone]),
+      [
+        ['host', undefined],
+        ['solo', true],
+      ]
+    );
+    s.child.kill('SIGINT');
+    assert.equal((await s.exited).code, 0);
+  });
+
+  it('a standalone `command` remote gets ATLAS_APP_STANDALONE=1 and the others do not', async () => {
+    const dir = mixed();
+    const s = await session(
+      ['--ci', '--json', '--no-studio', '--apps', 'cmd,other', '--standalone', 'cmd', '--port', String(await freePort())],
+      dir
+    );
+    await s.waitForStatus('cmd', 'ready');
+    await s.waitForStatus('other', 'ready');
+    assert.equal(envSeen(s, 'cmd').standalone, '1');
+    assert.equal(envSeen(s, 'other').standalone, null);
+    s.child.kill('SIGINT');
+    assert.equal((await s.exited).code, 0);
+  });
+
+  it('--standalone gate: unknown remote and remote without standalone: true exit 2, nothing spawned', async () => {
+    const dir = mixed();
+    for (const [remote, message] of [
+      ['ghost', /--standalone names an unknown remote: ghost/],
+      ['other', /--standalone refused: remote "other" does not declare standalone support\. Set "standalone": true for it in .*repack-federation\.json/],
+      ['host', /unknown remote: host/],
+    ] as const) {
+      for (const args of [['--dry-run'], ['--ci', '--json', '--no-studio']]) {
+        const result = await runToCompletion(
+          [...args, '--standalone', remote, '--port', String(await freePort())],
+          dir
+        );
+        assert.equal(result.code, 2, result.stderr);
+        assert.match(result.stderr, message);
+        assert.doesNotMatch(result.stdout, /"event":"app"/);
+        assert.ok(!result.stdout.includes('rn-stub'), 'nothing spawned');
+      }
+    }
+  });
+
+  it('--standalone without a value exits 2', async () => {
+    const result = await runToCompletion(['--dry-run', '--standalone'], mixed());
+    assert.equal(result.code, 2);
+  });
+
+  it('dry-run shows platform and standalone in the table and the additive plan fields', async () => {
+    const dir = mixed();
+    const port = String(await freePort());
+    const table = await runToCompletion(
+      ['--dry-run', '--platform', 'android', '--standalone', 'cmd', '--port', port],
+      dir
+    );
+    assert.equal(table.code, 0, table.stderr);
+    assert.match(table.stdout, /^app\s+role\s+port\s+platform\s+command\s+cwd$/m);
+    assert.match(table.stdout, /^cmd\s+remote \(standalone\)\s+auto\s+android\s+node env-stub\.cjs/m);
+    const json = await runToCompletion(
+      ['--dry-run', '--json', '--platform', 'android', '--standalone', 'solo', '--port', port],
+      dir
+    );
+    const apps = parseEvents(json.stdout)[0]!.apps as unknown as PlanApp[];
+    assert.equal(apps.find((a) => a.app === 'solo')!.standalone, true);
+    assert.equal(apps.find((a) => a.app === 'host')!.standalone, undefined);
+    assert.match(apps.find((a) => a.app === 'solo')!.command, /--platform android --standalone$/);
+  });
+
+  it('two apps declaring the same port are a conflict: exit 1, nothing spawned (live and dry-run)', async () => {
+    const shared = await freePort();
+    const dir = workspaceWith(
+      {
+        host: { manifest: './h.json', command: 'node env-stub.cjs', port: await freePort() },
+        remotes: {
+          a: { manifest: './a.json', command: 'node env-stub.cjs', port: shared },
+          b: { manifest: './b.json', command: 'node env-stub.cjs', port: shared },
+        },
+      },
+      () => {}
+    );
+    for (const args of [['--dry-run'], ['--ci', '--json', '--no-studio']]) {
+      const result = await runToCompletion(args, dir);
+      assert.equal(result.code, 1, result.stderr);
+      assert.match(result.stderr, new RegExp(`port ${shared} is declared by both a and b`));
+      assert.doesNotMatch(result.stdout, /"event":"app"/);
+      assert.ok(!result.stdout.includes('env-stub {'), 'nothing spawned');
+    }
+  });
+
+  it('--auto-ports makes the reassignment visible in --json (plan and app events)', async () => {
+    const held = await occupyPorts(1);
+    const dir = workspaceWith(
+      {
+        host: { manifest: './h.json', command: 'node env-stub.cjs', port: held.ports[0] },
+        remotes: {},
+      },
+      () => {}
+    );
+    try {
+      const s = await session(['--ci', '--json', '--no-studio', '--auto-ports'], dir);
+      const ready = await s.waitForStatus('host', 'ready');
+      const plan = s.events.find((e) => e.event === 'plan')!.apps as unknown as PlanApp[];
+      assert.equal(plan[0]!.reassignedFrom, held.ports[0]);
+      assert.equal(
+        (ready as DevEvent & { reassignedFrom?: number }).reassignedFrom,
+        held.ports[0]
+      );
+      s.child.kill('SIGINT');
+      assert.equal((await s.exited).code, 0);
+    } finally {
+      await held.close();
     }
   });
 });

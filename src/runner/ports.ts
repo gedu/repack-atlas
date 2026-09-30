@@ -4,6 +4,9 @@
 // `ProcessRunner` into them. Policy (upstream #1467 `portPlanner`): a busy
 // declared port is a conflict; with `autoPorts` it is reassigned to a free
 // port instead; without it ALL conflicts are collected and reported together.
+// Atlas goes one step past upstream here: two apps declaring the SAME port are
+// a conflict too (upstream probes each independently, so both look free and
+// the second bind fails at runtime).
 
 import type { DevPlanEntry } from './plan.js';
 
@@ -19,7 +22,7 @@ export interface PortAssignment {
   port: number | null;
   /** `reassigned`: the declared/default port was busy and `--auto-ports` moved it. */
   source: 'declared' | 'auto' | 'reassigned';
-  /** The busy port a `reassigned` app gave up. */
+  /** The busy (or already-claimed) port a `reassigned` app gave up. */
   requested?: number;
 }
 
@@ -54,6 +57,9 @@ export async function allocatePorts(
     )
   );
 
+  // Declared ports already handed to an earlier app of this plan.
+  const claimed = new Map<number, string>();
+
   /** A free port not promised to another app, or `null` (never throws). */
   async function nextFree(): Promise<number | null> {
     try {
@@ -84,7 +90,12 @@ export async function allocatePorts(
       }
       continue;
     }
-    if (!(await probe.isPortBusy(entry.declaredPort))) {
+    const claimedBy = claimed.get(entry.declaredPort);
+    if (
+      claimedBy === undefined &&
+      !(await probe.isPortBusy(entry.declaredPort))
+    ) {
+      claimed.set(entry.declaredPort, entry.key);
       assignments.push({
         key: entry.key,
         port: entry.declaredPort,
@@ -104,6 +115,10 @@ export async function allocatePorts(
           requested: entry.declaredPort,
         });
       }
+    } else if (claimedBy !== undefined) {
+      conflicts.push(
+        `port ${entry.declaredPort} is declared by both ${claimedBy} and ${entry.key}`
+      );
     } else {
       conflicts.push(
         `port ${entry.declaredPort} declared by ${entry.key} is already busy`
@@ -124,7 +139,14 @@ export function applyAssignments(
   const byKey = new Map(assignments.map((a) => [a.key, a]));
   return entries.map((entry) => {
     const assignment = byKey.get(entry.key);
-    return assignment ? { ...entry, declaredPort: assignment.port } : entry;
+    if (!assignment) return entry;
+    return {
+      ...entry,
+      declaredPort: assignment.port,
+      ...(assignment.requested !== undefined
+        ? { reassignedFrom: assignment.requested }
+        : {}),
+    };
   });
 }
 

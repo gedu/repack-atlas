@@ -158,3 +158,62 @@ describe('allocatePorts', () => {
     assert.match(auto.conflicts[0]!, /no free port available for/);
   });
 });
+
+describe('duplicate declared ports', () => {
+  const dup = [entry('host', 8081), entry('a', 8082), entry('b', 8082)];
+
+  it('two apps declaring the same free port are a conflict naming both', async () => {
+    const { fake } = probe([]);
+    const result = await allocatePorts(dup, fake, {
+      autoPorts: false,
+      resolveAuto: true,
+    });
+    assert.deepEqual(result, {
+      ok: false,
+      conflicts: ['port 8082 is declared by both a and b'],
+    });
+  });
+
+  it('is reported together with busy-port conflicts', async () => {
+    const { fake } = probe([8081]);
+    const result = await allocatePorts(dup, fake, {
+      autoPorts: false,
+      resolveAuto: false,
+    });
+    assert.deepEqual(result, {
+      ok: false,
+      conflicts: [
+        'port 8081 declared by host is already busy',
+        'port 8082 is declared by both a and b',
+      ],
+    });
+  });
+
+  it('--auto-ports keeps the first declarer and moves the later one', async () => {
+    const { fake } = probe([]);
+    const result = await allocatePorts(dup, fake, {
+      autoPorts: true,
+      resolveAuto: true,
+    });
+    assert.deepEqual(result, {
+      ok: true,
+      assignments: [
+        { key: 'host', port: 8081, source: 'declared' },
+        { key: 'a', port: 8082, source: 'declared' },
+        { key: 'b', port: 50_001, source: 'reassigned', requested: 8082 },
+      ],
+    });
+  });
+
+  it('applyAssignments records reassignedFrom for --json', () => {
+    const applied = applyAssignments(dup, [
+      { key: 'host', port: 8081, source: 'declared' },
+      { key: 'a', port: 8082, source: 'declared' },
+      { key: 'b', port: 50_001, source: 'reassigned', requested: 8082 },
+    ]);
+    assert.deepEqual(
+      applied.map((e) => e.reassignedFrom),
+      [undefined, undefined, 8082]
+    );
+  });
+});
