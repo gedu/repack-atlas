@@ -45,12 +45,12 @@ test('rejects fixup! and squash! commits', () => {
 });
 
 test('rejects AI attribution trailers in any case', () => {
-  const claude = 'feat: add thing\n\nbody\n\nCo-Authored-By: Claude <noreply@anthropic.com>';
-  assert.deepEqual(rules(validateMessage(claude)), ['ai-attribution']);
+  const claudeTrailer = 'feat: add thing\n\nbody\n\nCo-Authored-By: Claude <noreply@anthropic.com>';
+  assert.deepEqual(rules(validateMessage(claudeTrailer)), ['ai-attribution']);
   const lower = 'fix: a bug\n\nco-authored-by: GitHub Copilot <copilot@github.com>';
   assert.deepEqual(rules(validateMessage(lower)), ['ai-attribution']);
-  const signed = 'fix: a bug\n\nAssisted-by: ChatGPT gpt-4o';
-  assert.deepEqual(rules(validateMessage(signed)), ['ai-attribution']);
+  const assisted = 'fix: a bug\n\nAssisted-by: ChatGPT gpt-4o';
+  assert.deepEqual(rules(validateMessage(assisted)), ['ai-attribution']);
 });
 
 test('allows human Co-authored-by trailers', () => {
@@ -59,9 +59,9 @@ test('allows human Co-authored-by trailers', () => {
 });
 
 test('rejects "Generated with" banners', () => {
-  const claude =
+  const banner =
     'feat: add thing\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)';
-  assert.deepEqual(rules(validateMessage(claude)), ['ai-attribution']);
+  assert.deepEqual(rules(validateMessage(banner)), ['ai-attribution']);
   const robot = 'feat: add thing\n\n🤖 Generated with something';
   assert.deepEqual(rules(validateMessage(robot)), ['ai-attribution']);
   const plain = 'feat: add thing\n\nGenerated with Cursor';
@@ -85,7 +85,7 @@ test('rejects AI author and committer identities', () => {
   assert.deepEqual(validateIdentity('author', 'Edu', 'edu@example.com'), []);
 });
 
-test('allows the GitHub web-merge committer only as committer', () => {
+test('allows the GitHub web-merge committer', () => {
   assert.deepEqual(validateIdentity('committer', 'GitHub', 'noreply@github.com'), []);
 });
 
@@ -100,12 +100,45 @@ test('validateCommit combines message and identity rules', () => {
   assert.deepEqual(validateCommit({ ...human, message: 'feat: fine' }), []);
 });
 
-test('skips merge commits entirely', () => {
-  const merge = validateCommit({
+test('does not flag humans whose name contains a tool word', () => {
+  assert.deepEqual(validateIdentity('author', 'Claude Martin', 'claude@example.com'), []);
+  assert.deepEqual(validateIdentity('author', 'Codex Rivera', 'cr@example.com'), []);
+  assert.deepEqual(validateIdentity('author', 'Jules Verne', 'jules@example.com'), []);
+});
+
+test('rejects AI identities by exact name, model name or bot email', () => {
+  assert.deepEqual(rules(validateIdentity('author', ' claude ', 'x@example.com')), ['ai-author']);
+  assert.deepEqual(
+    rules(validateIdentity('author', 'Claude Opus 5.5', 'x@example.com')),
+    ['ai-author'],
+  );
+  assert.deepEqual(
+    rules(validateIdentity('committer', 'Bot', 'devin-ai-integration[bot]@users.noreply.github.com')),
+    ['ai-committer'],
+  );
+});
+
+test('rejects AI Co-authored-by trailers by email or model name only', () => {
+  const opus = 'feat: x\n\nCo-authored-by: Claude Opus 5.5 <noreply@anthropic.com>';
+  assert.deepEqual(rules(validateMessage(opus)), ['ai-attribution']);
+  const human = 'feat: x\n\nCo-authored-by: Codex Rivera <cr@example.com>';
+  assert.deepEqual(validateMessage(human), []);
+});
+
+test('merge commits skip the header rule but not attribution or identity', () => {
+  const header = 'Merge pull request #3 from x/y';
+  assert.deepEqual(validateCommit({ ...human, parents: ['a', 'b'], message: header }), []);
+  const trailer = validateCommit({
+    ...human,
+    parents: ['a', 'b'],
+    message: `${header}\n\nCo-authored-by: Claude <noreply@anthropic.com>`,
+  });
+  assert.deepEqual(rules(trailer), ['ai-attribution']);
+  const author = validateCommit({
     ...human,
     parents: ['a', 'b'],
     authorName: 'Claude',
-    message: "Merge branch 'main' into feature",
+    message: header,
   });
-  assert.deepEqual(merge, []);
+  assert.deepEqual(rules(author), ['ai-author']);
 });

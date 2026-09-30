@@ -1,8 +1,8 @@
 name: CI
 
 # Light CI: one fast Linux job on every PR and every push to main. The heavy
-# matrix (macOS + Linux, Node 22/24) and Studio e2e live in ci-full.yml and only run when
-# a maintainer adds the `ready-to-merge` label.
+# matrix (macOS + Linux, Node 22/24) and Studio e2e live in ci-full.yml and
+# only run when a maintainer adds the `ready-to-merge` label.
 
 on:
   push:

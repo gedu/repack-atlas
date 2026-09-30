@@ -71,8 +71,9 @@ CI (`.github/workflows/ci.yml`) is light: lint, typecheck, build, test,
 `agent:check` and `check:vendored` in one Linux / Node 22 job per PR. The full
 matrix (macOS + Linux × Node 22/24) and the Playwright studio-e2e job live in
 `ci-full.yml` and run only when a maintainer adds the `ready-to-merge` label
-(or via `workflow_dispatch`). PR gates (title, 400-line budget, linked
-issue) live in `pr-checks.yml`. Reproduce every job locally with the commands
+(or via `workflow_dispatch`). The PR gates live in `pr-checks.yml`: PR title,
+commit messages (`pnpm check:commits`), the 400-line budget (excluding
+`pnpm-lock.yaml`) and a linked issue. Reproduce every job locally with the commands
 above; CONTRIBUTING.md maps each CI step to its command.
 
 ## Layout
