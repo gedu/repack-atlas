@@ -74,8 +74,10 @@ Mode: off (no project/session TDD config). Runner: `pnpm test`
 
 ## Delivery
 
-Strategy: ask-on-risk. Forecast well above 400 authored lines; slice into
-chained PRs per the `chained-pr` skill before the first PR.
+Strategy: ask-on-risk → chain strategy `feature-branch-chain` (owner,
+2026-09-30). Forecast well above 400 authored lines. Base branch
+`feat/dev-wizard-runner`; one slice branch + PR per task into it; the feature
+branch merges to main once at the end.
 
 ## Progress
 
