@@ -311,6 +311,77 @@ describe('init: workspace-glob discovery (spawned bin)', () => {
   });
 });
 
+describe('init: bounded discovery (spawned bin)', () => {
+  async function ws(files: Record<string, string>): Promise<string> {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'atlas-init-bound-'));
+    tmpRoots.push(root);
+    for (const [rel, content] of Object.entries(files)) {
+      const file = path.join(root, rel);
+      await mkdir(path.dirname(file), { recursive: true });
+      await writeFile(file, content, 'utf-8');
+    }
+    return root;
+  }
+  const run = async (workspace: string): Promise<InitJson> => {
+    const result = await runBin('init', '--workspace', workspace, '--dry-run', '--json');
+    assert.equal(result.code, 0, result.stderr);
+    return parseJson<InitJson>(result.stdout);
+  };
+
+  it('** does not descend below an app or into native/build dirs', async () => {
+    const workspace = await ws({
+      'pnpm-workspace.yaml': 'packages:\n  - "packages/**"\n',
+      'packages/host/rspack.config.js': '',
+      'packages/host/ios/rspack.config.js': '',
+      'packages/host/nested/rspack.config.js': '',
+      'packages/group/build/rspack.config.js': '',
+      'packages/group/dist/rspack.config.js': '',
+      'packages/group/remote/rspack.config.js': '',
+    });
+    const payload = await run(workspace);
+    assert.deepEqual(
+      payload.apps.map((app) => app.dir),
+      ['packages/group/remote', 'packages/host']
+    );
+  });
+
+  it('negation-only globs fall back to apps/*', async () => {
+    const workspace = await ws({
+      'pnpm-workspace.yaml': 'packages:\n  - "!apps/skip"\n',
+      'apps/one/rspack.config.js': '',
+    });
+    const payload = await run(workspace);
+    assert.deepEqual(payload.apps.map((app) => app.dir), ['apps/one']);
+    const empty = await ws({ 'pnpm-workspace.yaml': 'packages:\n  - "!x"\n' });
+    const result = await runBin('init', '--workspace', empty);
+    assert.equal(result.code, 2);
+    assert.match(result.stderr, /no apps discovered under the directory /);
+  });
+
+  it('apps sharing a basename get distinct names and manifests', async () => {
+    const workspace = await ws({
+      'pnpm-workspace.yaml': 'packages:\n  - "packages/*/*"\n',
+      'packages/a/app/rspack.config.js': '',
+      'packages/b/app/rspack.config.js': '',
+      'packages/b/other/rspack.config.js': '',
+    });
+    const payload = await run(workspace);
+    const names = payload.apps.map((app) => app.name);
+    assert.deepEqual(names, ['packages-a-app', 'packages-b-app', 'other']);
+    assert.equal(new Set(names).size, names.length);
+    const config = payload.config as {
+      host: { manifest: string };
+      remotes: Record<string, { manifest: string }>;
+    };
+    const manifests = [
+      config.host.manifest,
+      ...Object.values(config.remotes).map((r) => r.manifest),
+    ];
+    assert.equal(new Set(manifests).size, 3);
+    assert.deepEqual(validateFederationConfig(payload.config), []);
+  });
+});
+
 describe('init: derived commands and port validation', () => {
   const baseFiles = {
     [`${WS}/pnpm-workspace.yaml`]: 'packages:\n  - apps/*\n',
