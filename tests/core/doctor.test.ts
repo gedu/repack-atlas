@@ -3,7 +3,7 @@
 // jest to node:test. Fixtures are verbatim copies under
 // tests/fixtures/core/ (see its README). Assertions and expectations are
 // unchanged; only the harness and import paths differ. Atlas additions:
-// REMOTE_CYCLE integration and corrupt-manifest (exit 2) tests at the bottom.
+// REMOTE_CYCLE integration and unreadable-manifest tests at the bottom.
 
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -374,13 +374,15 @@ describe('runDoctor REMOTE_CYCLE integration and exit-code 2 (Atlas additions)',
     assert.equal(doctorExitCode(report), 0);
   });
 
-  it('marks the report unable to answer for a corrupt remote manifest (exit 2)', () => {
+  it('names an unreadable remote manifest and keeps answering for the rest (exit 1)', () => {
     const report = runDoctor({
       host,
       remotes: [
         {
           name: 'payments',
           corrupt: true,
+          ref: 'manifests/payments.json',
+          reason: 'Manifest at manifests/payments.json is not valid JSON.',
         },
         { name: 'store', manifest: remoteConflicting },
       ],
@@ -388,7 +390,51 @@ describe('runDoctor REMOTE_CYCLE integration and exit-code 2 (Atlas additions)',
 
     // Findings from the readable remote are still reported (best effort)…
     assert.ok(codes(report).includes('SHARED_VERSION_DRIFT'));
-    // …but the answer is flagged incomplete: exit 2, not 1.
+    // …and the unreadable one is named with its ref and reason.
+    const unreadable = report.findings.filter(
+      (finding) => finding.code === 'MANIFEST_UNREADABLE'
+    );
+    assert.equal(unreadable.length, 1);
+    assert.equal(unreadable[0]!.severity, 'error');
+    assert.ok(unreadable[0]!.message.includes('"payments"'));
+    assert.ok(unreadable[0]!.message.includes('manifests/payments.json'));
+    assert.ok(unreadable[0]!.message.includes('not valid JSON'));
+    assert.equal(report.unableToAnswer, undefined);
+    assert.equal(doctorExitCode(report), 1);
+  });
+
+  it('is unable to answer (exit 2) when no remote manifest is readable', () => {
+    const report = runDoctor({
+      host,
+      remotes: [
+        { name: 'payments', corrupt: true, reason: 'bad' },
+        { name: 'store', corrupt: true, reason: 'bad' },
+      ],
+    });
+
+    assert.equal(
+      codes(report).filter((code) => code === 'MANIFEST_UNREADABLE').length,
+      2
+    );
     assert.equal(doctorExitCode(report), 2);
+  });
+
+  it('carries MANIFEST_UNREADABLE in the --json report with exitCode 1', () => {
+    const report = runDoctor({
+      host,
+      remotes: [
+        { name: 'payments', corrupt: true, reason: 'not valid JSON' },
+        { name: 'store', manifest: remoteClean },
+      ],
+    });
+    const payload = JSON.parse(doctorReportToJson(report)) as {
+      exitCode: number;
+      findings: { code: string; message: string }[];
+    };
+    assert.equal(payload.exitCode, 1);
+    const finding = payload.findings.find(
+      (entry) => entry.code === 'MANIFEST_UNREADABLE'
+    );
+    assert.ok(finding?.message.includes('"payments"'));
   });
 });

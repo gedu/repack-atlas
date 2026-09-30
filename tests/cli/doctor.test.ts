@@ -80,6 +80,14 @@ describe('doctor workspace mode (spawned bin)', () => {
           `${expectation.dir}: ${finding.code} must carry a message`
         );
       }
+      for (const expected of expectation.findings) {
+        if (!expected.app) continue;
+        const finding = payload.findings.find((f) => f.code === expected.code);
+        assert.ok(
+          finding?.message.includes(`"${expected.app}"`),
+          `${expectation.dir}: ${expected.code} must name "${expected.app}" (got ${finding?.message})`
+        );
+      }
     });
 
     it(`${expectation.dir}: human output groups findings`, async () => {

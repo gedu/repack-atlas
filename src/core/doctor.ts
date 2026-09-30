@@ -43,10 +43,16 @@ export interface DoctorRemoteInput {
   missing?: boolean;
   /**
    * True when a manifest exists but could not be read or parsed. Honest
-   * asymmetry (AGENTS.md rule 6): this is not `missing` — it makes the whole
-   * report "unable to answer" (exit 2) instead of producing a finding.
+   * asymmetry (AGENTS.md rule 6): this is not `missing`. It becomes a named
+   * `MANIFEST_UNREADABLE` error finding (exit 1) while another remote can
+   * still be checked; when no remote is comparable the report is "unable to
+   * answer" (exit 2).
    */
   corrupt?: boolean;
+  /** Manifest reference (path, directory or URL) named in the finding. */
+  ref?: string;
+  /** Why the manifest could not be used (parse/read reason). */
+  reason?: string;
 }
 
 export interface DoctorInput {
@@ -226,11 +232,32 @@ function checkRemoteManifests(
   }
 }
 
+function checkUnreadableManifests(
+  input: DoctorInput,
+  findings: DoctorFinding[]
+): void {
+  for (const remote of input.remotes) {
+    if (!remote.corrupt) continue;
+    // The adapter reason already names the resolved path; fall back to the
+    // configured ref only when there is no reason to read.
+    const where = remote.ref && !remote.reason ? ` (${remote.ref})` : '';
+    const why = remote.reason ? `: ${remote.reason}` : '.';
+    findings.push({
+      severity: 'error',
+      code: 'MANIFEST_UNREADABLE',
+      message: `Remote "${remote.name}" has a manifest${where} that exists but could not be read${why} It was not checked; fix or regenerate that manifest.`,
+      confidence: 'static',
+    });
+  }
+}
+
 /**
  * Compare a host manifest against a set of remote manifests and report every
  * shared-dependency, native-module and remote-cycle inconsistency found.
- * A corrupt remote manifest (or a caller-side host failure) sets
- * `unableToAnswer` on the report: `doctorExitCode` maps that to 2, keeping
+ * An unreadable remote manifest is a named `MANIFEST_UNREADABLE` error (exit
+ * 1) and the other remotes are still checked. Only when remotes exist and
+ * none of them can be compared (all unreadable) does the report set
+ * `unableToAnswer` (exit 2); a caller-side host failure does too, keeping
  * "no answer" distinguishable from "bad answer".
  */
 export function runDoctor(input: DoctorInput): DoctorReport {
@@ -256,9 +283,12 @@ export function runDoctor(input: DoctorInput): DoctorReport {
   findings.push(...cycles);
 
   checkRemoteManifests(input, findings);
+  checkUnreadableManifests(input, findings);
 
-  const corrupt = input.remotes.some((remote) => remote.corrupt);
-  return corrupt ? { findings, unableToAnswer: true } : { findings };
+  const nothingComparable =
+    input.remotes.length > 0 &&
+    input.remotes.every((remote) => remote.corrupt);
+  return nothingComparable ? { findings, unableToAnswer: true } : { findings };
 }
 
 /**

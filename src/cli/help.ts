@@ -21,7 +21,8 @@ Options
 Exit codes
   0  clean (warnings allowed)
   1  ran and found errors ("bad answer")
-  2  could not answer (bad input, missing/corrupt host manifest)
+  2  could not answer (bad input, missing/corrupt host manifest, no readable
+     remote manifest)
 `;
 
 export const DOCTOR_HELP = `repack-atlas doctor — compare host and remote federation manifests
@@ -49,9 +50,10 @@ Options
 Exit codes
   0  clean (warnings allowed by default)
   1  ran and found errors (or warnings with --fail-on-warnings); a remote
-     manifest that does not exist is a finding, not a failure to run
+     manifest that does not exist (MISSING_REMOTE_MANIFEST) or exists but
+     cannot be read (MANIFEST_UNREADABLE) is a finding, not a failure to run
   2  could not answer (unknown option/mode, no config found, host manifest
-     missing or corrupt, a remote manifest that exists but cannot be read)
+     missing or corrupt, every remote manifest unreadable)
 `;
 
 export const INSPECT_HELP = `repack-atlas inspect — pretty-print a federation manifest
