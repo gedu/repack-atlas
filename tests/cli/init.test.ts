@@ -249,6 +249,68 @@ const WS = '/ws';
 const pkg = (name: string, scripts?: Record<string, string>): string =>
   JSON.stringify({ name, ...(scripts ? { scripts } : {}) });
 
+describe('init: workspace-glob discovery (spawned bin)', () => {
+  async function discoveryCopy(): Promise<string> {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'atlas-init-disc-'));
+    tmpRoots.push(root);
+    const workspace = path.join(root, 'workspace');
+    await copyTree(path.join(fixturesDir, 'discovery-packages'), workspace);
+    return workspace;
+  }
+
+  async function discover(workspace: string): Promise<InitJson> {
+    const result = await runBin('init', '--workspace', workspace, '--dry-run', '--json');
+    assert.equal(result.code, 0, result.stderr);
+    return parseJson<InitJson>(result.stdout);
+  }
+
+  it('discovers apps under packages/* and skips non-app packages', async () => {
+    const payload = await discover(await discoveryCopy());
+    assert.deepEqual(
+      payload.apps.map((app) => app.dir),
+      ['packages/feature-auth', 'packages/host']
+    );
+    assert.equal(payload.apps.find((app) => app.name === 'host')?.role, 'host');
+    assert.deepEqual(validateFederationConfig(payload.config), []);
+  });
+
+  it('reads package.json workspaces (array) and honors negation', async () => {
+    const workspace = await discoveryCopy();
+    await rm(path.join(workspace, 'pnpm-workspace.yaml'));
+    await writeFile(
+      path.join(workspace, 'package.json'),
+      JSON.stringify({ private: true, workspaces: ['packages/*', '!packages/host'] }),
+      'utf-8'
+    );
+    const payload = await discover(workspace);
+    assert.deepEqual(
+      payload.apps.map((app) => app.dir),
+      ['packages/feature-auth']
+    );
+  });
+
+  it('reads package.json workspaces ({ packages }) with ** and skips node_modules', async () => {
+    const workspace = await discoveryCopy();
+    await rm(path.join(workspace, 'pnpm-workspace.yaml'));
+    await writeFile(
+      path.join(workspace, 'package.json'),
+      JSON.stringify({ workspaces: { packages: ['packages/**'] } }),
+      'utf-8'
+    );
+    const nested = path.join(workspace, 'packages', 'ui-kit', 'node_modules', 'dep');
+    await mkdir(nested, { recursive: true });
+    await writeFile(path.join(nested, 'webpack.config.js'), '', 'utf-8');
+    const deep = path.join(workspace, 'packages', 'group', 'deep-app');
+    await mkdir(deep, { recursive: true });
+    await writeFile(path.join(deep, 'webpack.config.js'), '', 'utf-8');
+    const payload = await discover(workspace);
+    assert.deepEqual(
+      payload.apps.map((app) => app.dir),
+      ['packages/feature-auth', 'packages/group/deep-app', 'packages/host']
+    );
+  });
+});
+
 describe('init: derived commands and port validation', () => {
   const baseFiles = {
     [`${WS}/pnpm-workspace.yaml`]: 'packages:\n  - apps/*\n',

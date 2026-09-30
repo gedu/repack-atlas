@@ -61,9 +61,12 @@ Gotchas to know before you present:
   re-run `pnpm install` in the showcase or the apps keep the old dist.
 - Production bundles (`--dev false`) fail without a `code-signing.pem`
   (CodeSigningPlugin). Demo everything in dev mode.
-- `repack-atlas init` discovers apps under `apps/*` or workspace
-  subdirectories; the showcase keeps apps under `packages/*`, so its config
-  is hand-authored (the file is 30 lines — show it, don't generate it).
+- `repack-atlas init` discovers apps from the workspace globs
+  (`pnpm-workspace.yaml` `packages:` or `package.json` `workspaces`), so the
+  showcase's `packages/*` apps are found. It still points manifest refs at
+  `manifests/<app dir>.json`, which is not how the showcase lays out its
+  manifests, so the demo config stays hand-authored (the file is 30 lines —
+  show it, don't generate it).
 
 ## 1. Beat one: the manifest exists and is reachable
 
@@ -189,6 +192,6 @@ kill <dev-supervisor-pid>          # tears down all four children
 git status --porcelain             # showcase stays clean (demo files are gitignored)
 ```
 
-The showcase side lives entirely on the `atlas-demo` branch (3 commits:
-deps, plugins+writeToDisk, workspace config) and is never pushed or sent
+The showcase side lives entirely on the `atlas-demo` branch (5 commits:
+deps, plugins, writeToDisk, workspace config, lock refresh) and is never pushed or sent
 upstream without the owner's call.

@@ -10,10 +10,20 @@
 // reduced scope.
 //
 // Discovery rules (deterministic, no config evaluation):
-//   - apps live in `<workspace>/apps/*` (the fixture/showcase layout); if
-//     that directory does not exist, the workspace's own subdirectories are
-//     scanned;
-//   - an app counts when it contains a `rspack.config.*` file;
+//   - candidate dirs come from the workspace globs: the `packages:` list of
+//     `pnpm-workspace.yaml` (minimal line parser, that one list only) plus
+//     the `workspaces` field of `package.json` (an array or `{ packages }`).
+//     Supported patterns: `dir/*` (one level), `dir/**` (any depth, zero or
+//     more levels), partial-segment wildcards such as `app-*`, and literal
+//     paths. `node_modules` and dot dirs are never expanded. A `!pattern`
+//     is an exclusion: any candidate it matches is removed, whatever the
+//     order. No other glob syntax (`?`, `{a,b}`, `[x]`) is interpreted;
+//   - when no workspace globs are declared, apps live in
+//     `<workspace>/apps/*` (the fixture layout); if that directory does not
+//     exist, the workspace's own subdirectories are scanned;
+//   - a candidate counts as an app when it contains a `rspack.config.*` or
+//     `webpack.config.*` file, or `.repack-atlas/introspection.json`;
+//     other packages matched by the globs are skipped;
 //   - federation facts (federation name, port, role) come from the app's
 //     `.repack-atlas/introspection.json` when the opt-in plugin has written
 //     it; otherwise the app dir name is the federation name;
@@ -32,6 +42,7 @@
 import path from 'node:path';
 import {
   FEDERATION_CONFIG_FILENAME,
+  INTROSPECTION_RELATIVE_PATH,
   isValidPort,
   validateFederationConfig,
   type ConfigIntrospector,
@@ -70,7 +81,8 @@ export type InitPlanResult =
   | { ok: true; plan: InitPlan }
   | { ok: false; reason: string };
 
-const RSPACK_CONFIG_PREFIX = 'rspack.config.';
+const BUNDLER_CONFIG_PREFIXES = ['rspack.config.', 'webpack.config.'];
+const NEVER_EXPANDED = new Set(['node_modules']);
 
 type PackageManager = 'pnpm' | 'yarn' | 'npm';
 
@@ -129,6 +141,187 @@ async function deriveCommand(
   return { command: startCommand(manager, record.name) };
 }
 
+function isPruned(name: string): boolean {
+  return name.startsWith('.') || NEVER_EXPANDED.has(name);
+}
+
+/** Minimal reader for the `packages:` list of a pnpm-workspace.yaml. */
+function parsePnpmWorkspacePackages(text: string): string[] {
+  const patterns: string[] = [];
+  let inPackages = false;
+  for (const rawLine of text.split(/\r?\n/)) {
+    const line = rawLine.replace(/\s+#.*$/, '').trimEnd();
+    if (line.trim() === '' || line.trim().startsWith('#')) continue;
+    if (/^\S/.test(line)) {
+      inPackages = /^packages\s*:\s*$/.test(line);
+      continue;
+    }
+    if (!inPackages) continue;
+    const item = /^\s*-\s+(.*)$/.exec(line)?.[1]?.trim();
+    if (item === undefined || item === '') continue;
+    patterns.push(item.replace(/^(['"])(.*)\1$/, '$2'));
+  }
+  return patterns;
+}
+
+function parsePackageJsonWorkspaces(text: string): string[] {
+  try {
+    const pkg = JSON.parse(text) as { workspaces?: unknown };
+    const field = pkg.workspaces;
+    const list = Array.isArray(field)
+      ? field
+      : typeof field === 'object' && field !== null
+        ? (field as { packages?: unknown }).packages
+        : undefined;
+    return Array.isArray(list)
+      ? list.filter((item): item is string => typeof item === 'string')
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function normalizePattern(pattern: string): string[] {
+  return pattern
+    .replace(/\\/g, '/')
+    .split('/')
+    .filter((segment) => segment !== '' && segment !== '.');
+}
+
+function segmentRegExp(segment: string): RegExp {
+  const source = segment
+    .split('*')
+    .map((part) => part.replace(/[.+^${}()|[\]\\?]/g, '\\$&'))
+    .join('[^/]*');
+  return new RegExp(`^${source}$`);
+}
+
+/** Does a workspace-relative dir match the segmented glob? */
+function matchesGlob(segments: string[], dirSegments: string[]): boolean {
+  const [head, ...rest] = segments;
+  if (head === undefined) return dirSegments.length === 0;
+  if (head === '**') {
+    for (let skip = 0; skip <= dirSegments.length; skip += 1) {
+      if (matchesGlob(rest, dirSegments.slice(skip))) return true;
+    }
+    return false;
+  }
+  const [first, ...others] = dirSegments;
+  return (
+    first !== undefined &&
+    segmentRegExp(head).test(first) &&
+    matchesGlob(rest, others)
+  );
+}
+
+/** Expand one positive glob into existing workspace-relative directories. */
+async function expandGlob(
+  workspaceDir: string,
+  segments: string[],
+  fs: ProjectFs
+): Promise<string[]> {
+  const found = new Set<string>();
+  const isDir = async (rel: string[]): Promise<boolean> =>
+    (await fs.stat(path.join(workspaceDir, ...rel)))?.isDirectory === true;
+
+  async function visit(base: string[], rest: string[]): Promise<void> {
+    const [head, ...tail] = rest;
+    if (head === undefined) {
+      if (base.length > 0) found.add(base.join('/'));
+      return;
+    }
+    if (head === '**') {
+      await visit(base, tail);
+      for (const name of (await fs.readdir(path.join(workspaceDir, ...base))).sort()) {
+        if (isPruned(name) || !(await isDir([...base, name]))) continue;
+        await visit([...base, name], rest);
+      }
+      return;
+    }
+    if (!head.includes('*')) {
+      if (await isDir([...base, head])) await visit([...base, head], tail);
+      return;
+    }
+    const matcher = segmentRegExp(head);
+    for (const name of (await fs.readdir(path.join(workspaceDir, ...base))).sort()) {
+      if (isPruned(name) || !matcher.test(name)) continue;
+      if (await isDir([...base, name])) await visit([...base, name], tail);
+    }
+  }
+
+  await visit([], segments);
+  return [...found];
+}
+
+/** Workspace globs from pnpm-workspace.yaml and package.json, in that order. */
+async function readWorkspaceGlobs(
+  workspaceDir: string,
+  fs: ProjectFs
+): Promise<string[]> {
+  const pnpm = await fs.readFile(path.join(workspaceDir, 'pnpm-workspace.yaml'));
+  const pkg = await fs.readFile(path.join(workspaceDir, 'package.json'));
+  return [
+    ...(pnpm !== null ? parsePnpmWorkspacePackages(pnpm) : []),
+    ...(pkg !== null ? parsePackageJsonWorkspaces(pkg) : []),
+  ];
+}
+
+async function isAppDir(appDir: string, fs: ProjectFs): Promise<boolean> {
+  const entries = await fs.readdir(appDir);
+  if (
+    entries.some((name) =>
+      BUNDLER_CONFIG_PREFIXES.some((prefix) => name.startsWith(prefix))
+    )
+  ) {
+    return true;
+  }
+  return fs.exists(path.join(appDir, ...INTROSPECTION_RELATIVE_PATH));
+}
+
+/** Discover candidate app dirs, workspace-relative and sorted. */
+async function discoverAppDirs(
+  workspaceDir: string,
+  fs: ProjectFs
+): Promise<{ dirs: string[]; scanned: string }> {
+  const globs = await readWorkspaceGlobs(workspaceDir, fs);
+  let candidates: string[];
+  let scanned: string;
+  if (globs.length > 0) {
+    const positive = globs.filter((glob) => !glob.startsWith('!'));
+    const negative = globs
+      .filter((glob) => glob.startsWith('!'))
+      .map((glob) => normalizePattern(glob.slice(1)));
+    const all = new Set<string>();
+    for (const glob of positive) {
+      for (const dir of await expandGlob(workspaceDir, normalizePattern(glob), fs)) {
+        all.add(dir);
+      }
+    }
+    candidates = [...all].filter(
+      (dir) => !negative.some((neg) => matchesGlob(neg, dir.split('/')))
+    );
+    scanned = `the workspace globs (${positive.join(', ')})`;
+  } else {
+    const appsRoot = path.join(workspaceDir, 'apps');
+    const appsStat = await fs.stat(appsRoot);
+    const hasApps = appsStat !== null && appsStat.isDirectory;
+    const scanDir = hasApps ? appsRoot : workspaceDir;
+    const prefix = hasApps ? 'apps/' : '';
+    candidates = [];
+    for (const name of await fs.readdir(scanDir)) {
+      if (!hasApps && (name === 'apps' || isPruned(name))) continue;
+      const stat = await fs.stat(path.join(scanDir, name));
+      if (stat !== null && stat.isDirectory) candidates.push(`${prefix}${name}`);
+    }
+    scanned = scanDir;
+  }
+  const dirs: string[] = [];
+  for (const dir of candidates.sort()) {
+    if (await isAppDir(path.join(workspaceDir, dir), fs)) dirs.push(dir);
+  }
+  return { dirs, scanned };
+}
+
 function isHostishName(name: string): boolean {
   return name.toLowerCase() === 'host' || name.toLowerCase().endsWith('host');
 }
@@ -148,36 +341,16 @@ export async function buildInitPlan(
     return { ok: false, reason: `workspace does not exist: ${workspaceDir}` };
   }
 
-  const appsRoot = path.join(workspaceDir, 'apps');
-  const appsStat = await fs.stat(appsRoot);
-  const scanDir = appsStat !== null && appsStat.isDirectory ? appsRoot : workspaceDir;
-  const prefix = scanDir === appsRoot ? 'apps/' : '';
-
-  const entryNames = (await fs.readdir(scanDir)).sort();
-  const discovered: { dir: string; dirName: string }[] = [];
-  for (const entryName of entryNames) {
-    const appDir = path.join(scanDir, entryName);
-    const stat = await fs.stat(appDir);
-    if (stat === null || !stat.isDirectory) continue;
-    // Skip the scan dir itself when the workspace root is scanned, plus
-    // obvious non-app noise.
-    if (prefix === '' && (entryName === 'apps' || entryName.startsWith('.'))) {
-      continue;
-    }
-    const entries = await fs.readdir(appDir);
-    const hasRspackConfig = entries.some((name) =>
-      name.startsWith(RSPACK_CONFIG_PREFIX)
-    );
-    if (!hasRspackConfig) continue;
-    discovered.push({ dir: `${prefix}${entryName}`, dirName: entryName });
-  }
+  const { dirs, scanned } = await discoverAppDirs(workspaceDir, fs);
+  const discovered = dirs.map((dir) => ({ dir, dirName: path.posix.basename(dir) }));
 
   if (discovered.length === 0) {
     return {
       ok: false,
       reason:
-        `no apps discovered under ${scanDir} ` +
-        '(an app is a directory containing a rspack.config.* file)',
+        `no apps discovered under ${scanned} ` +
+        '(an app is a directory containing a rspack.config.* or ' +
+        'webpack.config.* file, or .repack-atlas/introspection.json)',
     };
   }
 
