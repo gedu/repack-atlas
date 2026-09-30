@@ -95,8 +95,10 @@ serve checked-in manifests, which is why this takes seconds.
 Atlas reads `repack-federation.json` plus one federation manifest per app. To
 point it at a real project, add two plugins to each app's rspack config:
 `repack-atlas/plugin` (emits the manifest) and `repack-atlas/introspection`
-(feeds `init` and the workspace config). Both are opt-in; see PRD §8 for what
-upstream change this works around. Then:
+(feeds `init` and the workspace config). Both are opt-in. Both subpaths are
+Atlas public API (semver applies once published), and Re.Pack / Module
+Federation compatibility is validated by Atlas, not upstream; see PRD §8.2.
+Then:
 
 ```bash
 npx repack-atlas init --workspace /path/to/workspace   # discovers apps, derives commands
@@ -166,10 +168,10 @@ pnpm test:e2e      # Playwright over the Studio preview (needs:
 
 `src/repack-bridge/vendored/` contains code copied from
 `callstack/repack` (branch `feat/federation-manifest`, commit `c5df67f0`)
-under the MIT license, with per-file copyright headers. `VENDORED.md` is the
-provenance ledger: every file, its upstream path, why it is vendored, and the
-condition under which each block gets deleted and re-exported from
-`@callstack/repack`. CI enforces the ledger (`pnpm check:vendored`).
+under the MIT license, with per-file copyright headers. Re.Pack will not merge
+that branch, so the code is an Atlas-owned fork and a supported part of Atlas.
+`VENDORED.md` is the provenance ledger: every file, its upstream path and source
+commit. CI enforces the ledger (`pnpm check:vendored`).
 
 ## License
 

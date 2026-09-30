@@ -11,7 +11,7 @@ import path from 'node:path';
 // Atlas vendoring adjustment (Vendored Adjustment A1 — see VENDORED.md):
 // upstream imports `Compiler as RspackCompiler` from '@rspack/core'. rspack is
 // not an Atlas dependency (it lives in the user project), so this type-only
-// import is swapped for the bridge-owned structural stand-in. No logic change.
+// import is redirected to the bridge-owned structural stand-in. No logic change.
 import type { Compiler as RspackCompiler } from '../../rspack-compiler.js';
 import { buildFederationManifest } from './buildFederationManifest.js';
 import { detectNativeModules } from './detectNativeModules.js';

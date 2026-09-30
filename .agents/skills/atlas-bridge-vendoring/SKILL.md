@@ -1,25 +1,27 @@
 ---
 name: atlas-bridge-vendoring
 description: >-
-  Protocol for the Re.Pack bridge: add, update, or remove vendored Re.Pack code
-  safely, keep VENDORED.md provenance and MIT headers, respect the lint fence,
-  resolve @callstack/repack from the user project, and perform the vendor-to-export
-  swap. Trigger: touching src/repack-bridge/, src/repack-bridge/vendored/, or
-  VENDORED.md; copying code out of Re.Pack; the exports swap; a bridge import
-  fails with ERR_PACKAGE_PATH_NOT_EXPORTED.
+  Protocol for the Re.Pack bridge: add or change the Atlas-owned forked Re.Pack
+  code safely, keep VENDORED.md provenance and MIT headers, respect the lint
+  fence, and resolve @callstack/repack from the user project. Trigger: touching
+  src/repack-bridge/, src/repack-bridge/vendored/, or VENDORED.md; copying code
+  out of Re.Pack; a bridge import fails with ERR_PACKAGE_PATH_NOT_EXPORTED.
 metadata:
   auto_invoke:
     - "importing or copying any code from Re.Pack"
     - "modifying src/repack-bridge/**"
-    - "removing a vendored block during the exports swap"
 ---
 
 # Bridge vendoring
 
 Atlas needs Re.Pack internals that are not merged upstream, and Re.Pack ships a
 strict `exports` map so deep `dist/...` imports throw
-`ERR_PACKAGE_PATH_NOT_EXPORTED`. Hence: vendor now, swap later. The bridge is
-the only place that debt is allowed to live.
+`ERR_PACKAGE_PATH_NOT_EXPORTED`. The manifest plugin was therefore copied from
+`feat/federation-manifest` @ `c5df67f0`. That branch (PR #1463) will never be
+merged into Re.Pack (owner decision, 2026-09-30), so there is no swap back to a
+Re.Pack export: the copy is an Atlas-owned fork and a supported Atlas package.
+Atlas may evolve it and validates Re.Pack / Module Federation compatibility
+itself. The bridge is the only place that code lives.
 
 ## Hard rules
 
@@ -50,12 +52,7 @@ the only place that debt is allowed to live.
    - **Upstream path**: `packages/repack/src/plugins/federationManifest/FederationManifestPlugin.ts`
    - **Why vendored**: the manifest plugin is not merged upstream and the
      `exports` map blocks deep imports, so Atlas cannot reach it.
-   - **Swap condition**: core merges the manifest plugin and exports its types
-     (PRD §8.1 item 1); then re-export from `@callstack/repack` and delete.
-   - **Owner**: <maintainer> (swap tracked in <issue>)
    ```
-
-   "Swap condition" must be a falsifiable event, not "later".
 3. Re-export it from `src/repack-bridge/index.ts`.
 4. Run `pnpm lint && pnpm typecheck && pnpm test`.
 
@@ -78,21 +75,6 @@ Never `import '@callstack/repack'` statically outside the bridge, and never
 resolve it from `import.meta.url`. Atlas's own tree deliberately does not
 contain it.
 
-## Swap procedure (vendor → export)
-
-`index.ts` is written as if the upstream exports already existed, so it *is* the
-exports request. When core lands an export:
-
-1. Diff `src/repack-bridge/index.ts` against what core now exports — the deleted
-   vendored re-exports are the concrete list to drop.
-2. In one commit: delete the vendored file(s), replace the re-export with
-   `export { X } from '@callstack/repack'`, delete the `VENDORED.md` block.
-3. Confirm the vendored copy had no silent local edits: `diff` it against
-   upstream at the recorded commit before deleting, and fold any Atlas-only fix
-   into a real upstream PR or an explicit Atlas wrapper.
-4. Update `pnpm lint` expectations only if the fence itself is now unnecessary —
-   that is a decision to record, not a cleanup.
-
 ## Checks
 
 ```bash
@@ -101,5 +83,8 @@ pnpm typecheck
 pnpm test
 ```
 
-Updating vendored code is a deliberate, reviewed diff against upstream — never a
-silent edit inside the copy.
+Changing the forked code is a normal reviewed diff: keep the MIT header, and add
+an adjustment entry to `VENDORED.md` for every change to a vendored file.
+`repack-atlas/plugin` and `repack-atlas/introspection` are Atlas public API
+(semver applies once published), so treat changes to their options and output as
+API changes.

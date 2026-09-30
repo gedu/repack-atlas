@@ -134,7 +134,7 @@ export default tseslint.config(
   //    core, and the bridge index — never a bundler package directly. The
   //    core fence cannot cover them (adapters are not src/core), so without
   //    this block an adapter could `import { rspack } from '@rspack/core'`
-  //    and bypass the vendor→swap plan (PRD 6.2).
+  //    and bypass the bridge (PRD 6.2).
   {
     name: 'atlas/adapter-boundary',
     files: ['src/adapters/**/*.ts'],
