@@ -284,7 +284,10 @@ export function buildFederationGraph(
   }
 
   const roster = new Map<string, { role: 'host' | 'remote'; port?: number }>();
-  roster.set(hostName, { role: 'host' });
+  roster.set(hostName, {
+    role: 'host',
+    ...(typeof config.host.port === 'number' ? { port: config.host.port } : {}),
+  });
   for (const [name, remote] of Object.entries(config.remotes)) {
     roster.set(name, {
       role: 'remote',
@@ -292,7 +295,7 @@ export function buildFederationGraph(
     });
   }
   for (const input of manifests) {
-    if (!roster.has(input.name)) {
+    if (input !== hostInput && !roster.has(input.name)) {
       roster.set(input.name, {
         role: input.role,
         ...(typeof input.port === 'number' ? { port: input.port } : {}),

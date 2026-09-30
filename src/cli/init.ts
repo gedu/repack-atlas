@@ -136,6 +136,7 @@ export async function buildInitPlan(
     host: {
       manifest: host.manifest,
       root: host.dir,
+      ...(host.port !== undefined ? { port: host.port } : {}),
     },
     remotes: {},
   };

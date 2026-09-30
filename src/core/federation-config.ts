@@ -67,10 +67,13 @@ const optionalBoolean: FieldCheck = (value, where) =>
     ? undefined
     : `${where} must be a boolean`;
 
-const optionalNumber: FieldCheck = (value, where) =>
-  value === undefined || typeof value === 'number'
+const optionalPort: FieldCheck = (value, where) => {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'number') return `${where} must be a number`;
+  return Number.isInteger(value) && value >= 1 && value <= 65535
     ? undefined
-    : `${where} must be a number`;
+    : `${where} must be an integer between 1 and 65535`;
+};
 
 /**
  * Run per-field checks over an object, collecting one reason per violation.
@@ -97,10 +100,12 @@ function checkFields(
 
 /**
  * Validate an unknown JSON document against the `repack-federation.json`
- * schema: `{ host: { manifest, root? }, remotes: { name: { manifest, root?,
- * standalone?, port? } } }`, strictly — unknown keys anywhere are invalid.
+ * schema: `{ host: { manifest, root?, command?, port? }, remotes: { name: {
+ * manifest, root?, standalone?, port?, command? } } }`, strictly — unknown
+ * keys anywhere are invalid.
  * Returns the reasons the document is invalid (empty when valid); every
- * reason names the offending field path.
+ * reason names the offending field path. A `port` must be an integer in
+ * 1..65535.
  */
 export function validateFederationConfig(document: unknown): string[] {
   if (!isObject(document)) return ['config must be a JSON object'];
@@ -128,7 +133,7 @@ export function validateFederationConfig(document: unknown): string[] {
         manifest: requireString,
         root: optionalString,
         command: optionalString,
-        port: optionalNumber,
+        port: optionalPort,
       },
       'host',
       reasons
@@ -159,7 +164,7 @@ export function validateFederationConfig(document: unknown): string[] {
           manifest: requireString,
           root: optionalString,
           standalone: optionalBoolean,
-          port: optionalNumber,
+          port: optionalPort,
           command: optionalString,
         },
         where,

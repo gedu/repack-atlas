@@ -96,6 +96,34 @@ describe('validateFederationConfig', () => {
     );
   });
 
+  it('rejects ports that are not integers in 1..65535 for host and remotes', () => {
+    for (const port of [0, -1, 65536, 80.5, NaN, Infinity]) {
+      assert.deepStrictEqual(
+        validateFederationConfig({
+          host: { manifest: '.', port },
+          remotes: { store: { manifest: '.', port } },
+        }),
+        [
+          'host.port must be an integer between 1 and 65535',
+          'remotes.store.port must be an integer between 1 and 65535',
+        ],
+        `port ${port}`
+      );
+    }
+  });
+
+  it('accepts the port range boundaries', () => {
+    for (const port of [1, 65535]) {
+      assert.deepStrictEqual(
+        validateFederationConfig({
+          host: { manifest: '.', port },
+          remotes: { store: { manifest: '.', port } },
+        }),
+        []
+      );
+    }
+  });
+
   it('rejects remotes as an array', () => {
     assert.deepStrictEqual(
       validateFederationConfig({
