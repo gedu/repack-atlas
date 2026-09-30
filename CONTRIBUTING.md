@@ -20,7 +20,7 @@ risk R3). An approved issue means the design conversation already happened.
 ## Dev setup
 
 ```bash
-# Node >= 20, pnpm >= 10 (exact version in package.json packageManager)
+# Node >= 22.13, pnpm >= 10 (exact version in package.json packageManager)
 pnpm install
 pnpm build     # tsc: src -> dist; the CLI and fixture tests run against dist/
 pnpm test      # 274 node:test tests over the fixture workspaces, seconds
@@ -68,7 +68,7 @@ Skills are how this repo teaches agents (and humans) its conventions.
 ## What CI runs, and how to reproduce it
 
 CI is `.github/workflows/ci.yml` (build-and-test matrix: macOS + Linux,
-Node 20 + 22; plus a Linux studio-e2e job) and `.github/workflows/pr-checks.yml`
+Node 22 + 24; plus a Linux studio-e2e job) and `.github/workflows/pr-checks.yml`
 (title, size, linked issue). Every job step maps to one local command. All
 outputs below are from this checkout, observed 2026-09-30.
 

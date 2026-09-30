@@ -22,7 +22,7 @@ truth for the whole design.
 
 ## Quickstart
 
-Requirements: Node >= 20, pnpm >= 10 (`packageManager` pins the exact version).
+Requirements: Node >= 22.13, pnpm >= 10 (`packageManager` pins the exact version).
 
 ```bash
 git clone <this repo> && cd repack-atlas

@@ -49,7 +49,7 @@ conventions).
 ## Setup
 
 ```bash
-pnpm install     # Node >= 20, pnpm >= 10
+pnpm install     # Node >= 22.13, pnpm >= 10
 pnpm build       # tsc: src -> dist
 pnpm typecheck   # tsc --noEmit over src + tests (+ tests/e2e with DOM lib)
 pnpm lint        # eslint incl. both architectural fences
@@ -63,7 +63,7 @@ pnpm check:vendored # CI: every vendored file in VENDORED.md with a commit
 ```
 
 CI (`.github/workflows/ci.yml`) runs lint, typecheck, build, test,
-`agent:check` and `check:vendored` on macOS+Linux × Node 20/22, plus a
+`agent:check` and `check:vendored` on macOS+Linux × Node 22/24, plus a
 Playwright studio-e2e job on Linux. PR gates (title, 400-line budget, linked
 issue) live in `pr-checks.yml`. Reproduce every job locally with the commands
 above; CONTRIBUTING.md maps each CI step to its command.
