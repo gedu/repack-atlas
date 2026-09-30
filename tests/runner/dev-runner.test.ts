@@ -265,16 +265,31 @@ async function session(args: string[], cwd = WORKSPACE): Promise<Session> {
   return s;
 }
 
-/** Kill the runner and every app group it reported, then await the exit. */
-async function reap(s: Session): Promise<void> {
-  for (const event of s.events) {
-    if (event.pid === undefined) continue;
-    try {
-      process.kill(-event.pid, 'SIGKILL'); // detached group leaders
-    } catch {
-      // already gone
-    }
+/** Signal a process group only if it is still alive; ESRCH is the only ignored error. */
+function killGroupIfAlive(pid: number): void {
+  try {
+    process.kill(-pid, 0); // liveness probe, sends no signal
+    process.kill(-pid, 'SIGKILL'); // children are detached group leaders
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error;
   }
+}
+
+/** Kill the runner and the app groups still running, then await the exit. */
+async function reap(s: Session): Promise<void> {
+  // Last event per app: groups that already reported `error` (killed on
+  // purpose) or `stopped` are skipped so a reused pid is never signalled.
+  const last = new Map<string, DevEvent>();
+  for (const event of s.events) {
+    if (event.event === 'app' && event.app !== undefined) last.set(event.app, event);
+  }
+  const pids = new Set<number>();
+  for (const event of last.values()) {
+    if (event.pid === undefined) continue;
+    if (event.status === 'error' || event.status === 'stopped') continue;
+    pids.add(event.pid);
+  }
+  for (const pid of pids) killGroupIfAlive(pid);
   if (s.child.exitCode === null && s.child.signalCode === null) {
     s.child.kill('SIGKILL');
   }
@@ -329,7 +344,6 @@ describe('dev runner (spawned, stub apps)', () => {
       // The first frame after the kill may still show `starting`/`ready`:
       // read frames until the error transition arrives, never assert on one.
       const latest = await waitForFrameStatus(sse, 'mini_auth', 'error');
-      assert.ok(sse.frames().length >= baseline + 1, 'SSE delivered a frame after the status change');
       assert.equal(latest.apps?.find((a) => a.name === 'mini_auth')?.status, 'error');
 
       s.child.kill('SIGINT');

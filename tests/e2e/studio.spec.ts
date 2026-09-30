@@ -280,6 +280,7 @@ async function writeStackedWorkspace(dir: string, standalone: string[] = []): Pr
     reactNative: { version: '0.79.2', platforms: ['ios'], nativeModules, dynamicImportDetected: false },
   });
   const native = (confidence: string) => [
+    // Deliberately long: the nowrap test needs a version that would wrap.
     { package: 'react-native-mmkv', version: '7.21.11', turboModule: true, confidence },
   ];
   const manifests: Record<string, object> = {

@@ -776,7 +776,12 @@ export const STUDIO_PAGE_HTML = `<!doctype html>
     var rowNode = el('tr');
     for (var i = 0; i < cells.length; i++) {
       var cell = cells[i];
-      var td = el('td', cell.plain ? 'st' : cell.pill ? 'has-pill' : cell.nowrap ? 'nowrap' : null);
+      // One class per cell; precedence: plain > pill > nowrap.
+      var cellClass = null;
+      if (cell.plain) cellClass = 'st';
+      else if (cell.pill) cellClass = 'has-pill';
+      else if (cell.nowrap) cellClass = 'nowrap';
+      var td = el('td', cellClass);
       if (cell.pill) {
         var pill = el('span', 'pill ' + cell.pill, cell.text);
         td.appendChild(pill);

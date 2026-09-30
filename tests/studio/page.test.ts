@@ -163,39 +163,61 @@ type PlanEdges = (
  * Load the page's pure layout functions (constants through planEdges) into a
  * bare vm context. The span holds no DOM access, so no document is provided.
  */
-function loadPlanEdges(): { planEdges: PlanEdges; nodeWidth: number; nodeHeight: number } {
+function loadPlanEdges(): {
+  planEdges: PlanEdges;
+  nodeWidth: number;
+  nodeHeight: number;
+  nudgeSteps: number;
+  nudgePx: number;
+} {
   const script = page.slice(page.indexOf('<script>'));
   const size = script.match(/var W = (\d+), H = (\d+);/);
   const from = script.indexOf('var ARROW_GAP');
   const to = script.indexOf('function drawGraph');
+  const steps = script.match(/var LABEL_NUDGE_STEPS = (\d+);/);
+  const px = script.match(/var LABEL_NUDGE_PX = (\d+);/);
+  assert.ok(steps && px, 'label nudge constants found in the page script');
   assert.ok(size && from > 0 && to > from, 'layout span found in the page script');
   const nodeWidth = Number(size[1]);
   const nodeHeight = Number(size[2]);
   const context = vm.createContext({ W: nodeWidth, H: nodeHeight });
   vm.runInContext(script.slice(from, to), context);
-  return { planEdges: (context as { planEdges: PlanEdges }).planEdges, nodeWidth, nodeHeight };
+  return {
+    planEdges: (context as { planEdges: PlanEdges }).planEdges,
+    nodeWidth,
+    nodeHeight,
+    nudgeSteps: Number(steps[1]),
+    nudgePx: Number(px[1]),
+  };
 }
 
 describe('Studio edge label placement', () => {
-  const { planEdges, nodeWidth, nodeHeight } = loadPlanEdges();
+  const { planEdges, nodeWidth, nodeHeight, nudgeSteps, nudgePx } = loadPlanEdges();
   const edges = [{ from: 'a', to: 'b', label: 'x' }];
   const ends = { a: { x: 0, y: 0 }, b: { x: 700, y: 200 } };
 
   it('falls back to the slot with the least overlap when every slot is blocked', () => {
     const free = planEdges({ places: { ...ends }, width: 900, height: 400 }, edges).items[0]!;
     const baseLy = free.geometry.ly;
-    // Slot +40px covers [top, top + 17). Tile a column of nodes over the label
-    // so every slot overlaps, leaving only a 9px gap that clips that one slot.
-    const top = free.rect.y + 40;
+    const labelHeight = free.rect.height;
+    assert.ok(nudgeSteps >= 2 && nudgePx > labelHeight / 2, 'constants leave a second slot to aim for');
+    // Aim at the second slot below the midpoint. Tile a column of nodes over
+    // the label so every slot overlaps, leaving one gap that clips only that
+    // slot: it starts mid-label and ends before the next slot begins.
+    const slotOffset = 2 * nudgePx;
+    const top = free.rect.y + slotOffset;
+    const gapStart = top + Math.floor(labelHeight / 2);
+    const gapEnd = top + nudgePx - 1;
+    const tiles = Math.ceil((nudgeSteps * nudgePx + labelHeight) / nodeHeight) + 2;
     const places: Record<string, { x: number; y: number }> = { ...ends };
     const x = free.rect.x - 10;
-    for (let k = 0; k < 8; k++) {
-      places[`above${k}`] = { x, y: top + 10 - nodeHeight * (k + 1) };
-      places[`below${k}`] = { x, y: top + 19 + nodeHeight * k };
+    for (let k = 0; k < tiles; k++) {
+      places[`above${k}`] = { x, y: gapStart - nodeHeight * (k + 1) };
+      places[`below${k}`] = { x, y: gapEnd + nodeHeight * k };
     }
     const { items } = planEdges({ places, width: 900, height: 400 }, edges);
     const placed = items[0]!;
-    assert.equal(placed.geometry.ly, baseLy + 40, 'the partly clipped slot wins');
+    assert.equal(placed.geometry.ly, baseLy + slotOffset, 'the partly clipped slot wins');
     const blockers = Object.entries(places).filter(([name]) => name !== 'a' && name !== 'b');
     const touched = blockers.some(
       ([, at]) =>
