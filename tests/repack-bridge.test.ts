@@ -1,5 +1,12 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, realpathSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdtempSync,
+  mkdirSync,
+  realpathSync,
+  readFileSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
@@ -107,6 +114,131 @@ test('applyFederationManifest emits a manifest asset through a fake compiler', (
   assert.equal(manifest.exposes[0]?.name, 'Screen');
   assert.equal(manifest.shared[0]?.name, 'react');
   assert.equal(manifest.shared[0]?.singleton, true);
+});
+
+// ---------------------------------------------------------------------------
+// writeToDisk (bridge addition B1, VENDORED.md): the dev server keeps assets
+// in a memory FS, so the manifest must be copyable to disk for doctor/dev/
+// studio to read it.
+// ---------------------------------------------------------------------------
+
+function makeFakeDiskWriterCompiler(context: string, compilation: unknown) {
+  const taps: string[] = [];
+  return {
+    taps,
+    compiler: {
+      context,
+      options: { output: {} },
+      hooks: {
+        compilation: {
+          tap: (name: string, fn: (c: unknown) => void) => {
+            taps.push(name);
+            fn(compilation);
+          },
+        },
+      },
+      webpack: { sources: { RawSource: class { constructor(public value: string) {} } } },
+    },
+  };
+}
+
+test('writeToDisk absent or false adds no tap beyond the vendored one', () => {
+  const context = mkdtempSync(path.join(tmpdir(), 'atlas-disk-off-'));
+  const { compilation, emitted } = createFakeCompilation();
+  const { taps, compiler } = makeFakeDiskWriterCompiler(context, compilation);
+
+  new FederationManifestPlugin({ name: 'app1', manifest: true }).apply(compiler);
+  new FederationManifestPlugin({
+    name: 'app1',
+    manifest: true,
+    writeToDisk: false,
+  }).apply(compiler);
+
+  assert.deepEqual(taps, Array(2).fill('RepackFederationManifestPlugin'));
+  assert.ok(emitted.size > 0, 'the vendored plugin still emits the asset');
+  assert.equal(
+    existsSync(path.join(context, 'repack-federation-manifest.json')),
+    false,
+    'no disk write when writeToDisk is off'
+  );
+});
+
+test('writeToDisk true writes the manifest asset to compiler.context', () => {
+  const context = mkdtempSync(path.join(tmpdir(), 'atlas-disk-on-'));
+  const { compilation, emitted } = createFakeCompilation();
+  const { taps, compiler } = makeFakeDiskWriterCompiler(context, compilation);
+
+  new FederationManifestPlugin({
+    name: 'app1',
+    manifest: true,
+    shared: { react: { singleton: true } },
+    writeToDisk: true,
+  }).apply(compiler);
+
+  assert.deepEqual(taps, [
+    'RepackFederationManifestPlugin',
+    'RepackAtlasManifestDiskWriter',
+  ]);
+  assert.ok(
+    emitted.has('repack-federation-manifest.json'),
+    'the vendored plugin still emits the asset'
+  );
+
+  const target = path.join(context, 'repack-federation-manifest.json');
+  assert.ok(existsSync(target), 'manifest written to the app root');
+  const manifest = JSON.parse(readFileSync(target, 'utf8')) as FederationManifest;
+  assert.equal(manifest.manifestVersion, 1);
+  assert.equal(manifest.id, 'app1');
+  // Same bytes as the compilation asset, read through assets[name].source().
+  assert.equal(
+    readFileSync(target, 'utf8'),
+    emitted.get('repack-federation-manifest.json')
+  );
+});
+
+test('writeToDisk true skips silently when the asset was never emitted', () => {
+  const context = mkdtempSync(path.join(tmpdir(), 'atlas-disk-empty-'));
+  const { compilation } = createFakeCompilation();
+  // Deferred compiler double: taps are collected, not fired, so the test can
+  // run the disk-writer tap against an empty compilation (nothing emitted —
+  // e.g. the vendored duplicate-asset skip path).
+  const taps: string[] = [];
+  const compilationTaps: Array<(c: unknown) => void> = [];
+  const compiler = {
+    context,
+    options: { output: {} },
+    hooks: {
+      compilation: {
+        tap: (name: string, fn: (c: unknown) => void) => {
+          taps.push(name);
+          compilationTaps.push(fn);
+        },
+      },
+    },
+    webpack: { sources: { RawSource: class { constructor(public value: string) {} } } },
+  };
+
+  new FederationManifestPlugin({
+    name: 'app1',
+    manifest: true,
+    writeToDisk: true,
+  }).apply(compiler);
+
+  assert.deepEqual(taps, [
+    'RepackFederationManifestPlugin',
+    'RepackAtlasManifestDiskWriter',
+  ]);
+  const diskWriterTap = compilationTaps[compilationTaps.length - 1];
+  assert.ok(diskWriterTap, 'disk writer taps compiler.hooks.compilation');
+  // Must not throw and must not write when the asset is absent.
+  diskWriterTap(compilation);
+
+  assert.deepEqual(compilation.warnings, [], 'no warning for a missing asset');
+  assert.equal(
+    existsSync(path.join(context, 'repack-federation-manifest.json')),
+    false,
+    'nothing written when the asset is absent'
+  );
 });
 
 test('normalizeFederationManifestOption applies upstream defaults', () => {
@@ -236,8 +368,13 @@ test('a vendored manifest structurally satisfies the core schema', () => {
 
 // ---------------------------------------------------------------------------
 
+// Fake faithful to the real rspack surface the bridge touches: getAsset
+// returns an asset object (truthy check in the vendored emit guard), and
+// compilation.assets[name].source() returns the emitted string — exactly
+// what the RepackAtlasManifestDiskWriter reads.
 function createFakeCompilation() {
   const emitted = new Map<string, string>();
+  const assets: Record<string, { source(): string }> = {};
   const compilation = {
     hooks: {
       afterProcessAssets: {
@@ -248,10 +385,13 @@ function createFakeCompilation() {
     },
     modules: [] as unknown[],
     warnings: [] as { message?: string }[],
-    getAsset: (name: string) => emitted.get(name),
+    getAsset: (name: string) => assets[name],
     emitAsset: (name: string, source: { value?: string }) => {
-      emitted.set(name, source.value ?? String(source));
+      const value = source.value ?? String(source);
+      emitted.set(name, value);
+      assets[name] = { source: () => value };
     },
+    assets,
   };
   return { compilation, emitted };
 }

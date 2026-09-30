@@ -24,6 +24,14 @@ export interface BridgeCompilation {
   warnings: { message?: string }[];
   getAsset(name: string): unknown;
   emitAsset(name: string, source: unknown): void;
+  /**
+   * Emitted asset sources, keyed by asset name. Read by the bridge's
+   * `writeToDisk` disk writer (`src/repack-bridge/plugin.ts`); optional
+   * because the vendored code never touches it and older doubles may not
+   * provide it. `source()` mirrors webpack/rspack `Source#source()`
+   * (string or Buffer; Buffer is a Uint8Array).
+   */
+  assets?: Record<string, { source(): string | Uint8Array }>;
 }
 
 /** The compiler surface the manifest plugin taps. */
