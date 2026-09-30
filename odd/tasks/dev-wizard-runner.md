@@ -43,7 +43,7 @@ part of the plan and must exist.
 
 - [x] T1 Pure plan + `--dry-run`: extract a pure `buildDevPlan`, add
       `{event:'plan'}` (additive), human plan table, no spawn, no Studio.
-- [ ] T2 Ports: `--port` host override, default 8081, `--auto-ports`, all
+- [x] T2 Ports: `--port` host override, default 8081, `--auto-ports`, all
       conflicts reported (exit 1).
 - [ ] T3 Default argv: config `config` field, RN CLI resolver adapter
       (`createRequire` from app root), `detectBundler`, `command` as override;
@@ -95,6 +95,22 @@ branch merges to main once at the end.
   `--json` test depends on a free host port (`dev-runner.test.ts:524-544`);
   busy probe is loopback-only in tests.
 
+- T2 done on `feat/dev-wizard-runner-t2`, commit `0e8837b`
+  (`feat(dev): add --port and --auto-ports with unified conflict exit`), 835
+  authored lines (new `src/runner/ports.ts` + tests). Route: delegated direct.
+  Checks: full chain green, 397/397 tests; parent spot check re-ran ports +
+  plan + dev-runner tests (41/41). Native review: high risk, granted, 4
+  lenses, approved with no blockers, acknowledged. T1 advisories folded in.
+- Accumulated-range review (main..`0a6abd4`) also granted and approved.
+- T2 advisory findings carried into T3/T4: duplicate declared ports across
+  apps not detected (`ports.ts:77-82`); `nextFree` throws despite a
+  never-throws contract (`ports.ts:57-66`, `supervisor.ts:174-177`); live plan
+  event re-projection (`dev.ts:266-275`); `--json` hides reassignments
+  (`dev.ts:263-265`); lenient `--port` parse (`dev.ts:204`); host default
+  8081 busy is a hard fail without `--auto-ports` (`plan.ts:129-132`, by
+  design, document it); `resolveRef` inconsistency (`plan.ts:138`);
+  hardcoded test host port (`dev-runner.test.ts:24-26`).
+
 ## Next step
 
-T2 (ports), stacked on `feat/dev-wizard-runner-t1`.
+T3 (default argv), stacked on `feat/dev-wizard-runner-t2`.
