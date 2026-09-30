@@ -1,0 +1,78 @@
+name: PR checks
+
+on:
+  pull_request:
+    types: [opened, edited, reopened, ready_for_review, synchronize]
+
+concurrency:
+  group: pr-checks-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  conventional-title:
+    name: Conventional Commit PR title
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check title
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          if printf '%s' "$TITLE" | grep -qE '^(feat|fix|docs|test|chore|refactor|perf|build|ci)(\([a-z0-9./-]+\))?!?: .+'; then
+            echo "PR title follows Conventional Commits."
+          else
+            echo "::error::PR title must follow Conventional Commits:"
+            echo "  feat|fix|docs|test|chore(scope): imperative summary"
+            echo "  e.g. \"feat(ci): add vendored provenance check\""
+            echo "See CONTRIBUTING.md."
+            exit 1
+          fi
+
+  size-budget:
+    name: 400-line review budget
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check diff size
+        env:
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          stat_json=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR}" \
+            --jq '{additions, deletions}')
+          additions=$(printf '%s' "$stat_json" | jq '.additions')
+          deletions=$(printf '%s' "$stat_json" | jq '.deletions')
+          total=$((additions + deletions))
+          echo "Changed lines: $total (+$additions -$deletions)"
+          if [ "$total" -le 400 ]; then
+            echo "Within the 400-line review budget."
+            exit 0
+          fi
+          labels=$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR}/labels" \
+            --jq '[.[].name] | index("size:exception") // empty')
+          if [ -n "$labels" ]; then
+            echo "Over budget but the PR carries the size:exception label."
+            exit 0
+          fi
+          echo "::error::This PR changes $total lines (budget: 400)."
+          echo "Split it into chained PRs, or ask a maintainer for the"
+          echo "'size:exception' label. See CONTRIBUTING.md."
+          exit 1
+
+  linked-issue:
+    name: Linked issue
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check for a linked issue
+        env:
+          BODY: ${{ github.event.pull_request.body }}
+        run: |
+          if printf '%s' "$BODY" | grep -qE '(Closes|Fixes|Resolves|Refs) #[0-9]+'; then
+            echo "PR references an issue."
+          else
+            echo "::error::The PR body must link an approved issue with"
+            echo "  Closes #N | Fixes #N | Resolves #N | Refs #N"
+            echo "Work is issue-first — see CONTRIBUTING.md."
+            exit 1
+          fi
