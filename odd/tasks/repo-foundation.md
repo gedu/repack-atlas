@@ -70,10 +70,10 @@ Out: showcase-fork integration (next feature), npm publish, MCP/Proxy (PRD §16)
       + Playwright e2e incl. XSS fixture.
 - [x] T9. Runner: supervisor port of #1467 (start workspace, keymap incl. `v`,
       ports, `--json` events, `--studio-port`/`--no-studio`), ProcessRunner port.
-- [ ] T10. CI: ci.yml (lint+typecheck, agent-files check, vendored-provenance,
+- [x] T10. CI: ci.yml (lint+typecheck, agent-files check, vendored-provenance,
       tests macOS+Linux Node LTS×2, studio-e2e), pr-checks.yml (conventional
       title, 400-line budget, linked issue). Actions pinned by SHA.
-- [ ] T11. Docs: README (what/quickstart/fixtures), CONTRIBUTING.md, AI_POLICY.md.
+- [x] T11. Docs: README (what/quickstart/fixtures), CONTRIBUTING.md, AI_POLICY.md.
 
 ## Verification
 
@@ -160,3 +160,8 @@ Out: showcase-fork integration (next feature), npm publish, MCP/Proxy (PRD §16)
   per-app command, skip-with-warning when absent; ATLAS_APP_* env; readiness =
   port busy, 'bundling' never claimed). Stub bundler for fixtures (workspace
   only; broken variants skip). --json events, killTree shutdown exit 0. 274 tests.
+- 2026-09-29: T10 done: ci.yml (matrix + studio-e2e, SHA-pinned actions),
+  pr-checks.yml (conventional title, 400-line budget, linked issue),
+  scripts/vendored-check.mjs proven both failure modes.
+- 2026-09-29: T11 done: README/CONTRIBUTING/AI_POLICY/PR template, all documented
+  commands run with real outputs pasted.
