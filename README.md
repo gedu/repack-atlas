@@ -94,6 +94,18 @@ npx repack-atlas init --workspace /path/to/workspace   # discovers apps
 npx repack-atlas doctor --workspace /path/to/workspace
 ```
 
+Two optional `repack-federation.json` fields are easy to misread:
+
+- `root` (host and remotes): only the dev runner uses it. It is resolved
+  against the config directory and handed to the app process as
+  `ATLAS_APP_ROOT`; the process itself runs from the config directory. Doctor,
+  graph and Studio resolve `manifest` relative to the config directory and
+  ignore `root`.
+- `remotes.<name>.standalone`: a flag you declare ("this remote can run
+  without the host"). Atlas only checks that it is a boolean and never acts on
+  it. The Studio shows a read-only `standalone` badge on that remote when it is
+  `true`.
+
 ### Installing Atlas in a project
 
 No npm publish yet (PRD §13: git-only until the incubator decision):

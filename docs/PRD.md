@@ -281,6 +281,12 @@ Atlas reports what it cannot check instead of guessing.
 - Layout: top bar (title, URL, one pill per app with status dot + port); graph
   (1.55fr) + inspector (1fr, tabs Exposes / Shared / Native / Bundle); full-width
   doctor findings list with severity stripes; cycle edges dashed red.
+- A remote that declares `standalone: true` in `repack-federation.json` gets a
+  read-only `standalone` badge on its node (and inspector line). The flag is an
+  owner declaration: Atlas validates only its type and never detects or acts on
+  it. Likewise `root` affects only the dev runner (passed to the app process as
+  `ATLAS_APP_ROOT`); doctor, graph and Studio resolve manifests relative to the
+  config directory.
 - Manifests are fetched from each running dev server at the default
   `repack-federation-manifest.json` asset route (a custom `fileName` is not
   served by the repack dev-server allowlist).
