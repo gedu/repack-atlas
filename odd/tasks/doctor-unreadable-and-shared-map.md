@@ -26,11 +26,11 @@ same Module Federation `shared` object to both plugins.
 
 ## Tasks
 
-- [ ] T1 (#7) `MANIFEST_UNREADABLE` finding, fixture, tests, `--json`, exit
+- [x] T1 (#7) `MANIFEST_UNREADABLE` finding, fixture, tests, `--json`, exit
       code docs, `docs/demo-showcase.md` "corrupt" row from real output.
       Route: delegated direct (writer trigger: core rule + CLI + fixture +
       docs).
-- [ ] T2 (#10) MF `shared` map accepted, unit tests for both shapes, demo
+- [x] T2 (#10) MF `shared` map accepted, unit tests for both shapes, demo
       wiring in `docs/demo-showcase.md` passes the same object. Route:
       delegated direct.
 
@@ -46,3 +46,20 @@ Mode: off (no project/session TDD config). Runner: `pnpm test`.
 ## Progress
 
 - Branch: `feat/doctor-unreadable-and-shared-map` from `9ddc23e`.
+- T1 `497bb3e` (+198/-46); T2 `249d1f2` (+381/-6).
+- RDD `9ddc23e..497bb3e` medium, 1 lens, approved + ack
+  (review-b1364e537d50d361); advisory WARNING: corrupt + missing mix.
+- RDD `497bb3e..249d1f2` medium, 1 lens, approved + ack
+  (review-04a33c15492aaf47); suggestions: key filtering, duplicates, error
+  branches.
+- Follow-ups: `1130c00` (exit 2 when nothing compared) was wrong: it broke the
+  PRD §7.1 missing-manifest contract; corrected by `88e9f32` (exit 2 only when
+  every remote is unreadable). `4e587ad` normalizes every shared form and
+  rejects duplicates.
+- RDD `249d1f2..88e9f32` medium, 1 lens, approved + ack
+  (review-c46be315ab73911b). Open suggestion: no test that singleton/eager/
+  requiredVersion survive on Atlas-shaped array entries.
+- Evidence (parent, `88e9f32`): `pnpm test` 338/338; `doctor` missing fixture
+  exit 1, with `--allow-missing-manifests` exit 0; corrupt fixture exit 1.
+- Delivery: one PR, `size:exception` (about 760 lines; owner prefers fewest
+  PRs).
