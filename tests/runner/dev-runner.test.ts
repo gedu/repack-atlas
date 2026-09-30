@@ -15,7 +15,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import http from 'node:http';
 import net from 'node:net';
 import path from 'node:path';
-import { after, before, describe, it } from 'node:test';
+import { afterEach, before, beforeEach, describe, it } from 'node:test';
 import { binPath, ensureBin, repoRoot } from '../cli/run-bin.js';
 
 const WORKSPACE = path.join(repoRoot, 'fixtures', 'workspace');
@@ -189,6 +189,45 @@ function subscribeSse(url: string): {
   };
 }
 
+interface GraphFrame {
+  apps?: { name: string; status?: string }[];
+}
+
+function parseFrame(frame: string): GraphFrame | null {
+  const data = frame.split('\n').find((line) => line.startsWith('data: '));
+  if (data === undefined) return null;
+  try {
+    return JSON.parse(data.slice('data: '.length)) as GraphFrame;
+  } catch {
+    return null;
+  }
+}
+
+/** Poll the SSE frames until `app` reports `status`; fail listing what was seen. */
+async function waitForFrameStatus(
+  sse: { frames: () => string[] },
+  app: string,
+  status: string,
+  timeoutMs = 10_000
+): Promise<GraphFrame> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const frames = sse.frames().map(parseFrame);
+    const hit = frames.find((f) => f?.apps?.some((a) => a.name === app && a.status === status));
+    if (hit) return hit;
+    if (Date.now() >= deadline) {
+      const seen = frames.map((f, i) => {
+        const current = f?.apps?.find((a) => a.name === app)?.status;
+        return `#${i}: ${app}=${current ?? 'n/a'}`;
+      });
+      assert.fail(
+        `no SSE graph frame had ${app} at status ${status} within ${timeoutMs}ms; frames seen: [${seen.join(', ')}]`
+      );
+    }
+    await new Promise((r) => setTimeout(r, 100));
+  }
+}
+
 const portIsBusy = (port: number) =>
   new Promise<boolean>((resolve) => {
     const socket = net.connect({ host: '127.0.0.1', port }, () => {
@@ -212,9 +251,13 @@ async function waitPortFree(port: number, timeoutMs = 5_000): Promise<void> {
 
 before(ensureBin);
 
-// Close over every session so `after` can always reap children, even if a
+// The stub apps keep the ports the fixture declares (8082/8083), so every test
+// must start from released ports even if the previous one failed midway.
+const STUB_PORTS = [8082, 8083];
+
+// Close over every session so `afterEach` can always reap children, even if a
 // test fails midway (a leaked stub bundler holds 8082 for the next test).
-const openSessions: Session[] = [];
+let openSessions: Session[] = [];
 
 async function session(args: string[], cwd = WORKSPACE): Promise<Session> {
   const s = await startSession(args, cwd);
@@ -222,10 +265,53 @@ async function session(args: string[], cwd = WORKSPACE): Promise<Session> {
   return s;
 }
 
-after(async () => {
-  for (const s of openSessions) {
-    if (!s.child.killed) s.child.kill('SIGKILL');
+/**
+ * SIGKILL an app process group (children are detached group leaders). An
+ * already-gone group (ESRCH) is fine; any other error is returned so the
+ * caller can finish cleanup before surfacing it. Reused-pid protection is the
+ * last-status filter in `reap`, not this function.
+ */
+function killGroup(pid: number): unknown {
+  try {
+    process.kill(-pid, 'SIGKILL');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ESRCH') return error;
   }
+  return undefined;
+}
+
+/** Kill the runner and the app groups still running, then await the exit. */
+async function reap(s: Session): Promise<void> {
+  // Last event per app: groups that already reported `error` (killed on
+  // purpose) or `stopped` are skipped so a reused pid is never signalled.
+  const last = new Map<string, DevEvent>();
+  for (const event of s.events) {
+    if (event.event === 'app' && event.app !== undefined) last.set(event.app, event);
+  }
+  const pids = new Set<number>();
+  for (const event of last.values()) {
+    if (event.pid === undefined) continue;
+    if (event.status === 'error' || event.status === 'stopped') continue;
+    pids.add(event.pid);
+  }
+  // Every group and the runner are always signalled; errors surface after.
+  const errors = [...pids].map(killGroup).filter((e) => e !== undefined);
+  if (s.child.exitCode === null && s.child.signalCode === null) {
+    s.child.kill('SIGKILL');
+  }
+  await s.exited;
+  if (errors.length > 0) throw errors[0];
+}
+
+beforeEach(async () => {
+  for (const port of STUB_PORTS) await waitPortFree(port);
+});
+
+afterEach(async () => {
+  const sessions = openSessions;
+  openSessions = [];
+  await Promise.all(sessions.map(reap));
+  for (const port of STUB_PORTS) await waitPortFree(port);
 });
 
 describe('dev runner (spawned, stub apps)', () => {
@@ -262,17 +348,10 @@ describe('dev runner (spawned, stub apps)', () => {
       // the shell wrapper would otherwise orphan the stub node process).
       process.kill(-miniEvent.pid!, 'SIGKILL');
       await s.waitForStatus('mini_auth', 'error');
-      const deadline = Date.now() + 5_000;
-      while (sse.frames().length < baseline + 1 && Date.now() < deadline) {
-        await new Promise((r) => setTimeout(r, 100));
-      }
-      assert.ok(
-        sse.frames().length >= baseline + 1,
-        'SSE delivered a frame after the status change'
-      );
-      // The pushed graph reflects the death (raw-body contains the status).
-      const latest = sse.frames()[sse.frames().length - 1]!;
-      assert.match(latest, /"name":"mini_auth"[^\n]*?"status":"error"/);
+      // The first frame after the kill may still show `starting`/`ready`:
+      // read frames until the error transition arrives, never assert on one.
+      const latest = await waitForFrameStatus(sse, 'mini_auth', 'error');
+      assert.equal(latest.apps?.find((a) => a.name === 'mini_auth')?.status, 'error');
 
       s.child.kill('SIGINT');
       const { code } = await s.exited;
