@@ -200,14 +200,23 @@ describe('Studio edge label placement', () => {
     const free = planEdges({ places: { ...ends }, width: 900, height: 400 }, edges).items[0]!;
     const baseLy = free.geometry.ly;
     const labelHeight = free.rect.height;
-    assert.ok(nudgeSteps >= 2 && nudgePx > labelHeight / 2, 'constants leave a second slot to aim for');
+    // The gap [gapStart, gapEnd] must be non-empty for the geometry below to
+    // clip the target slot less than the fully blocked ones.
+    const halfLabel = Math.floor(labelHeight / 2);
+    assert.ok(
+      nudgeSteps >= 2 && nudgePx > halfLabel + 1,
+      'constants leave a second slot whose clip is strictly smaller'
+    );
     // Aim at the second slot below the midpoint. Tile a column of nodes over
     // the label so every slot overlaps, leaving one gap that clips only that
     // slot: it starts mid-label and ends before the next slot begins.
     const slotOffset = 2 * nudgePx;
     const top = free.rect.y + slotOffset;
-    const gapStart = top + Math.floor(labelHeight / 2);
+    const gapStart = top + halfLabel;
     const gapEnd = top + nudgePx - 1;
+    // Rows of the target label covered by the tiles, vs a fully blocked slot.
+    const clippedRows = halfLabel + Math.max(0, labelHeight - nudgePx + 1);
+    assert.ok(clippedRows < labelHeight, 'the targeted slot is strictly less clipped');
     const tiles = Math.ceil((nudgeSteps * nudgePx + labelHeight) / nodeHeight) + 2;
     const places: Record<string, { x: number; y: number }> = { ...ends };
     const x = free.rect.x - 10;
