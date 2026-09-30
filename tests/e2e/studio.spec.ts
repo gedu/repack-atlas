@@ -324,6 +324,9 @@ test.describe('Studio over a stacked one-column workspace', () => {
     width: number;
     height: number;
   }
+  const boxesOverlap = (a: Box, b: Box): boolean =>
+    a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
+
   test('same-column edges route around the nodes between their ends', async ({ page }) => {
     await page.goto(preview.url);
     await expect(page.locator('svg.graph g.node')).toHaveCount(4);
@@ -365,5 +368,36 @@ test.describe('Studio over a stacked one-column workspace', () => {
     expect(last.y).toBeGreaterThan(auth.y);
     expect(last.y).toBeLessThan(auth.y + auth.height);
 
+  });
+
+  test('edge labels are never occluded by a node and stay inside the viewBox', async ({ page }) => {
+    await page.goto(preview.url);
+    await expect(page.locator('svg.graph g.node')).toHaveCount(4);
+    const nodeBoxes: Record<string, Box> = {};
+    for (const name of ['host', 'auth', 'trading', 'wallet']) {
+      nodeBoxes[name] = await page
+        .locator(`svg.graph g.node[data-node="${name}"] rect.box`)
+        .evaluate((node) => {
+          const box = (node as SVGGraphicsElement).getBBox();
+          return { x: box.x, y: box.y, width: box.width, height: box.height };
+        });
+    }
+    const labels = await page.locator('svg.graph rect.elabel-bg').evaluateAll((rects) =>
+      rects.map((rect) => {
+        const box = (rect as SVGGraphicsElement).getBBox();
+        return { x: box.x, y: box.y, width: box.width, height: box.height };
+      })
+    );
+    expect(labels).toHaveLength(5);
+    for (const label of labels) {
+      for (const [name, nodeBox] of Object.entries(nodeBoxes)) {
+        expect(boxesOverlap(label, nodeBox), `a label overlaps node ${name}`).toBe(false);
+      }
+    }
+    // ...and every label stays inside the viewBox (no clipping).
+    const viewBoxWidth = await page.locator('svg.graph').evaluate(
+      (node) => (node as unknown as SVGSVGElement).viewBox.baseVal.width
+    );
+    for (const label of labels) expect(label.x + label.width).toBeLessThanOrEqual(viewBoxWidth);
   });
 });

@@ -453,7 +453,7 @@ export const STUDIO_PAGE_HTML = `<!doctype html>
       obstacles.push({ x: at.x, y: at.y, width: W, height: H });
     }
     var lanes = assignLanes(graph.edges, box.places);
-    var nudges = [0];
+    var nudges = [0, -20, 20, -40, 40, -60, 60];
     var items = [];
     var width = box.width;
     for (var e = 0; e < graph.edges.length; e++) {
