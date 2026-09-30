@@ -49,6 +49,30 @@ No other edits exist. Verify with:
 `diff <upstream file> <vendored file>` — only the header (A2), A1 in
 `applyFederationManifest.ts`, and the A3 annotation sites appear.
 
+## Bridge additions (non-vendored)
+
+These live in Atlas-owned files (`src/repack-bridge/plugin.ts`,
+`src/repack-bridge/rspack-compiler.ts`), **not** under `vendored/` — the
+vendored files above remain byte-identical to upstream commit `c5df67f0`
+modulo A1–A3, so the diff-verification promise above still holds.
+
+- **B1 — `writeToDisk` option on the `repack-atlas/plugin` wrapper**:
+  under the Re.Pack dev server (`@callstack/repack-dev-server` 5.3.0, watch
+  mode) compilation assets live in a memory output FS and the dev server
+  serves neither them nor the manifest — verified with real 404s on every
+  path variant for `repack-federation-manifest.json` in a live workspace
+  while the production build writes the file under
+  `build/generated/<platform>/`. The wrapper therefore taps
+  `compilation.hooks.afterProcessAssets` as `RepackAtlasManifestDiskWriter`
+  (registered after the vendored tap, so the asset exists) and, when
+  `writeToDisk: true`, copies the emitted asset to
+  `<compiler.context>/<filePath>/<fileName>`. Missing assets are skipped
+  silently; disk failures degrade to a compilation warning and never fail
+  the build.
+  **Swap condition**: when the dev server serves emitted assets, or upstream
+  (PR #1463 branch) ships a manifest-on-disk option itself, remove
+  `writeToDisk` from the wrapper and document its removal here.
+
 ## `src/repack-bridge/vendored/federationManifest/types.ts`
 
 - **Upstream**: `callstack/repack`

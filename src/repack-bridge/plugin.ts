@@ -12,7 +12,13 @@
 // ModuleFederation plugins, users delete this plugin from their configs and
 // set `manifest: true` there instead (see VENDORED.md).
 
-import { applyFederationManifest } from './vendored/federationManifest/index.js';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
+import type { BridgeCompiler } from './rspack-compiler.js';
+import {
+  applyFederationManifest,
+  normalizeFederationManifestOption,
+} from './vendored/federationManifest/index.js';
 import type { FederationManifestOption } from './vendored/federationManifest/index.js';
 
 export type { BridgeCompiler, BridgeCompilation } from './rspack-compiler.js';
@@ -31,7 +37,28 @@ export interface FederationManifestPluginOptions {
   exposes?: unknown;
   /** Resolved remote entry filename, if the MF plugin computed one. */
   filename?: string;
+  /**
+   * Also write the emitted manifest to disk after each compilation.
+   *
+   * Why: production builds already write compilation assets under
+   * `build/generated/<platform>/`, but under the Re.Pack dev server
+   * (`@callstack/repack-dev-server`, watch mode) assets live in a memory
+   * output FS and the dev server does not serve them — so
+   * `repack-federation-manifest.json` is reachable by neither HTTP nor disk,
+   * and Atlas's doctor/dev/studio have nothing to read. With this flag the
+   * file lands at `<appRoot>/repack-federation-manifest.json` (i.e. relative
+   * to `compiler.context`, honoring `manifest.fileName`/`manifest.filePath`).
+   *
+   * Defaults to `false`: builds keep their current behavior unless opted in.
+   * A disk failure never fails the build — it degrades to a compilation
+   * warning. Swap condition (VENDORED.md B1): once the dev server serves
+   * emitted assets, or upstream ships a manifest option for this, remove it.
+   */
+  writeToDisk?: boolean;
 }
+
+/** Tap name distinct from the vendored `RepackFederationManifestPlugin`. */
+const DISK_WRITER_NAME = 'RepackAtlasManifestDiskWriter';
 
 export class FederationManifestPlugin {
   constructor(private readonly options: FederationManifestPluginOptions) {}
@@ -40,7 +67,7 @@ export class FederationManifestPlugin {
   // contract (webpack-style `apply(compiler: Compiler)`); the cast is the
   // single bridge point, same as upstream's internal call site.
   apply(compiler: unknown): void {
-    const { name, manifest, shared, remotes, exposes, filename } =
+    const { name, manifest, shared, remotes, exposes, filename, writeToDisk } =
       this.options;
     if (!manifest) {
       // Same gating as upstream: absent/false must not tap any hook.
@@ -53,6 +80,59 @@ export class FederationManifestPlugin {
       remotes,
       exposes,
       ...(filename !== undefined ? { filename } : {}),
+    });
+    // Taps after the vendored plugin on purpose: same-hook taps run in
+    // registration order, so the manifest asset already exists by then.
+    if (writeToDisk) {
+      this.applyDiskWriter(compiler as BridgeCompiler, manifest);
+    }
+  }
+
+  /**
+   * Bridge-level addition (VENDORED.md B1 — the vendored files stay
+   * byte-identical to upstream): after the vendored plugin emits the
+   * manifest asset, copy it from the compilation to the app root on disk.
+   */
+  private applyDiskWriter(
+    compiler: BridgeCompiler,
+    manifest: NonNullable<FederationManifestOption>
+  ): void {
+    const options = normalizeFederationManifestOption(manifest);
+    // Same asset name the vendored tap emits (posix, inside the compilation).
+    const assetName = options.filePath
+      ? path.posix.join(options.filePath, options.fileName)
+      : options.fileName;
+
+    compiler.hooks.compilation.tap(DISK_WRITER_NAME, (compilation) => {
+      compilation.hooks.afterProcessAssets.tap(DISK_WRITER_NAME, () => {
+        try {
+          // Silent-but-safe: no asset (nativeAnalysis gate, duplicate-asset
+          // skip, older config) means nothing to copy.
+          if (!compilation.getAsset(assetName)) {
+            return;
+          }
+          const asset = compilation.assets?.[assetName];
+          if (!asset) {
+            return;
+          }
+          const target = path.join(
+            compiler.context,
+            options.filePath ?? '',
+            options.fileName
+          );
+          mkdirSync(path.dirname(target), { recursive: true });
+          writeFileSync(target, asset.source());
+        } catch (error) {
+          // Writing to disk must never break the user's build: degrade to
+          // a warning, same policy as the vendored emit path.
+          compilation.warnings.push(
+            new Error(
+              `[${DISK_WRITER_NAME}] Failed to write the federation manifest ` +
+                `to disk: ${error instanceof Error ? error.message : String(error)}`
+            )
+          );
+        }
+      });
     });
   }
 }
