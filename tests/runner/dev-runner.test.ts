@@ -12,8 +12,10 @@
 
 import assert from 'node:assert/strict';
 import { spawn, type ChildProcess } from 'node:child_process';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
 import net from 'node:net';
+import os from 'node:os';
 import path from 'node:path';
 import { afterEach, before, beforeEach, describe, it } from 'node:test';
 import { binPath, ensureBin, repoRoot } from '../cli/run-bin.js';
@@ -23,6 +25,7 @@ const CYCLE_WORKSPACE = path.join(repoRoot, 'fixtures', 'fixture-remote-cycle');
 
 interface DevEvent {
   event: string;
+  apps?: { app: string; role: string; port: number | null; command: string; cwd: string }[];
   url?: string;
   app?: string;
   status?: string;
@@ -469,6 +472,121 @@ describe('dev runner (spawned, stub apps)', () => {
     assert.ok(
       s.lines.some((l) => l.includes('no "command" declared')),
       'commandless apps report a warning'
+    );
+    s.child.kill('SIGINT');
+    assert.equal((await s.exited).code, 0);
+  });
+});
+
+/** Run `dev <args>` to completion; returns raw stdout/stderr and exit code. */
+function runToCompletion(
+  args: string[],
+  cwd = WORKSPACE
+): Promise<{ code: number | null; stdout: string; stderr: string }> {
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, [binPath, 'dev', ...args], {
+      cwd,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (d: Buffer) => (stdout += d.toString('utf8')));
+    child.stderr.on('data', (d: Buffer) => (stderr += d.toString('utf8')));
+    child.once('close', (code) => resolve({ code, stdout, stderr }));
+  });
+}
+
+describe('dev --dry-run', () => {
+  it('prints the plan table, exits 0 and spawns nothing', async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'atlas-dry-'));
+    try {
+      writeFileSync(
+        path.join(dir, 'repack-federation.json'),
+        JSON.stringify({
+          host: {
+            manifest: './host.json',
+            command: `node -e "require('fs').writeFileSync('marker','x')"`,
+          },
+          remotes: {},
+        })
+      );
+      const result = await runToCompletion(['--dry-run'], dir);
+      assert.equal(result.code, 0, result.stderr);
+      assert.match(result.stdout, /^app\s+role\s+port\s+command\s+cwd$/m);
+      assert.match(result.stdout, /^host\s+host\s+auto\s+node -e/m);
+      assert.ok(!result.stdout.includes('Federation Studio'), 'no Studio');
+      assert.ok(!existsSync(path.join(dir, 'marker')), 'command never ran');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('--dry-run --json emits exactly plan then exit, byte-identical across runs', async () => {
+    const first = await runToCompletion(['--dry-run', '--json']);
+    const second = await runToCompletion(['--dry-run', '--json']);
+    assert.equal(first.code, 0, first.stderr);
+    assert.equal(first.stdout, second.stdout);
+    const events = first.stdout
+      .split('\n')
+      .filter((line) => line !== '')
+      .map((line) => JSON.parse(line) as DevEvent);
+    assert.deepEqual(
+      events.map((e) => e.event),
+      ['plan', 'exit']
+    );
+    assert.deepEqual(
+      events[0]!.apps!.map((a) => [a.app, a.role, a.port]),
+      [
+        ['host', 'host', null],
+        ['mini_auth', 'remote', 8082],
+        ['mini_store', 'remote', 8083],
+      ]
+    );
+    assert.equal(events[1]!.code, 0);
+  });
+
+  it('a busy declared port is reported and exits 1 without spawning', async () => {
+    const blocker = net.createServer();
+    await new Promise<void>((resolve) =>
+      blocker.listen(0, '127.0.0.1', resolve)
+    );
+    const busy = (blocker.address() as net.AddressInfo).port;
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'atlas-dry-'));
+    try {
+      writeFileSync(
+        path.join(dir, 'repack-federation.json'),
+        JSON.stringify({
+          host: { manifest: './host.json', port: busy, command: 'true' },
+          remotes: {},
+        })
+      );
+      const result = await runToCompletion(['--dry-run', '--json'], dir);
+      assert.equal(result.code, 1);
+      assert.match(result.stderr, new RegExp(`port ${busy} declared by host`));
+      const exit = result.stdout
+        .split('\n')
+        .filter((line) => line.startsWith('{'))
+        .map((line) => JSON.parse(line) as DevEvent)
+        .at(-1);
+      assert.equal(exit?.code, 1);
+    } finally {
+      blocker.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('a live session emits the additive plan event before spawning', async () => {
+    const s = await session(['--ci', '--json', '--studio-port', '0']);
+    const plan = await s.waitForEvent((e) => e.event === 'plan');
+    await s.waitForStatus('host', 'starting');
+    assert.deepEqual(
+      plan.apps!.map((a) => a.app),
+      ['host', 'mini_auth', 'mini_store']
+    );
+    assert.ok(
+      s.events.findIndex((e) => e.event === 'plan') <
+        s.events.findIndex((e) => e.event === 'app'),
+      'plan precedes the first app event'
     );
     s.child.kill('SIGINT');
     assert.equal((await s.exited).code, 0);

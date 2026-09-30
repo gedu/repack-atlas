@@ -5,7 +5,8 @@
 // over the live graph, and shut everything down in order.
 //
 // `--json` event contract (PRD §7.1): one line per transition, each a single
-// JSON object — `{event:'studio', url}` once, `{event:'app', app, status,
+// JSON object — `{event:'plan', apps}` once before anything spawns (`--dry-run`
+// emits only this and `exit`), `{event:'studio', url}` once, `{event:'app', app, status,
 // port}` per status transition, `{event:'exit', code}` last. Child log
 // lines stay plain `[name]`-prefixed lines on stdout (same convention as
 // upstream `federation-dev`): parse stdout line by line and keep only
@@ -24,10 +25,18 @@ import {
 } from '../studio/index.js';
 import {
   createDevSupervisor,
+  findPortConflicts,
+  loadDevPlan,
   resolveDevPlan,
   type DevAppPlan,
   type DevPlanResult,
+  type DevSkippedApp,
 } from '../runner/supervisor.js';
+import {
+  formatPlanTable,
+  toPlanEventApps,
+  type DevPlanEventApp,
+} from '../runner/plan.js';
 import { lastValue, parseArgs, type ArgSpec } from './args.js';
 import { DEV_HELP } from './help.js';
 
@@ -38,11 +47,12 @@ const EXIT_NO_ANSWER = 2;
 export const DEV_SPEC: ArgSpec = {
   valueOptions: ['apps'],
   optionalValueOptions: ['workspace', 'studio-port'],
-  booleanFlags: ['json', 'ci', 'no-studio', 'help'],
+  booleanFlags: ['json', 'ci', 'no-studio', 'dry-run', 'help'],
 };
 
 /** One line of the `--json` stream. Additive fields only. */
 export type DevEvent =
+  | { event: 'plan'; apps: DevPlanEventApp[] }
   | { event: 'studio'; url: string }
   | { event: 'app'; app: string; status: string; port: number; pid?: number }
   | { event: 'exit'; code: number };
@@ -71,6 +81,53 @@ function openInBrowser(
   } catch {
     io.writeErr(`dev: could not open the browser (${url})`);
   }
+}
+
+/** Finding-like console note (honesty rule 7): skipped is not silent. */
+function warnSkipped(skipped: DevSkippedApp[], io: DevIo): void {
+  for (const skip of skipped) {
+    io.writeErr(`dev: warning  ${skip.key}: no "command" declared — skipped`);
+  }
+}
+
+interface DryRunInput {
+  workspace: string;
+  appNames: string[] | undefined;
+  json: boolean;
+  io: DevIo;
+  emit(event: DevEvent): void;
+  processRunner: ReturnType<typeof createNodeProcessRunner>;
+  configReader: ReturnType<typeof createWorkspaceConfigReader>;
+  manifestSource: ReturnType<typeof createManifestSource>;
+}
+
+/**
+ * `--dry-run`: print the plan and exit. Declared ports are probed (never
+ * bound) so a conflict is reported with exit 1; nothing spawns and the
+ * Studio is not served. Output holds no timestamps or ephemeral ports, so
+ * two runs on an unchanged workspace are byte-identical.
+ */
+async function runDryRun(input: DryRunInput): Promise<number> {
+  const { io, emit } = input;
+  const plan = await loadDevPlan({
+    workspaceDir: input.workspace,
+    configReader: input.configReader,
+    manifestSource: input.manifestSource,
+    ...(input.appNames !== undefined ? { apps: input.appNames } : {}),
+  });
+  if (!plan.ok) {
+    for (const reason of plan.reasons) io.writeErr(`dev: ${reason}`);
+    return EXIT_NO_ANSWER;
+  }
+  warnSkipped(plan.skipped, io);
+  emit({ event: 'plan', apps: toPlanEventApps(plan.entries) });
+  if (!input.json) io.writeOut(formatPlanTable(plan.entries));
+
+  const conflicts = await findPortConflicts(plan.entries, input.processRunner);
+  for (const conflict of conflicts) io.writeErr(`dev: ${conflict}`);
+  const code = conflicts.length > 0 ? EXIT_FOUND_ERRORS : EXIT_CLEAN;
+  emit({ event: 'exit', code });
+  return code;
 }
 
 export async function runDevCommand(
@@ -131,6 +188,19 @@ export async function runDevCommand(
   const configReader = createWorkspaceConfigReader(fs);
   const manifestSource = createManifestSource(fs);
 
+  if (parsed.flags.has('dry-run')) {
+    return runDryRun({
+      workspace,
+      appNames,
+      json,
+      io,
+      emit,
+      processRunner,
+      configReader,
+      manifestSource,
+    });
+  }
+
   // 1. Plan. Nothing spawns before the whole plan resolves (upstream rule:
   // a port conflict fails naming the app, never a half-started session).
   const plan = await resolveDevPlan({
@@ -144,12 +214,8 @@ export async function runDevCommand(
     for (const reason of plan.reasons) io.writeErr(`dev: ${reason}`);
     return EXIT_NO_ANSWER;
   }
-  if (plan.skipped.length > 0) {
-    // Finding-like console note (honesty rule 7): skipped is not silent.
-    for (const skip of plan.skipped) {
-      io.writeErr(`dev: warning  ${skip.key}: no "command" declared — skipped`);
-    }
-  }
+  warnSkipped(plan.skipped, io);
+  emit({ event: 'plan', apps: toPlanEventApps(plan.entries) });
 
   // 2. Studio before spawning: its bind failure must not orphan children.
   const supervisorRef: { current: ReturnType<typeof createDevSupervisor> | null } =

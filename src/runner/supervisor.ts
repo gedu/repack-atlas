@@ -38,11 +38,17 @@ import {
   type ProcessRunner,
 } from '../core/index.js';
 import type { AtlasWorkspaceConfigReader } from '../adapters/index.js';
+import {
+  buildDevPlan,
+  HOST_APP_KEY,
+  type DevPlanEntry,
+  type DevSkippedApp,
+} from './plan.js';
 
-/** `--apps` / config key of the host entry (not its federation name). */
-export const HOST_APP_KEY = 'host';
 /** Fallback node name when the host manifest cannot be read. */
 const HOST_FALLBACK_NAME = 'host';
+
+export { HOST_APP_KEY };
 
 export interface DevAppPlan {
   /** Config key: `host` or the remote's name in `remotes`. */
@@ -59,10 +65,13 @@ export interface DevAppPlan {
   manifestPath?: string;
 }
 
-export interface DevSkippedApp {
-  key: string;
-  name: string;
-  reason: string;
+export type { DevSkippedApp };
+
+/** A plan with no ports allocated yet (what `--dry-run` reports). */
+export interface LoadedDevPlan {
+  configDir: string;
+  entries: DevPlanEntry[];
+  skipped: DevSkippedApp[];
 }
 
 export type DevPlanResult =
@@ -70,6 +79,8 @@ export type DevPlanResult =
   | {
       ok: true;
       configDir: string;
+      /** Pure plan entries the live apps were allocated from. */
+      entries: DevPlanEntry[];
       apps: DevAppPlan[];
       skipped: DevSkippedApp[];
       /** Apps listed in the config without a `command` (skipped, warned). */
@@ -85,21 +96,14 @@ export interface DevPlanOptions {
   apps?: string[];
 }
 
-/** Resolve `root`/`manifest` refs the way the doctor does (URLs stay). */
-function resolveRef(configDir: string, ref: string): string {
-  return isUrlSource(ref) ? ref : path.resolve(configDir, ref);
-}
-
 /**
- * Load the workspace config and produce the exact spawn plan: subset
- * filtering, port resolution (declared ports probed BEFORE spawning; apps
- * without one get an OS-assigned free port), and the per-app env inputs.
- * Never throws; every failure comes back as `reasons` (the CLI maps them
- * to exit 2 — the session could not be planned).
+ * Read the config and host manifest, then build the pure plan. Reads files
+ * but never probes or binds ports, so it is safe for `--dry-run`. Never
+ * throws; failures come back as `reasons` (the CLI maps them to exit 2).
  */
-export async function resolveDevPlan(
-  options: DevPlanOptions
-): Promise<DevPlanResult> {
+export async function loadDevPlan(
+  options: Omit<DevPlanOptions, 'processRunner'>
+): Promise<({ ok: true } & LoadedDevPlan) | { ok: false; reasons: string[] }> {
   const loaded = await options.configReader.load(options.workspaceDir);
   if (loaded.status === 'missing') {
     return {
@@ -119,51 +123,13 @@ export async function resolveDevPlan(
   const { config, filePath } = loaded;
   const configDir = path.dirname(filePath);
 
-  // Roster keyed by config key; the host participates under the literal
-  // key `host`, remotes under their config names.
-  type Entry = {
-    key: string;
-    role: 'host' | 'remote';
-    manifest: string;
-    root?: string;
-    port?: number;
-    command?: string;
-  };
-  const entries: Entry[] = [
-    {
-      key: HOST_APP_KEY,
-      role: 'host',
-      ...config.host,
-    },
-    ...Object.entries(config.remotes).map(([key, remote]) => ({
-      key,
-      role: 'remote' as const,
-      ...remote,
-    })),
-  ];
-
-  const known = new Set(entries.map((entry) => entry.key));
-  if (options.apps) {
-    const unknown = options.apps.filter((name) => !known.has(name));
-    if (unknown.length > 0) {
-      return {
-        ok: false,
-        reasons: [
-          `--apps names unknown apps: ${unknown.join(', ')} (known: ${[...known].sort().join(', ')})`,
-        ],
-      };
-    }
-  }
-  const selected = options.apps
-    ? entries.filter((entry) => options.apps!.includes(entry.key))
-    : entries;
-
   // The host's graph node name is its manifest `name` (core/graph.ts
   // roster rule); statuses must be keyed by it for /api/graph to match.
   let hostName = HOST_FALLBACK_NAME;
-  const hostEntry = entries.find((entry) => entry.key === HOST_APP_KEY)!;
   const hostManifestResult = await options.manifestSource.load(
-    resolveRef(configDir, hostEntry.manifest)
+    isUrlSource(config.host.manifest)
+      ? config.host.manifest
+      : path.resolve(configDir, config.host.manifest)
   );
   if (
     hostManifestResult.status === 'ok' &&
@@ -173,71 +139,95 @@ export async function resolveDevPlan(
     hostName = hostManifestResult.manifest.name;
   }
 
-  const apps: DevAppPlan[] = [];
-  const skipped: DevSkippedApp[] = [];
-  const commandless: DevSkippedApp[] = [];
+  const built = buildDevPlan({
+    config,
+    configDir,
+    hostName,
+    ...(options.apps !== undefined ? { apps: options.apps } : {}),
+  });
+  if (!built.ok) return built;
+  return {
+    ok: true,
+    configDir,
+    entries: built.entries,
+    skipped: built.skipped,
+  };
+}
 
-  for (const entry of selected) {
-    const name =
-      entry.role === 'host' ? hostName : entry.key;
-    if (entry.command === undefined) {
-      const skip = {
-        key: entry.key,
-        name,
-        reason:
-          'no "command" in repack-federation.json — skipped (declare one to run it)',
-      };
-      skipped.push(skip);
-      commandless.push(skip);
-      continue;
+/**
+ * Probe declared ports (busy → conflict) without binding anything. Shared by
+ * the live allocation and `--dry-run`, which reports every conflict.
+ */
+export async function findPortConflicts(
+  entries: DevPlanEntry[],
+  processRunner: ProcessRunner
+): Promise<string[]> {
+  const conflicts: string[] = [];
+  for (const entry of entries) {
+    if (
+      entry.declaredPort !== null &&
+      (await processRunner.isPortBusy(entry.declaredPort))
+    ) {
+      conflicts.push(
+        `port ${entry.declaredPort} declared by ${entry.key} is already busy`
+      );
     }
+  }
+  return conflicts;
+}
 
+/**
+ * Load the plan and allocate ports for the live path: declared ports probed
+ * BEFORE spawning (first busy one fails the plan); apps without one get an
+ * OS-assigned free port. Never throws.
+ */
+export async function resolveDevPlan(
+  options: DevPlanOptions
+): Promise<DevPlanResult> {
+  const loaded = await loadDevPlan(options);
+  if (!loaded.ok) return loaded;
+
+  const apps: DevAppPlan[] = [];
+  for (const entry of loaded.entries) {
     let port: number;
     let portSource: DevAppPlan['portSource'];
-    if (entry.port !== undefined) {
-      if (
-        !Number.isInteger(entry.port) ||
-        entry.port < 1 ||
-        entry.port > 65_535
-      ) {
-        return {
-          ok: false,
-          reasons: [`${entry.key}.port must be a TCP port number (1-65535)`],
-        };
-      }
-      if (await options.processRunner.isPortBusy(entry.port)) {
+    if (entry.declaredPort !== null) {
+      if (await options.processRunner.isPortBusy(entry.declaredPort)) {
         return {
           ok: false,
           reasons: [
-            `port ${entry.port} declared by ${entry.key} is already busy`,
+            `port ${entry.declaredPort} declared by ${entry.key} is already busy`,
           ],
         };
       }
-      port = entry.port;
+      port = entry.declaredPort;
       portSource = 'declared';
     } else {
       port = await options.processRunner.findFreePort();
       portSource = 'auto';
     }
-
-    const manifestPath = isUrlSource(entry.manifest)
-      ? undefined
-      : resolveRef(configDir, entry.manifest);
     apps.push({
       key: entry.key,
-      name,
+      name: entry.name,
       role: entry.role,
       command: entry.command,
       port,
       portSource,
-      ...(entry.root !== undefined
-        ? { root: path.resolve(configDir, entry.root) }
+      ...(entry.root !== undefined ? { root: entry.root } : {}),
+      ...(entry.manifestPath !== undefined
+        ? { manifestPath: entry.manifestPath }
         : {}),
-      ...(manifestPath !== undefined ? { manifestPath } : {}),
     });
   }
 
-  return { ok: true, configDir, apps, skipped, commandless };
+  return {
+    ok: true,
+    configDir: loaded.configDir,
+    entries: loaded.entries,
+    apps,
+    skipped: loaded.skipped,
+    commandless: loaded.skipped,
+  };
 }
 
 /** Everything the supervisor emits, as data (the CLI renders/serializes). */

@@ -102,7 +102,7 @@ export const DEV_HELP = `repack-atlas dev — supervised workspace runner + read
 
 Usage
   repack-atlas dev [--workspace [dir]] [--apps <list>] [--studio-port <n>]
-                   [--no-studio] [--ci] [--json]
+                   [--no-studio] [--ci] [--dry-run] [--json]
 
 Each app starts only when its repack-federation.json entry declares a
 "command" (host.command or remotes.<name>.command). The command runs
@@ -122,9 +122,15 @@ Options
                        8099)
   --no-studio          Do not serve the Studio
   --ci                 No key handling even on a TTY (browser never opens)
-  --json               One JSON event per line: {event:'studio',url} once,
+  --dry-run            Print the plan (app, role, port or auto, command, cwd)
+                       and exit: nothing spawns, no Studio. Declared ports
+                       are probed; a busy one is reported and exits 1.
+  --json               One JSON event per line: {event:'plan',apps} once
+                       before anything spawns (app, role, port|null = auto,
+                       command, cwd), {event:'studio',url} once,
                        {event:'app',app,status,port} per status transition,
-                       {event:'exit',code} last. Child logs stay [name]-
+                       {event:'exit',code} last. With --dry-run only plan
+                       and exit are emitted, identical across runs. Child logs stay [name]-
                        prefixed plain lines: keep only lines starting with {.
   --help               Print this help
 
@@ -134,7 +140,8 @@ Keys (interactive TTY only; degrades to Ctrl-C without one)
 
 Exit codes
   0  clean shutdown, no app died unexpectedly
-  1  an app died unexpectedly during the session
+  1  an app died unexpectedly during the session, or --dry-run found a
+     declared port busy
   2  could not answer (bad argv, no/invalid config, unknown --apps name,
      declared port busy, Studio could not listen)
 `;
