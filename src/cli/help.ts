@@ -9,6 +9,7 @@ Usage
   repack-atlas <command> [options]
 
 Commands
+  dev         Run the workspace: supervised dev servers + read-only Studio
   doctor      Compare host and remote federation manifests
   inspect     Pretty-print a federation manifest (file, directory or URL)
   init        Generate/repair a repack-federation.json skeleton
@@ -91,4 +92,45 @@ Usage
 Exit codes
   0  plan printed or config written/repaired
   2  could not answer (no apps discovered, workspace missing)
+`;
+
+export const DEV_HELP = `repack-atlas dev — supervised workspace runner + read-only Studio
+
+Usage
+  repack-atlas dev [--workspace [dir]] [--apps <list>] [--studio-port <n>]
+                   [--no-studio] [--ci] [--json]
+
+Each app starts only when its repack-federation.json entry declares a
+"command" (host.command or remotes.<name>.command). The command runs
+through a shell with the workspace config's directory as cwd, and the
+runner injects ATLAS_APP_NAME, ATLAS_APP_PORT, ATLAS_APP_ROOT and
+ATLAS_APP_MANIFEST (absolute file manifests only) into its environment.
+Apps without a command are skipped with a warning, never guessed.
+Readiness = the app's port answers on 127.0.0.1 (declared ports are
+probed free BEFORE spawning; apps without one get a free port via
+ATLAS_APP_PORT).
+
+Options
+  --workspace [dir]    Discover repack-federation.json walking up from dir
+                       (default: cwd)
+  --apps <list>        Comma-separated config keys to run (host, remotes.<name>)
+  --studio-port <n>    Studio port (0 = ephemeral; default: first free from
+                       8099)
+  --no-studio          Do not serve the Studio
+  --ci                 No key handling even on a TTY (browser never opens)
+  --json               One JSON event per line: {event:'studio',url} once,
+                       {event:'app',app,status,port} per status transition,
+                       {event:'exit',code} last. Child logs stay [name]-
+                       prefixed plain lines: keep only lines starting with {.
+  --help               Print this help
+
+Keys (interactive TTY only; degrades to Ctrl-C without one)
+  v / o   Open the Studio URL in the browser (the URL is logged regardless)
+  q       Quit — same as Ctrl-C (SIGINT → grace → kill each process group)
+
+Exit codes
+  0  clean shutdown, no app died unexpectedly
+  1  an app died unexpectedly during the session
+  2  could not answer (bad argv, no/invalid config, unknown --apps name,
+     declared port busy, Studio could not listen)
 `;
