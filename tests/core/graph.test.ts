@@ -306,6 +306,53 @@ describe('buildFederationGraph with module-level references', () => {
     );
   });
 
+  it('carries the host port from the config onto the host node', () => {
+    const hostConfig = {
+      host: { manifest: './host.json', port: 8081 },
+      remotes: { wallet: { manifest: './wallet.json', port: 9000 } },
+    } as FederationConfig;
+    const graph = buildFederationGraph(
+      hostConfig,
+      [{ name: 'host', role: 'host', manifest: hostManifest }],
+      []
+    );
+    assert.equal(graph.apps.find((app) => app.role === 'host')?.port, 8081);
+  });
+
+  it('keeps the host port when the host manifest is missing', () => {
+    const graph = buildFederationGraph(
+      {
+        host: { manifest: './host.json', port: 8081 },
+        remotes: {},
+      } as FederationConfig,
+      [],
+      []
+    );
+    const host = graph.apps.find((app) => app.role === 'host');
+    assert.equal(host?.name, 'host');
+    assert.equal(host?.port, 8081);
+  });
+
+  it('keeps the host port when the manifest name differs from the config key', () => {
+    const graph = buildFederationGraph(
+      {
+        host: { manifest: './host.json', port: 8081 },
+        remotes: {},
+      } as FederationConfig,
+      [
+        {
+          name: 'host',
+          role: 'host',
+          manifest: { manifestVersion: 1, id: 'super_app', name: 'super_app' },
+        },
+      ],
+      []
+    );
+    const host = graph.apps.find((app) => app.role === 'host');
+    assert.equal(host?.port, 8081);
+    assert.equal(graph.apps.filter((app) => app.role === 'host').length, 1);
+  });
+
   it('flags a self-referencing app as cyclic', () => {
     const graph = buildFederationGraph(
       { host: { manifest: './h.json' }, remotes: {} } as FederationConfig,
