@@ -3,9 +3,9 @@
 // from Re.Pack-adjacent code is re-exported here; `vendored/**` imports are
 // lint-fenced to this directory.
 //
-// This file is also the exports request: when Re.Pack core ships these
-// exports (PRD §8.2), the vendored re-exports below are the concrete list to
-// delete in the swap (see VENDORED.md).
+// The vendored code is an Atlas-owned fork (Re.Pack will not merge the
+// upstream manifest branch; PRD §8.2), so this file is Atlas's own public
+// bridge surface, not a request to Re.Pack core. Provenance: VENDORED.md.
 
 import { createRequire } from 'node:module';
 import path from 'node:path';

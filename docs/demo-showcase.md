@@ -223,12 +223,10 @@ the voiceover.
 - Hexagonal layout in one sentence: `src/core` is bundler-agnostic rules
   (doctor, graph, exit-code asymmetry); `src/adapters` implement ports;
   `src/repack-bridge` is the only Re.Pack-facing surface, with a provenance
-  ledger (`VENDORED.md`) and a documented swap condition for when the
-  manifest plugin merges upstream.
-- The manifest plugin is vendored from `callstack/repack`
-  `feat/federation-manifest` @ `c5df67f0` because it is not merged yet;
-  when it merges, users switch `manifest: true` to Re.Pack's own option and
-  the bridge block is deleted in one commit.
+  ledger (`VENDORED.md`) for the Atlas-owned fork of the manifest plugin.
+- The manifest plugin was copied from `callstack/repack`
+  `feat/federation-manifest` @ `c5df67f0`. Re.Pack will not merge it, so it
+  stays as an Atlas-owned fork and supported Atlas package.
 - Honest limits to state rather than dodge: static analysis reports
   `confidence: static | heuristic` and heuristic results downgrade to
   advisories; `SHARED_VERSION_DRIFT` needs manifests that were actually

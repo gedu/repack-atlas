@@ -150,8 +150,8 @@ sent upstream**).
 - [ ] Skill-sync CI check fails if any skill is missing an adapter link or an
       `AGENTS.md` catalog row (§10.3).
 - [ ] One external contributor can go issue → PR → green CI using only repo files.
-- [ ] `VENDORED.md` cost tracked: the swap plan (§8.2) has a dated owner per
-      vendored block.
+- [ ] `VENDORED.md` provenance kept: every vendored file has its upstream path,
+      source commit and MIT header (the fork is Atlas-owned, §8.2).
 
 ### Phase 3 — Incubator transfer
 
@@ -196,20 +196,24 @@ decision recorded in `docs/decisions/`.
   the repack dev-server has no sanctioned route extension point —
   `packages/dev-server/src/createServer.ts:123-142` on the fork).
 
-### 6.2 The repack bridge (vendor → swap)
+### 6.2 The repack bridge (Atlas-owned fork)
 
 Re.Pack's `package.json` ships a strict `exports` map (`.`, `./client`,
 `./commands`, `./commands/*`, `./mf/*`, loaders, `./package.json`); deep
 `dist/...` imports throw `ERR_PACKAGE_PATH_NOT_EXPORTED`. That, plus the fact that
-the tooling code is still unmerged upstream, is why the demo **vendors** instead
-of waiting.
+the tooling code lives on an unmerged upstream branch, is why the manifest plugin
+was **vendored** from `feat/federation-manifest` @ `c5df67f0` instead of waiting.
+The owner decided on 2026-09-30 that this branch (PR #1463) will never be merged
+into Re.Pack, so the copy stays: it is an **Atlas-owned fork** and a supported
+Atlas package, not a stopgap. Atlas may evolve it, and Re.Pack / Module
+Federation compatibility is validated by Atlas, not upstream.
 
 ```
 src/repack-bridge/
 ├── index.ts     # the ONLY import surface for the whole app
-├── vendored/    # copied Re.Pack code, MIT headers intact
+├── vendored/    # Atlas-owned fork of Re.Pack code, MIT headers intact
 └── …            # thin wrappers: resolve repack from the USER project
-VENDORED.md      # per file: upstream path + source commit (c5df67f0) + why vendored
+VENDORED.md      # per file: upstream path + source commit (c5df67f0) + provenance
 ```
 
 Rules (lint-enforced):
@@ -221,11 +225,13 @@ Rules (lint-enforced):
    (Gradle-style node_modules walk):
    `createRequire(path.join(projectRoot, 'package.json'))`. Never resolved from
    Atlas's own tree.
-3. Every vendored file records its source in `VENDORED.md` at copy time; updating
-   vendored code is a deliberate, reviewed diff against upstream, not a silent edit.
-4. **`index.ts` is the exports request.** When core exports what we need, we delete
-   the vendored block, re-export from `@callstack/repack`, and the git diff of
-   `index.ts` *is* the concrete list of exports core must add (§8.2).
+3. Every vendored file records its source in `VENDORED.md` at copy time and keeps
+   its MIT header (license obligation). Changes to the fork are ordinary
+   reviewed diffs; record each one in `VENDORED.md` as an adjustment.
+4. **`index.ts` is the bridge's public surface.** It re-exports the forked
+   manifest plugin behind Atlas's own API (§8.2). `repack-atlas/plugin` and
+   `repack-atlas/introspection` are Atlas public API: semver applies once
+   published.
 
 ### 6.3 The wrapper rule
 
@@ -240,7 +246,7 @@ Wrap what is **volatile or will be replaced**; do not wrap the stable world.
 | Process spawning (bundler, ports, simulators) | |
 
 One adapter per wrapped thing, interface owned by core. This is what makes the
-fixtures (§9) and the vendor→swap plan possible without rewrites.
+fixtures (§9) and later replacement of any wrapped piece possible without rewrites.
 
 ## 7. Product surface
 
@@ -312,27 +318,35 @@ strings. Localhost bind only; no CORS beyond same-origin.
 
 1. **Federation manifest plugin** — `src/plugins/federationManifest/` + hooks in
    `ModuleFederationPluginV1/V2` (~2k lines of #1463). It must live where the
-   compilation lives. Until it lands, **the demo adds the vendored manifest
-   plugin to each app's rspack config** in the showcase fork.
+   compilation lives. It was never merged into Re.Pack
+   (owner decision, 2026-09-30), so **Atlas ships its own fork of the manifest
+   plugin** and apps add it to their rspack config.
 2. **Dev-server `normalizeOptions` port fix** — its own small PR.
 3. Everything else (#1466 workspace tooling, #1467 runner, Studio) moves here;
    those PRs are expected to close in favour of Atlas + enabling changes.
 
-### 8.2 The exports request (vendor → swap)
+### 8.2 The Atlas-owned manifest plugin
 
-`src/repack-bridge/index.ts` is written as if the exports already existed. When
-core lands them, each vendored block is replaced by a re-export in one commit.
-Expected request shape (finalised when the bridge is real, this is the forecast):
+History: the bridge was written as an exports request, to be swapped for a
+re-export once Re.Pack core merged the manifest plugin. On 2026-09-30 the owner
+decided PR #1463 will never merge, so there is no swap. Atlas owns the fork and
+supports it (risk R2).
 
-- stable manifest **types + schema** (or rely on the published MF2 manifest spec),
-- a **config-introspection** hook or documented way to read federation options
-  from a user config without deep-importing internals,
-- **dev-server asset-route** guarantee for the manifest filename,
-- the `normalizeOptions` port fix.
+What Atlas now owns and validates itself:
 
-Trade-off accepted: during the vendor window there are two copies of ~a few
-thousand lines. Mitigations: `VENDORED.md` provenance, lint fence, small vendored
-surface (only what the demo needs), and the swap being a mechanical diff.
+- the manifest **types + schema** as emitted by the plugin (aligned with the
+  published MF2 manifest spec where it applies),
+- **config introspection** (`repack-atlas/introspection`), reading federation
+  options from a user config without deep-importing Re.Pack internals,
+- **dev-server asset visibility** for the manifest filename (the `writeToDisk`
+  option of `repack-atlas/plugin`, `VENDORED.md` B1),
+- compatibility with the Re.Pack and Module Federation versions users run.
+
+`repack-atlas/plugin` and `repack-atlas/introspection` are Atlas public API;
+semver applies once the package is published. Trade-off accepted: Atlas carries
+~a few thousand lines it would otherwise have borrowed, and tracks Re.Pack
+changes itself. Mitigations: `VENDORED.md` provenance, the lint fence, a small
+surface (only what Atlas needs), and tests against fixtures.
 
 ## 9. Testing strategy
 
@@ -396,7 +410,7 @@ Copy the prowler pattern, simplified ([prowler/skills/setup.sh](https://github.c
 | Skill | Purpose | Trigger (goes in `description`) |
 |---|---|---|
 | `atlas-dev-setup` ★ | Clone → install → run fixture demo in seconds; the fastest "it works" path. | "set up, install, run, or debug this repo locally" |
-| `atlas-bridge-vendoring` ★ | Add/update/remove vendored code safely: VENDORED.md protocol, lint fence, peerDependency resolution, swap procedure. | "touching src/repack-bridge/, vendored/, or the exports swap" |
+| `atlas-bridge-vendoring` ★ | Add/update/remove vendored code safely: VENDORED.md protocol, lint fence, peerDependency resolution. | "touching src/repack-bridge/ or vendored/" |
 | `atlas-doctor-finding` ★ | Add a new doctor finding end-to-end: code, fixture variant, `--json` shape, exit code, docs, test. | "adding or changing a doctor check/finding" |
 | `atlas-studio` | Change Studio safely: read-only rule, untrusted-render rule, visual tokens, page.ts structure, Playwright update. | "touching studio/, page HTML, or graph rendering" |
 | `atlas-runner` | Dev-runner changes: supervisor lifecycle, keymap, ports, SSE, `--json` events. | "touching the dev runner or its flags/keys" |
@@ -497,8 +511,8 @@ pattern); no `pull_request_target` with write tokens.
 
 | # | Risk | Mitigation |
 |---|---|---|
-| R1 | **Vendored code drifts** from repack while upstream evolves (or the exports request never lands). | Small vendored surface; VENDORED.md + CI provenance check; bridge index = the ask, tracked as a public checklist; monthly re-evaluation vs repack `main`. |
-| R2 | Demo depends on unmerged core changes (manifest plugin). | Demo ships the vendored manifest plugin in showcase configs; swap when the core PR lands; if core rejects it permanently, the plugin becomes a supported Atlas package (decision point recorded). |
+| R1 | **The forked code drifts** from Re.Pack and Module Federation as they evolve. | Small forked surface; VENDORED.md + CI provenance check; fixtures and tests; Atlas validates compatibility with the Re.Pack versions users run. |
+| R2 | Demo depends on unmerged core changes (manifest plugin). | **Resolved 2026-09-30 (owner decision):** PR #1463 will never be merged into Re.Pack, so the plugin is an Atlas-owned fork and a supported Atlas package. No vendor-to-export swap. Compatibility with Re.Pack / Module Federation is validated by Atlas. |
 | R3 | **Maintainer bandwidth** repeats here (this repo started for that reason). | 400-line PR budget, skills that automate review-relevant conventions, small surface, one reviewer max per PR by design. |
 | R4 | Manifest is **untrusted input** (XSS via Studio). | textContent/SVG-text-only rule + Playwright XSS fixture (manifest containing `<script>` renders as text). |
 | R5 | Name collision: "Atlas" is also RN's known build-system codename. | Confirm naming before public launch; alternatives reserved on npm/GitHub per 2026-09-29 check. |

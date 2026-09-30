@@ -5,13 +5,13 @@
 // typing from `@rspack/core`, which is not a dependency of Atlas (the bundler
 // lives in the user project). Importing it would either pull rspack into our
 // tree or break `pnpm typecheck`. The only touched line in the vendored copy
-// swaps that one type-only import for this file; no logic changes.
+// redirects that one type-only import to this file; no logic changes.
 //
 // These types describe exactly the surface `applyFederationManifest` uses,
 // nothing more. They are intentionally loose (`unknown` returns) so the
 // vendored code keeps compiling against whatever rspack version the user
-// project ships. Swap condition: once Re.Pack exports a typed manifest
-// application entry point (VENDORED.md), this file goes away with it.
+// project ships. Atlas owns this file along with the forked manifest plugin
+// (VENDORED.md).
 
 /** The compilation hooks the manifest plugin taps. */
 export interface BridgeCompilation {

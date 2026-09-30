@@ -7,17 +7,17 @@ Every file under `src/repack-bridge/vendored/**` is listed here (CI
 - **Branch**: `feat/federation-manifest`
 - **Commit**: `c5df67f0`
 
-Common "why vendored": the federation manifest plugin is **not merged
-upstream** (open PR #1463) and Re.Pack's strict `exports` map blocks deep
-`dist/...` imports (`ERR_PACKAGE_PATH_NOT_EXPORTED`), so Atlas cannot reach it
-as a dependency.
+Why this code lives here: the federation manifest plugin was copied from an
+unmerged Re.Pack branch (PR #1463) because Re.Pack's strict `exports` map
+blocks deep `dist/...` imports (`ERR_PACKAGE_PATH_NOT_EXPORTED`). That PR will
+never be merged into Re.Pack (owner decision, 2026-09-30), so there is no swap
+back to a Re.Pack export. The code is an **Atlas-owned fork** and a supported
+Atlas package: Atlas may evolve it, and Re.Pack / Module Federation
+compatibility is validated by Atlas, not upstream. This ledger stays for
+provenance and the MIT license obligation: each entry records where the file
+came from and the MIT header it carries.
 
-Common "swap condition": Re.Pack core merges the manifest plugin and exports
-its types/schema (PRD §8.1 item 1, §8.2; PR #1463 lands) — then each block is
-deleted and re-exported from `@callstack/repack` in one commit (skill:
-`atlas-bridge-vendoring`, "Swap procedure").
-
-**Owner**: Repack Atlas maintainers (swap tracked against PR #1463).
+**Owner**: Repack Atlas maintainers.
 
 ## Vendored Adjustments (all of them)
 
@@ -25,8 +25,7 @@ deleted and re-exported from `@callstack/repack` in one commit (skill:
   imports `Compiler as RspackCompiler` from `@rspack/core`. rspack is not an
   Atlas dependency (the bundler lives in the user project), so the import is
   redirected to the bridge-owned minimal structural types in
-  `src/repack-bridge/rspack-compiler.js`. No logic changed. Dropped with the
-  swap.
+  `src/repack-bridge/rspack-compiler.js`. No logic changed.
 - **A2 — MIT headers added**: upstream ships **no per-file license headers**
   in `plugins/federationManifest/*` (MIT lives only in the repo-root
   `LICENSE`, "Copyright (c) 2025 Callstack"). Each vendored copy carries an
@@ -45,16 +44,17 @@ deleted and re-exported from `@callstack/repack` in one commit (skill:
     an `!== undefined` guard (redundant at runtime — `keys.length === 1`
     already proves definedness — required by `noUncheckedIndexedAccess`).
 
-No other edits exist. Verify with:
-`diff <upstream file> <vendored file>` — only the header (A2), A1 in
-`applyFederationManifest.ts`, and the A3 annotation sites appear.
+These are the edits made at copy time; future Atlas changes to the fork are
+recorded here as further adjustments. To see how a file differs from its
+source, run `diff <upstream file at c5df67f0> <vendored file>`; at the time of
+the copy only the header (A2), A1 in `applyFederationManifest.ts`, and the A3
+annotation sites appear.
 
 ## Bridge additions (non-vendored)
 
 These live in Atlas-owned files (`src/repack-bridge/plugin.ts`,
-`src/repack-bridge/rspack-compiler.ts`), **not** under `vendored/` — the
-vendored files above remain byte-identical to upstream commit `c5df67f0`
-modulo A1–A3, so the diff-verification promise above still holds.
+`src/repack-bridge/rspack-compiler.ts`), **not** under `vendored/`. So far the
+vendored files above match upstream commit `c5df67f0` modulo A1–A3.
 
 - **B1 — `writeToDisk` option on the `repack-atlas/plugin` wrapper**:
   under the Re.Pack dev server (`@callstack/repack-dev-server` 5.3.0, watch
@@ -69,9 +69,9 @@ modulo A1–A3, so the diff-verification promise above still holds.
   `<compiler.context>/<filePath>/<fileName>`. Missing assets are skipped
   silently; disk failures degrade to a compilation warning and never fail
   the build.
-  **Swap condition**: when the dev server serves emitted assets, or upstream
-  (PR #1463 branch) ships a manifest-on-disk option itself, remove
-  `writeToDisk` from the wrapper and document its removal here.
+  Atlas keeps this option as part of its supported plugin API; if the Re.Pack
+  dev server later serves emitted assets, revisit it and record the decision
+  here.
 
 ## `src/repack-bridge/vendored/federationManifest/types.ts`
 
@@ -79,12 +79,8 @@ modulo A1–A3, so the diff-verification promise above still holds.
 - **Branch**: `feat/federation-manifest`
 - **Commit**: `c5df67f0`
 - **Upstream path**: `packages/repack/src/plugins/federationManifest/types.ts`
-- **Why vendored**: manifest schema/option types; not merged upstream and the
-  `exports` map blocks deep imports, so Atlas cannot reach them.
-- **Swap condition**: core merges the manifest plugin and exports the manifest
-  types (PRD §8.1 item 1 / PR #1463); then re-export from `@callstack/repack`
-  and delete.
-- **Owner**: Repack Atlas maintainers (swap tracked against PR #1463)
+- **Why vendored**: manifest schema/option types; copied from the unmerged
+  upstream branch because the `exports` map blocks deep imports.
 
 ## `src/repack-bridge/vendored/federationManifest/index.ts`
 
@@ -92,10 +88,7 @@ modulo A1–A3, so the diff-verification promise above still holds.
 - **Branch**: `feat/federation-manifest`
 - **Commit**: `c5df67f0`
 - **Upstream path**: `packages/repack/src/plugins/federationManifest/index.ts`
-- **Why vendored**: barrel for the manifest module; same blocking reasons.
-- **Swap condition**: identical to `types.ts` — replaced by a re-export from
-  `@callstack/repack` when PR #1463 lands.
-- **Owner**: Repack Atlas maintainers (swap tracked against PR #1463)
+- **Why vendored**: barrel for the manifest module; same reasons.
 
 ## `src/repack-bridge/vendored/federationManifest/applyFederationManifest.ts`
 
@@ -104,12 +97,8 @@ modulo A1–A3, so the diff-verification promise above still holds.
 - **Commit**: `c5df67f0`
 - **Upstream path**: `packages/repack/src/plugins/federationManifest/applyFederationManifest.ts`
 - **Why vendored**: the compiler-hook wiring that emits the manifest; it lives
-  inside the MF plugin upstream and is unreachable (unmerged + exports map).
-- **Swap condition**: PR #1463 lands and the `manifest` option ships on
-  Re.Pack's `ModuleFederationPluginV1/V2`; users then drop
-  `repack-atlas/plugin` from their configs and Atlas re-exports from
-  `@callstack/repack`.
-- **Owner**: Repack Atlas maintainers (swap tracked against PR #1463)
+  inside the MF plugin upstream and was unreachable (unmerged + exports map).
+
 - **Local adjustments**: A1 (rspack type-only import → bridge stand-in).
 
 ## `src/repack-bridge/vendored/federationManifest/buildFederationManifest.ts`
@@ -119,10 +108,7 @@ modulo A1–A3, so the diff-verification promise above still holds.
 - **Commit**: `c5df67f0`
 - **Upstream path**: `packages/repack/src/plugins/federationManifest/buildFederationManifest.ts`
 - **Why vendored**: pure manifest-schema builder used by the emit hook; same
-  blocking reasons.
-- **Swap condition**: exported with the manifest plugin by core (PR #1463);
-  re-export and delete.
-- **Owner**: Repack Atlas maintainers (swap tracked against PR #1463)
+  reasons.
 
 ## `src/repack-bridge/vendored/federationManifest/detectNativeModules.ts`
 
@@ -131,10 +117,7 @@ modulo A1–A3, so the diff-verification promise above still holds.
 - **Commit**: `c5df67f0`
 - **Upstream path**: `packages/repack/src/plugins/federationManifest/detectNativeModules.ts`
 - **Why vendored**: RN native-module scan feeding the manifest's
-  `reactNative.nativeModules` block; same blocking reasons.
-- **Swap condition**: exported with the manifest plugin by core (PR #1463);
-  re-export and delete.
-- **Owner**: Repack Atlas maintainers (swap tracked against PR #1463)
+  `reactNative.nativeModules` block; same reasons.
 
 ## `src/repack-bridge/vendored/federationManifest/shared.ts`
 
@@ -143,8 +126,6 @@ modulo A1–A3, so the diff-verification promise above still holds.
 - **Commit**: `c5df67f0`
 - **Upstream path**: `packages/repack/src/plugins/federationManifest/shared.ts`
 - **Why vendored**: transitive helper of `buildFederationManifest.ts`
-  (`buildSharedEntries` and the shared-config normalizer); vendoring it is the
+  (`buildSharedEntries` and the shared-config normalizer); copying it is the
   only alternative to stubbing logic.
-- **Swap condition**: exported with the manifest plugin by core (PR #1463), or
-  replaced once the manifest schema is a published spec; re-export and delete.
-- **Owner**: Repack Atlas maintainers (swap tracked against PR #1463)
+

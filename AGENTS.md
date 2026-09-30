@@ -13,7 +13,8 @@ check will be closed.
    anything under `**/vendored/**` (ESLint `atlas/bridge-fence`). Vendored
    Re.Pack code needs a `VENDORED.md` entry and intact MIT headers
    (upstream `callstack/repack`, branch `feat/federation-manifest`, commit
-   `c5df67f0`). `src/repack-bridge/index.ts` is the only import surface.
+   `c5df67f0`; the code is an Atlas-owned fork, never to be swapped for a
+   Re.Pack export). `src/repack-bridge/index.ts` is the only import surface.
 2. **Core boundary.** `src/core/**` is bundler-agnostic: no imports from
    `src/repack-bridge/**`, `src/adapters/**`, `@callstack/repack`,
    `@module-federation/*`, `@rspack/*`, or `webpack` (ESLint
@@ -87,10 +88,10 @@ src/
 │                        #   cycle detection, shared-drift analysis, ports
 │                        #   (interfaces only)
 ├── repack-bridge/       # the ONLY Re.Pack import surface
-│   ├── index.ts         #   = the exports request (vendor -> swap)
+│   ├── index.ts         #   = the bridge import surface (Atlas-owned)
 │   ├── plugin.ts        #   `repack-atlas/plugin` subpath: FederationManifestPlugin
 │   │                    #   wrapper the showcase app adds to its rspack config
-│   └── vendored/        #   copied Re.Pack code, MIT headers, VENDORED.md
+│   └── vendored/        #   Atlas-owned fork of Re.Pack code, MIT headers, VENDORED.md
 ├── adapters/            # port implementations: workspace config reader,
 │                        #   manifest sources, ProjectFs, ProcessRunner
 ├── studio/              # node:http server (127.0.0.1, GET-only) + page.ts +
@@ -121,7 +122,7 @@ Direction of dependency: adapters → ports in core. Core never imports outward.
 | Skill | Trigger | Path |
 |---|---|---|
 | `agent-skills-sync` | Trigger: after creating or modifying a skill; skill missing from the AGENTS.md table; the `Agent files sync check` CI step or agent-sync --check failing; adding a new skill directory. | `.agents/skills/agent-skills-sync/SKILL.md` |
-| `atlas-bridge-vendoring` | Trigger: touching src/repack-bridge/, src/repack-bridge/vendored/, or VENDORED.md; copying code out of Re.Pack; the exports swap; a bridge import fails with ERR_PACKAGE_PATH_NOT_EXPORTED. | `.agents/skills/atlas-bridge-vendoring/SKILL.md` |
+| `atlas-bridge-vendoring` | Trigger: touching src/repack-bridge/, src/repack-bridge/vendored/, or VENDORED.md; copying code out of Re.Pack; a bridge import fails with ERR_PACKAGE_PATH_NOT_EXPORTED. | `.agents/skills/atlas-bridge-vendoring/SKILL.md` |
 | `atlas-dev-setup` | Trigger: set up, install, build, run, test, or debug this repo locally; "it does not build"; fresh clone; CI failing on a check you cannot reproduce locally. | `.agents/skills/atlas-dev-setup/SKILL.md` |
 | `atlas-doctor-finding` | Trigger: adding or changing a doctor check or finding, a finding code such as REMOTE_CYCLE or SHARED_VERSION_DRIFT, the doctor --json output shape, or a finding that has no fixture yet. | `.agents/skills/atlas-doctor-finding/SKILL.md` |
 
@@ -148,7 +149,6 @@ before writing code.
 | fixing a failing Agent files sync check CI step | `agent-skills-sync` |
 | importing or copying any code from Re.Pack | `atlas-bridge-vendoring` |
 | modifying src/repack-bridge/** | `atlas-bridge-vendoring` |
-| removing a vendored block during the exports swap | `atlas-bridge-vendoring` |
 | setting up this repo for the first time | `atlas-dev-setup` |
 | reproducing a failing CI check locally | `atlas-dev-setup` |
 | running the fixture test suite | `atlas-dev-setup` |

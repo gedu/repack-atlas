@@ -1,6 +1,7 @@
 // `repack-atlas/plugin` subpath — the demo-story surface: the showcase app
-// adds the vendored federation-manifest plugin to each app's rspack config
-// (docs/PRD.md §8.1 item 1) while the manifest plugin is unmerged upstream.
+// adds the Atlas-owned federation-manifest plugin to each app's rspack config
+// (docs/PRD.md §8.1 item 1, §8.2). Re.Pack will not merge the upstream
+// manifest branch, so this plugin is a supported Atlas package.
 //
 // Atlas code, not vendored. It mirrors how upstream wires the manifest into
 // ModuleFederationPluginV1/V2 (fork @ c5df67f0, ModuleFederationPluginV2.ts
@@ -8,9 +9,8 @@
 // options to the vendored `applyFederationManifest`, which taps the compiler
 // hooks and emits `repack-federation-manifest.json`.
 //
-// Swap condition: when Re.Pack ships a `manifest` option on its own
-// ModuleFederation plugins, users delete this plugin from their configs and
-// set `manifest: true` there instead (see VENDORED.md).
+// Public API: `repack-atlas/plugin` follows semver once published, and Atlas
+// validates compatibility with Re.Pack / Module Federation (see VENDORED.md).
 
 import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
@@ -51,8 +51,8 @@ export interface FederationManifestPluginOptions {
    *
    * Defaults to `false`: builds keep their current behavior unless opted in.
    * A disk failure never fails the build — it degrades to a compilation
-   * warning. Swap condition (VENDORED.md B1): once the dev server serves
-   * emitted assets, or upstream ships a manifest option for this, remove it.
+   * warning. Part of the supported Atlas API (VENDORED.md B1); revisit it if
+   * the Re.Pack dev server ever serves emitted assets itself.
    */
   writeToDisk?: boolean;
 }
@@ -89,8 +89,8 @@ export class FederationManifestPlugin {
   }
 
   /**
-   * Bridge-level addition (VENDORED.md B1 — the vendored files stay
-   * byte-identical to upstream): after the vendored plugin emits the
+   * Bridge-level addition (VENDORED.md B1 — kept outside `vendored/`
+   * so the forked files stay close to their source): after the vendored plugin emits the
    * manifest asset, copy it from the compilation to the app root on disk.
    */
   private applyDiskWriter(
