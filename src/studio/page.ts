@@ -201,8 +201,9 @@ export const STUDIO_PAGE_HTML = `<!doctype html>
   table.kv { width: 100%; border-collapse: collapse; font-size: 12.5px; }
   table.kv th { text-align: left; font-weight: 500; color: var(--ink-3); font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; padding: 4px 6px; border-bottom: 1px solid var(--line); }
   table.kv td { padding: 6px; border-bottom: 1px solid var(--line); font-family: var(--mono); font-variant-numeric: tabular-nums; vertical-align: top; overflow-wrap: anywhere; }
+  table.kv td.has-pill { white-space: nowrap; min-width: 88px; overflow-wrap: normal; }
   table.kv td.st { font-family: var(--sans); white-space: normal; }
-  .pill { display: inline-block; font-size: 11px; font-weight: 600; padding: 1px 7px; border-radius: 999px; }
+  .pill { display: inline-block; white-space: nowrap; font-size: 11px; font-weight: 600; padding: 1px 7px; border-radius: 999px; }
   .pill.ok { color: var(--ok); background: var(--ok-soft); }
   .pill.warn { color: var(--warn); background: var(--warn-soft); }
   .pill.bad { color: var(--bad); background: var(--bad-soft); }
@@ -383,32 +384,107 @@ export const STUDIO_PAGE_HTML = `<!doctype html>
     return { places: places, width: 40 + W + 140 + W + 40, height: viewBoxHeight };
   }
 
-  function edgeGeometry(from, to, sameColumn) {
+  // Edges inside one column must not run through the nodes between their
+  // ends: they leave the right side, bow out into the margin (one lane per
+  // overlapping edge so parallel edges never coincide) and come back onto the
+  // target's right side, arrowhead pointing left at the target.
+  function edgeGeometry(from, to, sameColumn, lane) {
     if (sameColumn) {
-      var down = to.y > from.y;
-      var offset = down ? -26 : 26;
-      var x = from.x + W / 2 + offset;
-      var y1 = down ? from.y + H : from.y;
-      var y2 = down ? to.y - 6 : to.y + H + 6;
+      var x1 = from.x + W;
+      var x2 = to.x + W + 6;
+      var shift = Math.min(lane, 3) * 10;
+      var y1 = from.y + H / 2 + shift;
+      var y2 = to.y + H / 2 + shift;
+      var bulge = 30 + lane * 22;
+      var reach = bulge / 0.75; // a cubic peaks at 3/4 of its control offset
       return {
-        d: 'M' + x + ',' + y1 + ' L' + x + ',' + y2,
-        lx: x + (down ? -46 : 46),
-        ly: (y1 + y2) / 2 + 4
+        d: 'M' + x1 + ',' + y1 + ' C' + (x1 + reach) + ',' + y1 + ' ' +
+          (x1 + reach) + ',' + y2 + ' ' + x2 + ',' + y2,
+        lx: x1 + bulge + 6, ly: (y1 + y2) / 2 + 4, anchor: 'start'
       };
     }
-    var x1 = from.x + W, y1 = from.y + H / 2;
-    var x2 = to.x - 6, y2 = to.y + H / 2;
-    var mx = (x1 + x2) / 2;
+    var cx1 = from.x + W, cy1 = from.y + H / 2;
+    var cx2 = to.x - 6, cy2 = to.y + H / 2;
+    var mx = (cx1 + cx2) / 2;
     return {
-      d: 'M' + x1 + ',' + y1 + ' C' + mx + ',' + y1 + ' ' + mx + ',' + y2 + ' ' + x2 + ',' + y2,
-      lx: mx,
-      ly: (y1 + y2) / 2 - 6
+      d: 'M' + cx1 + ',' + cy1 + ' C' + mx + ',' + cy1 + ' ' + mx + ',' + cy2 + ' ' + cx2 + ',' + cy2,
+      lx: mx, ly: (cy1 + cy2) / 2 - 6, anchor: 'middle'
     };
+  }
+
+  // Lane per same-column edge: the first lane no earlier edge with an
+  // overlapping vertical span already uses.
+  function assignLanes(edges, places) {
+    var lanes = [];
+    var spans = [];
+    for (var i = 0; i < edges.length; i++) {
+      var from = places[edges[i].from];
+      var to = places[edges[i].to];
+      lanes.push(0);
+      if (!from || !to || from.x !== to.x) { spans.push(null); continue; }
+      var span = [Math.min(from.y, to.y), Math.max(from.y, to.y), from.x];
+      spans.push(span);
+      var used = {};
+      for (var j = 0; j < i; j++) {
+        var other = spans[j];
+        if (other && other[2] === span[2] && other[0] <= span[1] && span[0] <= other[1]) used[lanes[j]] = true;
+      }
+      while (used[lanes[i]]) lanes[i]++;
+    }
+    return lanes;
+  }
+
+  function labelRect(geometry, text) {
+    var width = text.length * 6.8 + 10;
+    var x = geometry.anchor === 'start' ? geometry.lx - 5 : geometry.lx - width / 2;
+    return { x: x, y: geometry.ly - 12, width: width, height: 17 };
+  }
+  function overlaps(a, b) {
+    return a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
+  }
+
+  // Geometry and label slot for every edge, plus the width the labels need.
+  // A label never sits under a node or another label: it starts at the curve
+  // midpoint and is nudged vertically to the nearest free slot.
+  function planEdges(box) {
+    var obstacles = [];
+    var placeNames = Object.keys(box.places);
+    for (var o = 0; o < placeNames.length; o++) {
+      var at = box.places[placeNames[o]];
+      obstacles.push({ x: at.x, y: at.y, width: W, height: H });
+    }
+    var lanes = assignLanes(graph.edges, box.places);
+    var nudges = [0, -20, 20, -40, 40, -60, 60];
+    var items = [];
+    var width = box.width;
+    for (var e = 0; e < graph.edges.length; e++) {
+      var edge = graph.edges[e];
+      var from = box.places[edge.from];
+      var to = box.places[edge.to];
+      if (!from || !to) continue;
+      var geometry = edgeGeometry(from, to, from.x === to.x, lanes[e]);
+      var text = edge.label || '(app-level)';
+      var baseY = geometry.ly;
+      var rect = labelRect(geometry, text);
+      for (var t = 0; t < nudges.length; t++) {
+        geometry.ly = baseY + nudges[t];
+        rect = labelRect(geometry, text);
+        var blocked = false;
+        for (var k = 0; k < obstacles.length && !blocked; k++) blocked = overlaps(rect, obstacles[k]);
+        if (!blocked) break;
+      }
+      obstacles.push(rect);
+      width = Math.max(width, rect.x + rect.width + 16);
+      items.push({ edge: edge, geometry: geometry, text: text, rect: rect });
+    }
+    return { items: items, width: width };
   }
 
   function drawGraph() {
     clear(svg);
     var box = layout();
+    var plan = planEdges(box);
+    box.width = plan.width;
     svg.setAttribute('viewBox', '0 0 ' + box.width + ' ' + box.height);
 
     var defs = svgEl('defs', {}, svg);
@@ -426,36 +502,27 @@ export const STUDIO_PAGE_HTML = `<!doctype html>
       }
     }
 
-    var labels = [];
-    for (var e = 0; e < graph.edges.length; e++) {
-      var edge = graph.edges[e];
-      var from = box.places[edge.from];
-      var to = box.places[edge.to];
-      if (!from || !to) continue;
-      var geometry = edgeGeometry(from, to, from.x === to.x);
-      var highlighted = edge.from === selected || edge.to === selected;
-      var classes = 'edge' + (edge.cyclic ? ' cycle' : '') + (highlighted ? ' hi' : '');
-      var markerId = edge.cyclic ? 'arr-bad' : highlighted ? 'arr-hi' : 'arr';
+    for (var e = 0; e < plan.items.length; e++) {
+      var item = plan.items[e];
+      var highlighted = item.edge.from === selected || item.edge.to === selected;
+      var classes = 'edge' + (item.edge.cyclic ? ' cycle' : '') + (highlighted ? ' hi' : '');
+      var markerId = item.edge.cyclic ? 'arr-bad' : highlighted ? 'arr-hi' : 'arr';
       svgEl('path', {
-        d: geometry.d, 'class': classes, 'marker-end': 'url(#' + markerId + ')',
-        'data-edge': edge.from + '->' + edge.to
+        d: item.geometry.d, 'class': classes, 'marker-end': 'url(#' + markerId + ')',
+        'data-edge': item.edge.from + '->' + item.edge.to
       }, svg);
-      labels.push([geometry, edge]);
     }
-    for (var l = 0; l < labels.length; l++) {
-      var labelGeometry = labels[l][0];
-      var labelledEdge = labels[l][1];
+    for (var l = 0; l < plan.items.length; l++) {
+      var planned = plan.items[l];
       var group = svgEl('g', {}, svg);
-      var text = labelledEdge.label || '(app-level)';
-      var width = text.length * 6.8 + 10;
       svgEl('rect', {
-        x: labelGeometry.lx - width / 2, y: labelGeometry.ly - 12,
-        width: width, height: 17, rx: 3, 'class': 'elabel-bg'
+        x: planned.rect.x, y: planned.rect.y, width: planned.rect.width,
+        height: planned.rect.height, rx: 3, 'class': 'elabel-bg'
       }, group);
       svgText(group, {
-        x: labelGeometry.lx, y: labelGeometry.ly, 'text-anchor': 'middle',
-        'class': 'elabel' + (labelledEdge.cyclic ? ' cycle' : '')
-      }, text);
+        x: planned.geometry.lx, y: planned.geometry.ly, 'text-anchor': planned.geometry.anchor,
+        'class': 'elabel' + (planned.edge.cyclic ? ' cycle' : '')
+      }, planned.text);
     }
 
     var names = Object.keys(box.places).sort();
@@ -671,7 +738,7 @@ export const STUDIO_PAGE_HTML = `<!doctype html>
     var rowNode = el('tr');
     for (var i = 0; i < cells.length; i++) {
       var cell = cells[i];
-      var td = el('td', cell.plain ? 'st' : null);
+      var td = el('td', cell.plain ? 'st' : cell.pill ? 'has-pill' : null);
       if (cell.pill) {
         var pill = el('span', 'pill ' + cell.pill, cell.text);
         td.appendChild(pill);

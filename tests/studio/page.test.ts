@@ -133,3 +133,10 @@ describe('Studio page keeps the mock design tokens', () => {
     assert.match(page, /No bundle data available/);
   });
 });
+
+describe('Studio page keeps badges on one line', () => {
+  it('never lets a pill or a pill cell wrap', () => {
+    assert.match(page, /\.pill \{[^}]*white-space: nowrap/);
+    assert.match(page, /table\.kv td\.has-pill \{[^}]*white-space: nowrap/);
+  });
+});
