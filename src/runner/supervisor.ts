@@ -30,7 +30,6 @@
 
 import path from 'node:path';
 import {
-  isUrlSource,
   type AppRuntimeStatus,
   type FederationConfig,
   type ManifestSource,
@@ -41,9 +40,15 @@ import type { AtlasWorkspaceConfigReader } from '../adapters/index.js';
 import {
   buildDevPlan,
   HOST_APP_KEY,
+  resolveRef,
   type DevPlanEntry,
   type DevSkippedApp,
 } from './plan.js';
+import {
+  allocatePorts,
+  describeReassignments,
+  PORT_CONFLICT_HINT,
+} from './ports.js';
 
 /** Fallback node name when the host manifest cannot be read. */
 const HOST_FALLBACK_NAME = 'host';
@@ -59,7 +64,8 @@ export interface DevAppPlan {
   command: string;
   /** Runner-resolved port the readiness probe watches. */
   port: number;
-  portSource: 'declared' | 'auto';
+  /** `reassigned`: a busy declared/default port moved by `--auto-ports`. */
+  portSource: 'declared' | 'auto' | 'reassigned';
   root?: string;
   /** Absolute path of a file manifest; absent for URLs/unreadable refs. */
   manifestPath?: string;
@@ -75,7 +81,12 @@ export interface LoadedDevPlan {
 }
 
 export type DevPlanResult =
-  | { ok: false; reasons: string[] }
+  | {
+      ok: false;
+      reasons: string[];
+      /** Set when the plan failed only on busy ports (exit 1, not 2). */
+      portConflict?: true;
+    }
   | {
       ok: true;
       configDir: string;
@@ -85,6 +96,8 @@ export type DevPlanResult =
       skipped: DevSkippedApp[];
       /** Apps listed in the config without a `command` (skipped, warned). */
       commandless: DevSkippedApp[];
+      /** One line per `--auto-ports` reassignment (empty when none). */
+      reassignments: string[];
     };
 
 export interface DevPlanOptions {
@@ -94,6 +107,10 @@ export interface DevPlanOptions {
   processRunner: ProcessRunner;
   /** `--apps` list (config keys). Unknown keys fail the plan. */
   apps?: string[];
+  /** `--port`: host port override (validated by the CLI). */
+  hostPort?: number;
+  /** `--auto-ports`: busy declared ports move to a free port. */
+  autoPorts?: boolean;
 }
 
 /**
@@ -127,9 +144,7 @@ export async function loadDevPlan(
   // roster rule); statuses must be keyed by it for /api/graph to match.
   let hostName = HOST_FALLBACK_NAME;
   const hostManifestResult = await options.manifestSource.load(
-    isUrlSource(config.host.manifest)
-      ? config.host.manifest
-      : path.resolve(configDir, config.host.manifest)
+    resolveRef(configDir, config.host.manifest)
   );
   if (
     hostManifestResult.status === 'ok' &&
@@ -144,6 +159,7 @@ export async function loadDevPlan(
     configDir,
     hostName,
     ...(options.apps !== undefined ? { apps: options.apps } : {}),
+    ...(options.hostPort !== undefined ? { hostPort: options.hostPort } : {}),
   });
   if (!built.ok) return built;
   return {
@@ -155,31 +171,10 @@ export async function loadDevPlan(
 }
 
 /**
- * Probe declared ports (busy → conflict) without binding anything. Shared by
- * the live allocation and `--dry-run`, which reports every conflict.
- */
-export async function findPortConflicts(
-  entries: DevPlanEntry[],
-  processRunner: ProcessRunner
-): Promise<string[]> {
-  const conflicts: string[] = [];
-  for (const entry of entries) {
-    if (
-      entry.declaredPort !== null &&
-      (await processRunner.isPortBusy(entry.declaredPort))
-    ) {
-      conflicts.push(
-        `port ${entry.declaredPort} declared by ${entry.key} is already busy`
-      );
-    }
-  }
-  return conflicts;
-}
-
-/**
- * Load the plan and allocate ports for the live path: declared ports probed
- * BEFORE spawning (first busy one fails the plan); apps without one get an
- * OS-assigned free port. Never throws.
+ * Load the plan and allocate ports for the live path. Declared ports are
+ * probed BEFORE spawning through the same `allocatePorts` the `--dry-run`
+ * uses: every busy one is collected (or reassigned with `autoPorts`); apps
+ * without a port get an OS-assigned free one. Never throws.
  */
 export async function resolveDevPlan(
   options: DevPlanOptions
@@ -187,38 +182,34 @@ export async function resolveDevPlan(
   const loaded = await loadDevPlan(options);
   if (!loaded.ok) return loaded;
 
-  const apps: DevAppPlan[] = [];
-  for (const entry of loaded.entries) {
-    let port: number;
-    let portSource: DevAppPlan['portSource'];
-    if (entry.declaredPort !== null) {
-      if (await options.processRunner.isPortBusy(entry.declaredPort)) {
-        return {
-          ok: false,
-          reasons: [
-            `port ${entry.declaredPort} declared by ${entry.key} is already busy`,
-          ],
-        };
-      }
-      port = entry.declaredPort;
-      portSource = 'declared';
-    } else {
-      port = await options.processRunner.findFreePort();
-      portSource = 'auto';
-    }
-    apps.push({
+  const allocation = await allocatePorts(loaded.entries, options.processRunner, {
+    autoPorts: options.autoPorts ?? false,
+    resolveAuto: true,
+  });
+  if (!allocation.ok) {
+    return {
+      ok: false,
+      reasons: [...allocation.conflicts, PORT_CONFLICT_HINT],
+      portConflict: true,
+    };
+  }
+
+  const apps: DevAppPlan[] = loaded.entries.map((entry, index) => {
+    const assignment = allocation.assignments[index]!;
+    return {
       key: entry.key,
       name: entry.name,
       role: entry.role,
       command: entry.command,
-      port,
-      portSource,
+      // resolveAuto: true → every assignment carries a concrete port.
+      port: assignment.port!,
+      portSource: assignment.source,
       ...(entry.root !== undefined ? { root: entry.root } : {}),
       ...(entry.manifestPath !== undefined
         ? { manifestPath: entry.manifestPath }
         : {}),
-    });
-  }
+    };
+  });
 
   return {
     ok: true,
@@ -227,6 +218,7 @@ export async function resolveDevPlan(
     apps,
     skipped: loaded.skipped,
     commandless: loaded.skipped,
+    reassignments: describeReassignments(allocation.assignments),
   };
 }
 

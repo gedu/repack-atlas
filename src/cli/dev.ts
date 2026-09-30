@@ -25,7 +25,6 @@ import {
 } from '../studio/index.js';
 import {
   createDevSupervisor,
-  findPortConflicts,
   loadDevPlan,
   resolveDevPlan,
   type DevAppPlan,
@@ -37,6 +36,12 @@ import {
   toPlanEventApps,
   type DevPlanEventApp,
 } from '../runner/plan.js';
+import {
+  allocatePorts,
+  applyAssignments,
+  describeReassignments,
+  PORT_CONFLICT_HINT,
+} from '../runner/ports.js';
 import { lastValue, parseArgs, type ArgSpec } from './args.js';
 import { DEV_HELP } from './help.js';
 
@@ -45,9 +50,9 @@ const EXIT_FOUND_ERRORS = 1;
 const EXIT_NO_ANSWER = 2;
 
 export const DEV_SPEC: ArgSpec = {
-  valueOptions: ['apps'],
+  valueOptions: ['apps', 'port'],
   optionalValueOptions: ['workspace', 'studio-port'],
-  booleanFlags: ['json', 'ci', 'no-studio', 'dry-run', 'help'],
+  booleanFlags: ['json', 'ci', 'no-studio', 'dry-run', 'auto-ports', 'help'],
 };
 
 /** One line of the `--json` stream. Additive fields only. */
@@ -86,13 +91,15 @@ function openInBrowser(
 /** Finding-like console note (honesty rule 7): skipped is not silent. */
 function warnSkipped(skipped: DevSkippedApp[], io: DevIo): void {
   for (const skip of skipped) {
-    io.writeErr(`dev: warning  ${skip.key}: no "command" declared — skipped`);
+    io.writeErr(`dev: warning  ${skip.key}: ${skip.reason}`);
   }
 }
 
 interface DryRunInput {
   workspace: string;
   appNames: string[] | undefined;
+  hostPort: number | undefined;
+  autoPorts: boolean;
   json: boolean;
   io: DevIo;
   emit(event: DevEvent): void;
@@ -103,9 +110,11 @@ interface DryRunInput {
 
 /**
  * `--dry-run`: print the plan and exit. Declared ports are probed (never
- * bound) so a conflict is reported with exit 1; nothing spawns and the
- * Studio is not served. Output holds no timestamps or ephemeral ports, so
- * two runs on an unchanged workspace are byte-identical.
+ * bound): every conflict is reported together with exit 1, or reassigned
+ * with `--auto-ports`. Nothing spawns and the Studio is not served. Apps
+ * without a port stay `auto`, so without `--auto-ports` (or with no busy
+ * port) the output holds no timestamps or ephemeral ports and two runs on an
+ * unchanged workspace are byte-identical.
  */
 async function runDryRun(input: DryRunInput): Promise<number> {
   const { io, emit } = input;
@@ -114,18 +123,37 @@ async function runDryRun(input: DryRunInput): Promise<number> {
     configReader: input.configReader,
     manifestSource: input.manifestSource,
     ...(input.appNames !== undefined ? { apps: input.appNames } : {}),
+    ...(input.hostPort !== undefined ? { hostPort: input.hostPort } : {}),
   });
   if (!plan.ok) {
     for (const reason of plan.reasons) io.writeErr(`dev: ${reason}`);
     return EXIT_NO_ANSWER;
   }
   warnSkipped(plan.skipped, io);
-  emit({ event: 'plan', apps: toPlanEventApps(plan.entries) });
-  if (!input.json) io.writeOut(formatPlanTable(plan.entries));
 
-  const conflicts = await findPortConflicts(plan.entries, input.processRunner);
-  for (const conflict of conflicts) io.writeErr(`dev: ${conflict}`);
-  const code = conflicts.length > 0 ? EXIT_FOUND_ERRORS : EXIT_CLEAN;
+  const allocation = await allocatePorts(plan.entries, input.processRunner, {
+    autoPorts: input.autoPorts,
+    resolveAuto: false,
+  });
+  // Conflicts still print the declared plan so the table shows what clashed.
+  const shown = allocation.ok
+    ? applyAssignments(plan.entries, allocation.assignments)
+    : plan.entries;
+  emit({ event: 'plan', apps: toPlanEventApps(shown) });
+  if (!input.json) io.writeOut(formatPlanTable(shown));
+
+  let code = EXIT_CLEAN;
+  if (allocation.ok) {
+    if (!input.json) {
+      for (const note of describeReassignments(allocation.assignments)) {
+        io.writeErr(`dev: ${note}`);
+      }
+    }
+  } else {
+    for (const conflict of allocation.conflicts) io.writeErr(`dev: ${conflict}`);
+    io.writeErr(`dev: ${PORT_CONFLICT_HINT}`);
+    code = EXIT_FOUND_ERRORS;
+  }
   emit({ event: 'exit', code });
   return code;
 }
@@ -170,6 +198,18 @@ export async function runDevCommand(
     studioPort = value;
   }
 
+  let hostPort: number | undefined;
+  if (parsed.options.has('port')) {
+    const raw = lastValue(parsed, 'port');
+    const value = raw === undefined || raw.trim() === '' ? NaN : Number(raw);
+    if (!Number.isInteger(value) || value < 1 || value > 65_535) {
+      io.writeErr('dev: --port must be a TCP port number (1-65535)');
+      return EXIT_NO_ANSWER;
+    }
+    hostPort = value;
+  }
+  const autoPorts = parsed.flags.has('auto-ports');
+
   const appsFlag = lastValue(parsed, 'apps');
   const appNames =
     appsFlag !== undefined
@@ -192,6 +232,8 @@ export async function runDevCommand(
     return runDryRun({
       workspace,
       appNames,
+      hostPort,
+      autoPorts,
       json,
       io,
       emit,
@@ -208,14 +250,29 @@ export async function runDevCommand(
     configReader,
     manifestSource,
     processRunner,
+    autoPorts,
     ...(appNames !== undefined ? { apps: appNames } : {}),
+    ...(hostPort !== undefined ? { hostPort } : {}),
   });
   if (!plan.ok) {
     for (const reason of plan.reasons) io.writeErr(`dev: ${reason}`);
-    return EXIT_NO_ANSWER;
+    // Busy ports ran-and-found-errors (1, dry-run parity); the rest is 2.
+    return plan.portConflict ? EXIT_FOUND_ERRORS : EXIT_NO_ANSWER;
   }
   warnSkipped(plan.skipped, io);
-  emit({ event: 'plan', apps: toPlanEventApps(plan.entries) });
+  if (!json) {
+    for (const note of plan.reassignments) io.writeErr(`dev: ${note}`);
+  }
+  // The plan event carries the final (allocated) ports, auto ones included.
+  emit({
+    event: 'plan',
+    apps: toPlanEventApps(
+      plan.entries.map((entry, index) => ({
+        ...entry,
+        declaredPort: plan.apps[index]!.port,
+      }))
+    ),
+  });
 
   // 2. Studio before spawning: its bind failure must not orphan children.
   const supervisorRef: { current: ReturnType<typeof createDevSupervisor> | null } =

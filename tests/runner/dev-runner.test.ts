@@ -5,9 +5,9 @@
 // stub bundler (fixtures/workspace/tools/stub-bundler.mjs), so each session
 // costs seconds, per the fixture budget rule.
 //
-// Port policy: `--studio-port 0` (ephemeral, parsed from the studio event)
-// and no `--port`-style overrides, so parallel CI jobs never collide. The
-// stub apps keep their declared 8082/8083 ports: the plan probes them free
+// Port policy: `--studio-port 0` (ephemeral, parsed from the studio event);
+// the fixture host is pinned to a known-free port with `--port` (its default
+// would be 8081). The stub remotes keep their declared 8082/8083 ports: the plan probes them free
 // before spawning, and a collision fails loudly, never silently.
 
 import assert from 'node:assert/strict';
@@ -21,6 +21,9 @@ import { afterEach, before, beforeEach, describe, it } from 'node:test';
 import { binPath, ensureBin, repoRoot } from '../cli/run-bin.js';
 
 const WORKSPACE = path.join(repoRoot, 'fixtures', 'workspace');
+// The fixture's host declares no port, so the runner default would be 8081
+// (often held by a real Metro). Tests on it pin the host with `--port`.
+const WORKSPACE_HOST_PORT = 8084;
 const CYCLE_WORKSPACE = path.join(repoRoot, 'fixtures', 'fixture-remote-cycle');
 
 interface DevEvent {
@@ -51,8 +54,15 @@ interface Session {
   ): Promise<DevEvent>;
 }
 
+/** Pin the fixture host to a known-free port unless the test chose one. */
+function pinHostPort(args: string[], cwd: string): string[] {
+  return cwd === WORKSPACE && !args.includes('--port')
+    ? ['--port', String(WORKSPACE_HOST_PORT), ...args]
+    : args;
+}
+
 async function startSession(args: string[], cwd = WORKSPACE): Promise<Session> {
-  const child = spawn(process.execPath, [binPath, 'dev', ...args], {
+  const child = spawn(process.execPath, [binPath, 'dev', ...pinHostPort(args, cwd)], {
     cwd,
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -254,9 +264,9 @@ async function waitPortFree(port: number, timeoutMs = 5_000): Promise<void> {
 
 before(ensureBin);
 
-// The stub apps keep the ports the fixture declares (8082/8083), so every test
+// The stub apps keep the ports the fixture declares (remotes 8082/8083, host via --port), so every test
 // must start from released ports even if the previous one failed midway.
-const STUB_PORTS = [8082, 8083];
+const STUB_PORTS = [8082, 8083, WORKSPACE_HOST_PORT];
 
 // Close over every session so `afterEach` can always reap children, even if a
 // test fails midway (a leaked stub bundler holds 8082 for the next test).
@@ -470,7 +480,7 @@ describe('dev runner (spawned, stub apps)', () => {
       `cycle edges visible via the runner path: ${JSON.stringify(graph.edges)}`
     );
     assert.ok(
-      s.lines.some((l) => l.includes('no "command" declared')),
+      s.lines.some((l) => l.includes('no "command" in repack-federation.json')),
       'commandless apps report a warning'
     );
     s.child.kill('SIGINT');
@@ -478,13 +488,62 @@ describe('dev runner (spawned, stub apps)', () => {
   });
 });
 
+/** A port nothing listens on right now (bind to 0, read it, release it). */
+async function freePort(): Promise<number> {
+  const server = net.createServer();
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address() as net.AddressInfo;
+  await new Promise<void>((resolve) => server.close(() => resolve()));
+  return port;
+}
+
+/** Listen on `count` ephemeral loopback ports; `close()` releases them. */
+async function occupyPorts(
+  count: number
+): Promise<{ ports: number[]; close(): Promise<void> }> {
+  const servers = Array.from({ length: count }, () => net.createServer());
+  await Promise.all(
+    servers.map(
+      (server) =>
+        new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    )
+  );
+  return {
+    ports: servers.map((s) => (s.address() as net.AddressInfo).port),
+    close: () =>
+      Promise.all(
+        servers.map((s) => new Promise<void>((r) => s.close(() => r())))
+      ).then(() => undefined),
+  };
+}
+
+function parseEvents(stdout: string): DevEvent[] {
+  return stdout
+    .split('\n')
+    .filter((line) => line.startsWith('{'))
+    .map((line) => JSON.parse(line) as DevEvent);
+}
+
+/** Temp workspace with a stub-free config; `command` apps just exit. */
+function withConfig<T>(
+  config: object,
+  run: (dir: string) => Promise<T>
+): Promise<T> {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'atlas-ports-'));
+  writeFileSync(
+    path.join(dir, 'repack-federation.json'),
+    JSON.stringify(config)
+  );
+  return run(dir).finally(() => rmSync(dir, { recursive: true, force: true }));
+}
+
 /** Run `dev <args>` to completion; returns raw stdout/stderr and exit code. */
 function runToCompletion(
   args: string[],
   cwd = WORKSPACE
 ): Promise<{ code: number | null; stdout: string; stderr: string }> {
-  return new Promise((resolve) => {
-    const child = spawn(process.execPath, [binPath, 'dev', ...args], {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [binPath, 'dev', ...pinHostPort(args, cwd)], {
       cwd,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -492,7 +551,15 @@ function runToCompletion(
     let stderr = '';
     child.stdout.on('data', (d: Buffer) => (stdout += d.toString('utf8')));
     child.stderr.on('data', (d: Buffer) => (stderr += d.toString('utf8')));
-    child.once('close', (code) => resolve({ code, stdout, stderr }));
+    child.once('close', (code) => {
+      clearTimeout(timer);
+      resolve({ code, stdout, stderr });
+    });
+    // A hang must fail fast, not stall the whole suite.
+    const timer = setTimeout(() => {
+      child.kill('SIGKILL');
+      reject(new Error(`dev ${args.join(' ')} did not exit in 30s`));
+    }, 30_000);
   });
 }
 
@@ -505,15 +572,17 @@ describe('dev --dry-run', () => {
         JSON.stringify({
           host: {
             manifest: './host.json',
+            port: await freePort(),
             command: `node -e "require('fs').writeFileSync('marker','x')"`,
           },
-          remotes: {},
+          remotes: { idle: { manifest: './idle.json', command: 'true' } },
         })
       );
       const result = await runToCompletion(['--dry-run'], dir);
       assert.equal(result.code, 0, result.stderr);
       assert.match(result.stdout, /^app\s+role\s+port\s+command\s+cwd$/m);
-      assert.match(result.stdout, /^host\s+host\s+auto\s+node -e/m);
+      assert.match(result.stdout, /^host\s+host\s+\d+\s+node -e/m);
+      assert.match(result.stdout, /^idle\s+remote\s+auto\s+true/m);
       assert.ok(!result.stdout.includes('Federation Studio'), 'no Studio');
       assert.ok(!existsSync(path.join(dir, 'marker')), 'command never ran');
     } finally {
@@ -537,7 +606,7 @@ describe('dev --dry-run', () => {
     assert.deepEqual(
       events[0]!.apps!.map((a) => [a.app, a.role, a.port]),
       [
-        ['host', 'host', null],
+        ['host', 'host', 8084],
         ['mini_auth', 'remote', 8082],
         ['mini_store', 'remote', 8083],
       ]
@@ -575,6 +644,32 @@ describe('dev --dry-run', () => {
     }
   });
 
+  it('plan failures exit 2 under --dry-run: missing config, invalid config, unknown --apps', async () => {
+    const empty = mkdtempSync(path.join(os.tmpdir(), 'atlas-dry-'));
+    try {
+      const missing = await runToCompletion(['--dry-run'], empty);
+      assert.equal(missing.code, 2);
+      assert.match(missing.stderr, /no repack-federation\.json found/);
+
+      writeFileSync(path.join(empty, 'repack-federation.json'), '{ not json');
+      const invalid = await runToCompletion(['--dry-run', '--json'], empty);
+      assert.equal(invalid.code, 2);
+      assert.match(invalid.stderr, /repack-federation\.json/);
+      assert.equal(invalid.stdout, '', 'no plan or exit event on a failed plan');
+    } finally {
+      rmSync(empty, { recursive: true, force: true });
+    }
+
+    const unknown = await runToCompletion(['--dry-run', '--apps', 'nope']);
+    assert.equal(unknown.code, 2);
+    assert.match(unknown.stderr, /unknown apps: nope/);
+  });
+
+  it('commandless apps surface their skip reason in dry-run', async () => {
+    const result = await runToCompletion(['--dry-run'], CYCLE_WORKSPACE);
+    assert.match(result.stderr, /warning\s+\S+: no "command" in repack-federation\.json/);
+  });
+
   it('a live session emits the additive plan event before spawning', async () => {
     const s = await session(['--ci', '--json', '--studio-port', '0']);
     const plan = await s.waitForEvent((e) => e.event === 'plan');
@@ -590,6 +685,181 @@ describe('dev --dry-run', () => {
     );
     s.child.kill('SIGINT');
     assert.equal((await s.exited).code, 0);
+  });
+});
+
+describe('dev ports (--port, --auto-ports, unified conflicts)', () => {
+  const LISTEN = `node -e "require('net').createServer().listen(process.env.ATLAS_APP_PORT,'127.0.0.1')"`;
+
+  for (const bad of ['0', '65536', 'abc', '8081x', '-1', '1.5']) {
+    it(`--port ${bad} is rejected with exit 2`, async () => {
+      const result = await runToCompletion(['--dry-run', '--port', bad]);
+      assert.equal(result.code, 2, result.stderr);
+      assert.match(result.stderr, /--port must be a TCP port number \(1-65535\)/);
+    });
+  }
+
+  it('--port overrides the host port only (dry-run --json)', async () => {
+    const port = await freePort();
+    const result = await runToCompletion([
+      '--dry-run',
+      '--json',
+      '--port',
+      String(port),
+    ]);
+    assert.equal(result.code, 0, result.stderr);
+    assert.deepEqual(
+      parseEvents(result.stdout)[0]!.apps!.map((a) => [a.app, a.port]),
+      [
+        ['host', port],
+        ['mini_auth', 8082],
+        ['mini_store', 8083],
+      ]
+    );
+  });
+
+  it('host port falls back to 8081 when neither --port nor config sets it', async () => {
+    await withConfig(
+      { host: { manifest: './h.json', command: 'true' }, remotes: {} },
+      async (dir) => {
+        const result = await runToCompletion(['--dry-run', '--json'], dir);
+        const apps = parseEvents(result.stdout)[0]!.apps!;
+        assert.equal(apps[0]!.port, 8081);
+        // 8081 may be busy on the dev machine: only the plan is asserted.
+        assert.ok(result.code === 0 || result.code === 1, result.stderr);
+      }
+    );
+  });
+
+  it('--port sets the host port in a live session (plan and app events agree)', async () => {
+    const port = await freePort();
+    const s = await session([
+      '--ci',
+      '--json',
+      '--studio-port',
+      '0',
+      '--port',
+      String(port),
+    ]);
+    const plan = await s.waitForEvent((e) => e.event === 'plan');
+    assert.equal(plan.apps![0]!.port, port);
+    const ready = await s.waitForStatus('host', 'ready');
+    assert.equal(ready.port, port);
+    s.child.kill('SIGINT');
+    assert.equal((await s.exited).code, 0);
+  });
+
+  it('dry-run reports ALL busy ports together and exits 1', async () => {
+    const held = await occupyPorts(2);
+    try {
+      await withConfig(
+        {
+          host: { manifest: './h.json', port: held.ports[0], command: 'true' },
+          remotes: {
+            a: { manifest: './a.json', port: held.ports[1], command: 'true' },
+            b: { manifest: './b.json', command: 'true' },
+          },
+        },
+        async (dir) => {
+          const result = await runToCompletion(['--dry-run', '--json'], dir);
+          assert.equal(result.code, 1);
+          assert.match(result.stderr, new RegExp(`port ${held.ports[0]} declared by host`));
+          assert.match(result.stderr, new RegExp(`port ${held.ports[1]} declared by a`));
+          assert.match(result.stderr, /--auto-ports/);
+          assert.equal(parseEvents(result.stdout).at(-1)?.code, 1);
+        }
+      );
+    } finally {
+      await held.close();
+    }
+  });
+
+  it('dry-run --auto-ports reassigns busy ports; unmanaged remotes stay auto', async () => {
+    const held = await occupyPorts(1);
+    try {
+      await withConfig(
+        {
+          host: { manifest: './h.json', port: held.ports[0], command: 'true' },
+          remotes: { b: { manifest: './b.json', command: 'true' } },
+        },
+        async (dir) => {
+          const result = await runToCompletion(['--dry-run', '--auto-ports'], dir);
+          assert.equal(result.code, 0, result.stderr);
+          assert.match(result.stderr, new RegExp(`port ${held.ports[0]} for host was busy`));
+          assert.match(result.stdout, /^b\s+remote\s+auto\s+true/m);
+          const hostRow = /^host\s+host\s+(\d+)/m.exec(result.stdout);
+          assert.ok(hostRow && Number(hostRow[1]) !== held.ports[0]);
+
+          const json = await runToCompletion(['--dry-run', '--json', '--auto-ports'], dir);
+          const apps = parseEvents(json.stdout)[0]!.apps!;
+          assert.notEqual(apps[0]!.port, held.ports[0]);
+          assert.equal(apps[1]!.port, null);
+          assert.equal(json.stderr.includes('was busy'), false, 'json stays quiet');
+        }
+      );
+    } finally {
+      await held.close();
+    }
+  });
+
+  it('live: ALL busy ports are reported together, exit 1, nothing spawned', async () => {
+    const held = await occupyPorts(2);
+    try {
+      await withConfig(
+        {
+          host: {
+            manifest: './h.json',
+            port: held.ports[0],
+            command: `node -e "require('fs').writeFileSync('marker','x')"`,
+          },
+          remotes: {
+            a: { manifest: './a.json', port: held.ports[1], command: 'true' },
+          },
+        },
+        async (dir) => {
+          const result = await runToCompletion(['--ci', '--json', '--studio-port', '0'], dir);
+          assert.equal(result.code, 1, result.stderr);
+          assert.match(result.stderr, new RegExp(`port ${held.ports[0]} declared by host`));
+          assert.match(result.stderr, new RegExp(`port ${held.ports[1]} declared by a`));
+          assert.ok(!existsSync(path.join(dir, 'marker')), 'nothing spawned');
+          assert.equal(parseEvents(result.stdout).length, 0, 'no events before the plan');
+        }
+      );
+    } finally {
+      await held.close();
+    }
+  });
+
+  it('live --auto-ports starts the app on a free port and reports it in plan and app events', async () => {
+    const held = await occupyPorts(1);
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'atlas-ports-'));
+    try {
+      writeFileSync(
+        path.join(dir, 'repack-federation.json'),
+        JSON.stringify({
+          host: { manifest: './h.json', port: held.ports[0], command: LISTEN },
+          remotes: {},
+        })
+      );
+      const s = await session(
+        ['--ci', '--json', '--studio-port', '0', '--auto-ports'],
+        dir
+      );
+      const plan = await s.waitForEvent((e) => e.event === 'plan');
+      const ready = await s.waitForStatus('host', 'ready');
+      assert.notEqual(plan.apps![0]!.port, held.ports[0]);
+      assert.equal(ready.port, plan.apps![0]!.port);
+      assert.equal(
+        s.lines.some((l) => l.includes('was busy')),
+        false,
+        '--json keeps the reassignment note out of the stream'
+      );
+      s.child.kill('SIGINT');
+      assert.equal((await s.exited).code, 0);
+    } finally {
+      await held.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

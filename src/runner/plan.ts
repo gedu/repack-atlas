@@ -10,6 +10,9 @@ import { isUrlSource, type FederationConfig } from '../core/index.js';
 /** `--apps` / config key of the host entry (not its federation name). */
 export const HOST_APP_KEY = 'host';
 
+/** Host port when neither `--port` nor the config's host `port` is set. */
+export const HOST_DEFAULT_PORT = 8081;
+
 /** One app the runner will start, before any port is allocated. */
 export interface DevPlanEntry {
   /** Config key: `host` or the remote's name in `remotes`. */
@@ -20,7 +23,7 @@ export interface DevPlanEntry {
   command: string;
   /** Directory the command runs in (the config directory). */
   cwd: string;
-  /** Declared TCP port; `null` means the runner picks a free one. */
+  /** Declared TCP port (host: `--port` > config > 8081); `null` = runner picks. */
   declaredPort: number | null;
   /** Absolute app root; absent when the config declares none. */
   root?: string;
@@ -52,10 +55,12 @@ export interface BuildDevPlanInput {
   hostName: string;
   /** `--apps` list (config keys). Unknown keys fail the plan. */
   apps?: string[];
+  /** `--port`: overrides the HOST port only (already validated 1-65535). */
+  hostPort?: number;
 }
 
 /** Resolve `root`/`manifest` refs the way the doctor does (URLs stay). */
-function resolveRef(configDir: string, ref: string): string {
+export function resolveRef(configDir: string, ref: string): string {
   return isUrlSource(ref) ? ref : path.resolve(configDir, ref);
 }
 
@@ -121,13 +126,16 @@ export function buildDevPlan(input: BuildDevPlanInput): BuildDevPlanResult {
       role: entry.role,
       command: entry.command,
       cwd: configDir,
-      declaredPort: entry.port ?? null,
+      declaredPort:
+        entry.role === 'host'
+          ? (input.hostPort ?? entry.port ?? HOST_DEFAULT_PORT)
+          : (entry.port ?? null),
       ...(entry.root !== undefined
         ? { root: path.resolve(configDir, entry.root) }
         : {}),
       ...(isUrlSource(entry.manifest)
         ? {}
-        : { manifestPath: resolveRef(configDir, entry.manifest) }),
+        : { manifestPath: path.resolve(configDir, entry.manifest) }),
     });
   }
 
