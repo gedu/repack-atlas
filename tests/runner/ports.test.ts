@@ -217,3 +217,40 @@ describe('duplicate declared ports', () => {
     );
   });
 });
+
+describe('allocatePorts with a throwing probe', () => {
+  it('treats a probe that throws as busy: a conflict, never a crash', async () => {
+    const throwing: PortProbe = {
+      async isPortBusy() {
+        throw new Error('probe exploded');
+      },
+      async findFreePort() {
+        return 50_001;
+      },
+    };
+    const result = await allocatePorts([entry('host', 8081)], throwing, {
+      autoPorts: false,
+      resolveAuto: true,
+    });
+    assert.equal(result.ok, false);
+    assert.ok(!result.ok);
+    assert.match(result.conflicts.join('\n'), /port 8081 declared by host is already busy/);
+  });
+
+  it('--auto-ports moves it to a free port instead', async () => {
+    const throwing: PortProbe = {
+      async isPortBusy() {
+        throw new Error('probe exploded');
+      },
+      async findFreePort() {
+        return 50_001;
+      },
+    };
+    const result = await allocatePorts([entry('host', 8081)], throwing, {
+      autoPorts: true,
+      resolveAuto: true,
+    });
+    assert.ok(result.ok);
+    assert.equal(result.assignments[0]!.port, 50_001);
+  });
+});

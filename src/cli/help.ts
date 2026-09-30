@@ -105,7 +105,8 @@ export const DEV_HELP = `repack-atlas dev — supervised workspace runner + read
 Usage
   repack-atlas dev [--workspace [dir]] [--apps <list>] [--port <n>]
                    [--auto-ports] [--platform <ios|android>]
-                   [--standalone <remote>] [--studio-port <n>] [--no-studio]
+                   [--standalone <remote>] [--launch | --no-launch]
+                   [--device <id>] [--studio-port <n>] [--no-studio]
                    [--ci] [--dry-run] [--json]
 
 An app with a "root" starts through the argv Atlas builds, like upstream
@@ -146,6 +147,21 @@ Options
                        joins the session even when --apps omits it. Only it
                        gets --standalone (ATLAS_APP_STANDALONE=1 for a
                        "command"); the rest of the session is unchanged.
+  --launch             Put the app on the device once the target is ready:
+                       one-shot node <target's own react-native CLI>
+                       run-<platform> --no-packager, run from the target's
+                       root with its logs prefixed [launch]. The target is
+                       the --standalone remote, else the host (it must be in
+                       the session and declare a "root", even with a
+                       "command" override). Spawns exactly once, on the
+                       target's first ready, and is killed on shutdown. A
+                       failed launch is reported (stderr; {event:'launch'}
+                       with --json) and never fails the session. Needs
+                       --platform (exit 2 otherwise).
+  --no-launch          Never launch (the default; cannot combine with
+                       --launch)
+  --device <id>        Passed verbatim as --device <id> to run-<platform>;
+                       ignored (with a warning) without --launch
   --studio-port <n>    Studio port (0 = ephemeral; default: first free from
                        8099)
   --no-studio          Do not serve the Studio
@@ -161,7 +177,10 @@ Options
                        {event:'studio',url} once,
                        {event:'app',app,status,port} per status transition
                        (additive: reassignedFrom on an app --auto-ports
-                       moved; platform / standalone:true on plan apps),
+                       moved; platform / standalone:true on plan apps; a
+                       launch {app,command,cwd} on the plan with --launch),
+                       {event:'launch',status:'started'|'exited',code} for
+                       the --launch one-shot,
                        {event:'exit',code} last. With --dry-run only plan
                        and exit are emitted, identical across runs. Child
                        logs stay [name]-prefixed plain lines: keep only
@@ -180,6 +199,8 @@ Exit codes
   2  could not answer (bad argv incl. invalid --port / --platform /
      --studio-port, no/invalid config, unknown --apps name, unknown
      --standalone remote or one without "standalone": true, an app whose
-     react-native CLI cannot be resolved, no free Studio port, Studio could
-     not listen)
+     react-native CLI cannot be resolved, --launch without --platform or
+     with --no-launch, a launch target that is not in the session, has no
+     "root" or no react-native CLI, no free Studio port, Studio could not
+     listen)
 `;

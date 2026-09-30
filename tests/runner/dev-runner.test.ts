@@ -69,7 +69,8 @@ interface DevEvent {
   status?: string;
   port?: number;
   pid?: number;
-  code?: number;
+  code?: number | null;
+  launch?: { app: string; command: string; cwd: string };
 }
 
 /** Additive plan-app fields T4 asserts on (the base interface stays loose). */
@@ -106,10 +107,15 @@ function pinHostPort(args: string[], cwd: string): string[] {
     : args;
 }
 
-async function startSession(args: string[], cwd = WORKSPACE): Promise<Session> {
+async function startSession(
+  args: string[],
+  cwd = WORKSPACE,
+  env?: NodeJS.ProcessEnv
+): Promise<Session> {
   const child = spawn(process.execPath, [binPath, 'dev', ...pinHostPort(args, cwd)], {
     cwd,
     stdio: ['ignore', 'pipe', 'pipe'],
+    ...(env !== undefined ? { env: { ...process.env, ...env } } : {}),
   });
   const session: Session = {
     child,
@@ -320,8 +326,12 @@ const stubPorts = (): number[] => [8082, 8083, WORKSPACE_HOST_PORT];
 // test fails midway (a leaked stub bundler holds 8082 for the next test).
 let openSessions: Session[] = [];
 
-async function session(args: string[], cwd = WORKSPACE): Promise<Session> {
-  const s = await startSession(args, cwd);
+async function session(
+  args: string[],
+  cwd = WORKSPACE,
+  env?: NodeJS.ProcessEnv
+): Promise<Session> {
+  const s = await startSession(args, cwd, env);
   openSessions.push(s);
   return s;
 }
@@ -946,11 +956,32 @@ async function waitGroupGone(pid: number, timeoutMs = 5_000): Promise<void> {
 /** Stub `react-native` CLI: records its argv/cwd and listens on `--port`. */
 const STUB_RN_CLI = `#!/usr/bin/env node
 const args = process.argv.slice(2);
+if (args[0] && args[0].startsWith('run-')) {
+  // The launch one-shot (T5): record argv in the app root, then behave as
+  // the \`launch-mode\` file says: 'fail' exits 1, 'hang' lingers until killed.
+  const fs = require('fs');
+  fs.appendFileSync('launch.log', JSON.stringify(args) + '\\n');
+  console.log('launch-stub ' + JSON.stringify(args));
+  const mode = fs.existsSync('launch-mode') ? fs.readFileSync('launch-mode', 'utf8').trim() : '';
+  if (mode === 'fail') {
+    console.error('launch-stub failing');
+    process.exit(1);
+  }
+  if (mode === 'hang') {
+    fs.writeFileSync('launch.pid', String(process.pid));
+    process.on('SIGINT', () => process.exit(0));
+    process.on('SIGTERM', () => process.exit(0));
+    setTimeout(() => process.exit(0), 30000);
+  } else {
+    process.exit(0);
+  }
+} else {
 const port = Number(args[args.indexOf('--port') + 1]);
 console.log('rn-stub ' + JSON.stringify({ args, cwd: process.cwd() }));
 require('net').createServer().listen(port, '127.0.0.1');
 process.on('SIGINT', () => process.exit(0));
 process.on('SIGTERM', () => process.exit(0));
+}
 `;
 
 /** Install the stub react-native (package + cli) and a bundler config. */
@@ -1279,6 +1310,19 @@ describe('dev --platform and --standalone', () => {
     assert.equal((await s.exited).code, 0);
   });
 
+  it('stray ATLAS_APP_PLATFORM / ATLAS_APP_STANDALONE from the shell are not inherited', async () => {
+    const dir = mixed();
+    const s = await session(
+      ['--ci', '--json', '--no-studio', '--apps', 'other', '--port', String(await freePort())],
+      dir,
+      { ATLAS_APP_PLATFORM: 'android', ATLAS_APP_STANDALONE: '1' }
+    );
+    await s.waitForStatus('other', 'ready');
+    assert.deepEqual(envSeen(s, 'other'), { platform: null, standalone: null });
+    s.child.kill('SIGINT');
+    assert.equal((await s.exited).code, 0);
+  });
+
   it('--standalone adds the remote to an --apps session; only it gets the flag / env', async () => {
     const dir = mixed();
     const s = await session(
@@ -1338,6 +1382,8 @@ describe('dev --platform and --standalone', () => {
   it('--standalone without a value exits 2', async () => {
     const result = await runToCompletion(['--dry-run', '--standalone'], mixed());
     assert.equal(result.code, 2);
+    assert.match(result.stderr, /dev: --standalone requires a value/);
+    assert.equal(result.stdout, '', 'no plan, nothing spawned');
   });
 
   it('dry-run shows platform and standalone in the table and the additive plan fields', async () => {
@@ -1361,10 +1407,14 @@ describe('dev --platform and --standalone', () => {
   });
 
   it('two apps declaring the same port are a conflict: exit 1, nothing spawned (live and dry-run)', async () => {
-    const shared = await freePort();
+    // Held together, so the two ports are guaranteed distinct (two
+    // sequential freePort() calls may hand back the same number).
+    const held = await occupyPorts(2);
+    await held.close();
+    const [shared, hostPort] = held.ports as [number, number];
     const dir = workspaceWith(
       {
-        host: { manifest: './h.json', command: 'node env-stub.cjs', port: await freePort() },
+        host: { manifest: './h.json', command: 'node env-stub.cjs', port: hostPort },
         remotes: {
           a: { manifest: './a.json', command: 'node env-stub.cjs', port: shared },
           b: { manifest: './b.json', command: 'node env-stub.cjs', port: shared },
@@ -1404,5 +1454,293 @@ describe('dev --platform and --standalone', () => {
     } finally {
       await held.close();
     }
+  });
+});
+
+// --- --launch / --device (ODD dev-wizard-runner T5) --------------------------
+
+describe('dev --launch', () => {
+  function workspaceWith(config: object, build: (dir: string) => void): string {
+    const dir = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'atlas-launch-')));
+    cleanupDirs.push(dir);
+    build(dir);
+    writeFileSync(path.join(dir, 'repack-federation.json'), JSON.stringify(config));
+    return dir;
+  }
+
+  /** Host + a standalone-capable remote, both with the stub react-native. */
+  const rooted = () =>
+    workspaceWith(
+      {
+        host: { manifest: './h.json', root: './apps/host' },
+        remotes: {
+          solo: { manifest: './s.json', root: './apps/solo', standalone: true },
+        },
+      },
+      (d) => {
+        makeApp(d, 'apps/host');
+        makeApp(d, 'apps/solo');
+      }
+    );
+
+  const launchLog = (dir: string, app: string): string[][] => {
+    const file = path.join(dir, 'apps', app, 'launch.log');
+    return existsSync(file)
+      ? readFileSync(file, 'utf8')
+          .split('\n')
+          .filter((line) => line !== '')
+          .map((line) => JSON.parse(line) as string[])
+      : [];
+  };
+
+  async function waitFor(check: () => boolean, what: string, timeoutMs = 10_000) {
+    const deadline = Date.now() + timeoutMs;
+    while (!check()) {
+      assert.ok(Date.now() < deadline, `timeout waiting for ${what}`);
+      await new Promise((r) => setTimeout(r, 50));
+    }
+  }
+
+  const base = async () => ['--ci', '--json', '--no-studio', '--port', String(await freePort())];
+
+  it('--launch --platform ios spawns run-ios --no-packager exactly once, after the host is ready', async () => {
+    const dir = rooted();
+    const s = await session(
+      [...(await base()), '--apps', 'host', '--platform', 'ios', '--launch'],
+      dir
+    );
+    const exited = await s.waitForEvent(
+      (e) => e.event === 'launch' && e.status === 'exited'
+    );
+    assert.equal(exited.code, 0);
+    // Let several readiness polls pass: a second spawn would append a line.
+    await new Promise((r) => setTimeout(r, 700));
+    assert.deepEqual(launchLog(dir, 'host'), [['run-ios', '--no-packager']]);
+    const kinds = s.events.map((e) =>
+      e.event === 'app' ? `app:${e.status}` : e.event
+    );
+    assert.ok(
+      kinds.indexOf('app:ready') < kinds.indexOf('launch'),
+      `launch must follow readiness: ${kinds.join(',')}`
+    );
+    assert.equal(kinds.filter((k) => k === 'launch').length, 2, 'started + exited');
+    assert.ok(
+      s.lines.some((l) => l.startsWith('[launch] launch-stub ["run-ios","--no-packager"]')),
+      'launch output is [launch]-prefixed'
+    );
+    const plan = s.events.find((e) => e.event === 'plan')!;
+    assert.equal(plan.launch!.app, 'host');
+    assert.equal(
+      plan.launch!.command,
+      'node node_modules/react-native/cli.js run-ios --no-packager'
+    );
+    s.child.kill('SIGINT');
+    assert.equal((await s.exited).code, 0);
+  });
+
+  it('--device rides verbatim to run-<platform>', async () => {
+    const dir = rooted();
+    const s = await session(
+      [...(await base()), '--apps', 'host', '--platform', 'android', '--launch', '--device', 'emulator-5554'],
+      dir
+    );
+    await s.waitForEvent((e) => e.event === 'launch' && e.status === 'exited');
+    assert.deepEqual(launchLog(dir, 'host'), [
+      ['run-android', '--no-packager', '--device', 'emulator-5554'],
+    ]);
+    s.child.kill('SIGINT');
+    assert.equal((await s.exited).code, 0);
+  });
+
+  it('a standalone session launches from the standalone remote, on its readiness', async () => {
+    const dir = rooted();
+    const s = await session(
+      [...(await base()), '--apps', 'host', '--standalone', 'solo', '--platform', 'ios', '--launch'],
+      dir
+    );
+    await s.waitForEvent((e) => e.event === 'launch' && e.status === 'exited');
+    assert.deepEqual(launchLog(dir, 'solo'), [['run-ios', '--no-packager']]);
+    assert.deepEqual(launchLog(dir, 'host'), []);
+    const plan = s.events.find((e) => e.event === 'plan')!;
+    assert.equal(plan.launch!.app, 'solo');
+    s.child.kill('SIGINT');
+    assert.equal((await s.exited).code, 0);
+  });
+
+  it('a target with a `command` override still launches through its root\'s cli', async () => {
+    const hostPort = await freePort();
+    const dir = workspaceWith(
+      {
+        host: {
+          manifest: './h.json',
+          root: './apps/host',
+          command:
+            "node -e \"require('net').createServer().listen(Number(process.env.ATLAS_APP_PORT),'127.0.0.1')\"",
+        },
+        remotes: {},
+      },
+      (d) => makeApp(d, 'apps/host')
+    );
+    const s = await session(
+      ['--ci', '--json', '--no-studio', '--port', String(hostPort), '--platform', 'ios', '--launch'],
+      dir
+    );
+    await s.waitForEvent((e) => e.event === 'launch' && e.status === 'exited');
+    assert.deepEqual(launchLog(dir, 'host'), [['run-ios', '--no-packager']]);
+    s.child.kill('SIGINT');
+    assert.equal((await s.exited).code, 0);
+  });
+
+  it('a failing launch is reported but never fails the session', async () => {
+    const dir = rooted();
+    mkdirSync(path.join(dir, 'apps', 'host'), { recursive: true });
+    writeFileSync(path.join(dir, 'apps', 'host', 'launch-mode'), 'fail');
+    const s = await session(
+      [...(await base()), '--apps', 'host', '--platform', 'ios', '--launch'],
+      dir
+    );
+    const failed = await s.waitForEvent(
+      (e) => e.event === 'launch' && e.status === 'exited'
+    );
+    assert.equal(failed.code, 1);
+    await waitFor(
+      () => s.lines.some((l) => l.includes('dev: launch exited with code 1')),
+      'the human failure line'
+    );
+    assert.ok(s.lines.some((l) => l.startsWith('[launch] launch-stub failing')));
+    // The host is still up and the session is healthy.
+    assert.ok(!s.events.some((e) => e.event === 'app' && e.status === 'error'));
+    s.child.kill('SIGINT');
+    assert.equal((await s.exited).code, 0);
+    assert.equal(s.events.at(-1)!.code, 0);
+  });
+
+  it('shutdown kills a launch that is still running', async () => {
+    const dir = rooted();
+    writeFileSync(path.join(dir, 'apps', 'host', 'launch-mode'), 'hang');
+    const s = await session(
+      [...(await base()), '--apps', 'host', '--platform', 'ios', '--launch'],
+      dir
+    );
+    const pidFile = path.join(dir, 'apps', 'host', 'launch.pid');
+    await waitFor(() => existsSync(pidFile), 'the hanging launch to start');
+    const pid = Number(readFileSync(pidFile, 'utf8'));
+    assert.ok(processAlive(pid));
+    s.child.kill('SIGINT');
+    assert.equal((await s.exited).code, 0);
+    await waitGroupGone(pid);
+    assert.ok(
+      !s.events.some((e) => e.event === 'launch' && e.status === 'exited'),
+      'a kill by shutdown is not reported as a launch failure'
+    );
+  });
+
+  it('--launch without a platform exits 2 and spawns nothing', async () => {
+    const dir = rooted();
+    for (const args of [['--dry-run'], ['--ci', '--json', '--no-studio']]) {
+      const result = await runToCompletion([...args, '--launch', '--port', String(await freePort())], dir);
+      assert.equal(result.code, 2, result.stderr);
+      assert.match(result.stderr, /--launch needs a single platform/);
+      assert.doesNotMatch(result.stdout, /"event":"(plan|app)"/);
+      assert.deepEqual(launchLog(dir, 'host'), []);
+    }
+  });
+
+  it('--launch with --no-launch exits 2', async () => {
+    const result = await runToCompletion(
+      ['--dry-run', '--platform', 'ios', '--launch', '--no-launch'],
+      rooted()
+    );
+    assert.equal(result.code, 2);
+    assert.match(result.stderr, /--launch and --no-launch cannot be combined/);
+  });
+
+  it('a launch target outside the session or without a root exits 2, nothing spawned', async () => {
+    const dir = rooted();
+    const outside = await runToCompletion(
+      [...(await base()), '--apps', 'solo', '--platform', 'ios', '--launch'],
+      dir
+    );
+    assert.equal(outside.code, 2, outside.stderr);
+    assert.match(outside.stderr, /needs the host \(or the --standalone remote\)/);
+    const rootless = workspaceWith(
+      { host: { manifest: './h.json', command: 'true' }, remotes: {} },
+      () => {}
+    );
+    const noRoot = await runToCompletion(
+      [...(await base()), '--platform', 'ios', '--launch'],
+      rootless
+    );
+    assert.equal(noRoot.code, 2, noRoot.stderr);
+    assert.match(noRoot.stderr, /host declares no "root"/);
+    assert.doesNotMatch(outside.stdout + noRoot.stdout, /"event":"(plan|app)"/);
+  });
+
+  it('a target whose react-native cli is missing exits 2', async () => {
+    const dir = workspaceWith(
+      { host: { manifest: './h.json', root: './apps/host' }, remotes: {} },
+      (d) => makeApp(d, 'apps/host', { rn: false })
+    );
+    const result = await runToCompletion(
+      [...(await base()), '--platform', 'ios', '--launch'],
+      dir
+    );
+    assert.equal(result.code, 2, result.stderr);
+    assert.match(result.stderr, /cannot resolve the "react-native" package/);
+  });
+
+  it('without --launch nothing launches (--device alone only warns)', async () => {
+    const dir = rooted();
+    const s = await session(
+      [...(await base()), '--apps', 'host', '--platform', 'ios', '--device', 'x'],
+      dir
+    );
+    await s.waitForStatus('host', 'ready');
+    await new Promise((r) => setTimeout(r, 500));
+    assert.deepEqual(launchLog(dir, 'host'), []);
+    assert.ok(!s.events.some((e) => e.event === 'launch'));
+    assert.equal(s.events.find((e) => e.event === 'plan')!.launch, undefined);
+    assert.ok(s.lines.some((l) => l.includes('--device is ignored without --launch')));
+    s.child.kill('SIGINT');
+    assert.equal((await s.exited).code, 0);
+  });
+
+  it('--no-launch is accepted and launches nothing', async () => {
+    const dir = rooted();
+    const s = await session(
+      [...(await base()), '--apps', 'host', '--platform', 'ios', '--no-launch'],
+      dir
+    );
+    await s.waitForStatus('host', 'ready');
+    await new Promise((r) => setTimeout(r, 500));
+    assert.deepEqual(launchLog(dir, 'host'), []);
+    s.child.kill('SIGINT');
+    assert.equal((await s.exited).code, 0);
+  });
+
+  it('dry-run shows the launch (table + additive plan field), spawns nothing and is byte-stable', async () => {
+    const dir = rooted();
+    const args = ['--dry-run', '--apps', 'host', '--platform', 'android', '--launch', '--device', 'pixel', '--port', String(await freePort())];
+    const table = await runToCompletion(args, dir);
+    assert.equal(table.code, 0, table.stderr);
+    assert.match(
+      table.stdout,
+      /^launch \(once host is ready\): node node_modules\/react-native\/cli\.js run-android --no-packager --device pixel {2}\[cwd .*apps\/host\]$/m
+    );
+    const first = await runToCompletion([...args, '--json'], dir);
+    const second = await runToCompletion([...args, '--json'], dir);
+    assert.equal(first.stdout, second.stdout, 'byte-identical across runs');
+    const plan = parseEvents(first.stdout)[0]!;
+    assert.deepEqual(plan.launch, {
+      app: 'host',
+      command: 'node node_modules/react-native/cli.js run-android --no-packager --device pixel',
+      cwd: path.join(dir, 'apps', 'host'),
+    });
+    assert.deepEqual(launchLog(dir, 'host'), [], 'dry-run spawns nothing');
+    const plain = await runToCompletion(
+      ['--dry-run', '--json', '--apps', 'host', '--port', String(await freePort())],
+      dir
+    );
+    assert.equal(parseEvents(plain.stdout)[0]!.launch, undefined);
   });
 });

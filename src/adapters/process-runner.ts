@@ -89,9 +89,15 @@ export function createNodeProcessRunner(): ProcessRunner {
         stderrListeners.forEach((l) => l(line))
       );
 
+      const env = spec.env ? { ...process.env, ...spec.env } : process.env;
+      // `undefined` means "remove": spawn would stringify it otherwise.
+      for (const [key, value] of Object.entries(spec.env ?? {})) {
+        if (value === undefined) delete env[key];
+      }
+
       const child = spawn(spec.file, spec.args ?? [], {
         cwd: spec.cwd,
-        env: spec.env ? { ...process.env, ...spec.env } : process.env,
+        env,
         shell: spec.shell ?? false,
         // Own process group (POSIX): the group leader's pid == child pid,
         // so `kill(-pid)` reaches every descendant, not just the child.

@@ -63,12 +63,27 @@ export async function resolveToolchains(
     const key = toolchainKey(target.root, target.config);
     // Apps with the same root and config resolve once.
     if (key in resolved) continue;
-    const files = await listConfigFiles(deps.fs, target.root);
+    let files: string[] = [];
+    try {
+      files = await listConfigFiles(deps.fs, target.root);
+    } catch {
+      // An unreadable root lists nothing: detection falls back to rspack.
+    }
     const bundler = detectBundler({
       files,
       ...(target.config !== undefined ? { config: target.config } : {}),
     });
-    const cli = deps.reactNativeCli.resolve(target.root);
+    // The port promises not to throw; a resolver that does anyway is one
+    // app's failure (exit 2 naming it), not a crash of the whole plan.
+    let cli: ReturnType<ReactNativeCliResolver['resolve']>;
+    try {
+      cli = deps.reactNativeCli.resolve(target.root);
+    } catch (error) {
+      cli = {
+        status: 'failed',
+        message: `the react-native CLI lookup failed: ${String(error)}`,
+      };
+    }
     resolved[key] =
       cli.status === 'ok'
         ? { ok: true, bundler, cli: cli.cli }

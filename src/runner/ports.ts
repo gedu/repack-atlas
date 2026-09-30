@@ -60,6 +60,15 @@ export async function allocatePorts(
   // Declared ports already handed to an earlier app of this plan.
   const claimed = new Map<number, string>();
 
+  /** A probe that throws cannot vouch for the port: busy, never a crash. */
+  async function isBusy(port: number): Promise<boolean> {
+    try {
+      return await probe.isPortBusy(port);
+    } catch {
+      return true;
+    }
+  }
+
   /** A free port not promised to another app, or `null` (never throws). */
   async function nextFree(): Promise<number | null> {
     try {
@@ -93,7 +102,7 @@ export async function allocatePorts(
     const claimedBy = claimed.get(entry.declaredPort);
     if (
       claimedBy === undefined &&
-      !(await probe.isPortBusy(entry.declaredPort))
+      !(await isBusy(entry.declaredPort))
     ) {
       claimed.set(entry.declaredPort, entry.key);
       assignments.push({

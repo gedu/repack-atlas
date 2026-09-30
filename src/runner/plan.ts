@@ -91,6 +91,18 @@ export interface BuildDevPlanInput {
   standalone?: string;
 }
 
+/**
+ * Whether the config key is part of the session: no `--apps` = everyone;
+ * otherwise the listed keys plus the `--standalone` remote (implied in).
+ */
+export function isAppSelected(
+  key: string,
+  apps: readonly string[] | undefined,
+  standalone: string | undefined
+): boolean {
+  return apps === undefined || apps.includes(key) || standalone === key;
+}
+
 /** Resolve `root`/`manifest` refs the way the doctor does (URLs stay). */
 export function resolveRef(configDir: string, ref: string): string {
   return isUrlSource(ref) ? ref : path.resolve(configDir, ref);
@@ -153,12 +165,9 @@ export function buildDevPlan(input: BuildDevPlanInput): BuildDevPlanResult {
   }
 
   // `--standalone r` implies r is in the session even when `--apps` omitted it.
-  const selected = input.apps
-    ? roster.filter(
-        (entry) =>
-          input.apps!.includes(entry.key) || input.standalone === entry.key
-      )
-    : roster;
+  const selected = roster.filter((entry) =>
+    isAppSelected(entry.key, input.apps, input.standalone)
+  );
 
   const entries: DevPlanEntry[] = [];
   const skipped: DevSkippedApp[] = [];

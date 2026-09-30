@@ -96,11 +96,24 @@ const quote = (part: string): string =>
   /\s/.test(part) ? `"${part}"` : part;
 
 /**
- * Readable one-line form for the plan table and `plan` event. A command
- * launch shows verbatim. An argv launch shows `node <cli> start ...` with the
- * CLI relative to `cwd` when it lives below it (stable across machines for
- * in-app installs) and absolute otherwise; `node` stands for `process.execPath`
- * so the JSON never embeds the node install path.
+ * Readable `node <script> ...` form of an argv whose first entry is a script
+ * path (`process.execPath` is shown as `node`, so the JSON never embeds the
+ * node install path). The script is shown relative to `cwd` when it lives
+ * below it (stable across machines for in-app installs), absolute otherwise.
+ */
+export function describeArgv(args: readonly string[], cwd: string): string {
+  const [script, ...rest] = args;
+  const relative = path.relative(cwd, script!);
+  const shown =
+    relative !== '' && !relative.startsWith('..') && !path.isAbsolute(relative)
+      ? relative.split(path.sep).join('/')
+      : script!;
+  return ['node', shown, ...rest].map(quote).join(' ');
+}
+
+/**
+ * Readable one-line form for the plan table and `plan` event: a command
+ * launch shows verbatim, an argv launch as `describeArgv` of its start argv.
  */
 export function describeLaunch(
   launch: DevLaunch,
@@ -108,11 +121,5 @@ export function describeLaunch(
   cwd: string
 ): string {
   if (launch.kind === 'command') return launch.command;
-  const [cli, ...rest] = startArgs(launch, port);
-  const relative = path.relative(cwd, cli!);
-  const shownCli =
-    relative !== '' && !relative.startsWith('..') && !path.isAbsolute(relative)
-      ? relative.split(path.sep).join('/')
-      : cli!;
-  return ['node', shownCli, ...rest].map(quote).join(' ');
+  return describeArgv(startArgs(launch, port), cwd);
 }

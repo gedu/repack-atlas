@@ -109,8 +109,11 @@ export interface SpawnSpec {
   file: string;
   args?: string[];
   cwd?: string;
-  /** Extra environment merged over `process.env`. */
-  env?: Record<string, string>;
+  /**
+   * Extra environment merged over `process.env`. A key set to `undefined`
+   * is REMOVED from the child's environment (a stray inherited value).
+   */
+  env?: Record<string, string | undefined>;
   /**
    * Run through a shell (`sh -c` / platform equivalent). Needed for
    * `npx`/PATH-wrapped user commands; avoid otherwise.

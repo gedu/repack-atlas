@@ -1,14 +1,17 @@
 // `repack-atlas dev` (T9, docs/PRD.md §7.1/§7.2): argv → supervisor +
 // Studio composition. This is the interactive-but-demo-grade runner: no
-// wizard, no launch — start what the workspace declares (an explicit
+// wizard — start what the workspace declares (an explicit
 // `command`, or the react-native start argv Atlas builds from `root`),
 // prefix its logs, probe ports for readiness, serve the read-only Studio
 // over the live graph, and shut everything down in order.
 //
 // `--json` event contract (PRD §7.1): one line per transition, each a single
 // JSON object — `{event:'plan', apps}` once before anything spawns (`--dry-run`
-// emits only this and `exit`), `{event:'studio', url}` once, `{event:'app', app, status,
-// port}` per status transition, `{event:'exit', code}` last. Child log
+// emits only this and `exit`; `--launch` adds a `launch` field), `{event:'studio',
+// url}` once, `{event:'app', app, status, port}` per status transition,
+// `{event:'launch', status:'started'|'exited', code?}` for the `--launch`
+// one-shot (a failure is reported, never the session's exit code),
+// `{event:'exit', code}` last. Child log
 // lines stay plain `[name]`-prefixed lines on stdout (same convention as
 // upstream `federation-dev`): parse stdout line by line and keep only
 // lines starting with `{`.
@@ -28,6 +31,7 @@ import {
 import {
   createDevSupervisor,
   loadDevPlan,
+  type OneShotEvent,
   resolveDevPlan,
   type DevAppPlan,
   type DevPlanResult,
@@ -40,6 +44,11 @@ import {
   type DevPlanEventApp,
   type DevPlatform,
 } from '../runner/plan.js';
+import {
+  formatLaunchLine,
+  toPlanEventLaunch,
+  type DevPlanEventLaunch,
+} from '../runner/launch-plan.js';
 import {
   allocatePorts,
   applyAssignments,
@@ -54,14 +63,23 @@ const EXIT_FOUND_ERRORS = 1;
 const EXIT_NO_ANSWER = 2;
 
 export const DEV_SPEC: ArgSpec = {
-  valueOptions: ['apps', 'port', 'platform', 'standalone'],
+  valueOptions: ['apps', 'port', 'platform', 'standalone', 'device'],
   optionalValueOptions: ['workspace', 'studio-port'],
-  booleanFlags: ['json', 'ci', 'no-studio', 'dry-run', 'auto-ports', 'help'],
+  booleanFlags: [
+    'json',
+    'ci',
+    'no-studio',
+    'dry-run',
+    'auto-ports',
+    'launch',
+    'no-launch',
+    'help',
+  ],
 };
 
 /** One line of the `--json` stream. Additive fields only. */
 export type DevEvent =
-  | { event: 'plan'; apps: DevPlanEventApp[] }
+  | { event: 'plan'; apps: DevPlanEventApp[]; launch?: DevPlanEventLaunch }
   | { event: 'studio'; url: string }
   | {
       event: 'app';
@@ -71,6 +89,14 @@ export type DevEvent =
       pid?: number;
       /** Additive: the busy port `--auto-ports` moved this app away from. */
       reassignedFrom?: number;
+    }
+  | {
+      event: 'launch';
+      status: 'started' | 'exited';
+      /** Exit code of the one-shot; `null` = killed by a signal / spawn error. */
+      code?: number | null;
+      pid?: number;
+      signal?: string;
     }
   | { event: 'exit'; code: number };
 
@@ -113,6 +139,7 @@ interface DryRunInput {
   hostPort: number | undefined;
   platform: DevPlatform | undefined;
   standalone: string | undefined;
+  launch: { device?: string } | undefined;
   autoPorts: boolean;
   json: boolean;
   io: DevIo;
@@ -144,6 +171,7 @@ async function runDryRun(input: DryRunInput): Promise<number> {
     ...(input.hostPort !== undefined ? { hostPort: input.hostPort } : {}),
     ...(input.platform !== undefined ? { platform: input.platform } : {}),
     ...(input.standalone !== undefined ? { standalone: input.standalone } : {}),
+    ...(input.launch !== undefined ? { launch: input.launch } : {}),
   });
   if (!plan.ok) {
     for (const reason of plan.reasons) io.writeErr(`dev: ${reason}`);
@@ -159,8 +187,17 @@ async function runDryRun(input: DryRunInput): Promise<number> {
   const shown = allocation.ok
     ? applyAssignments(plan.entries, allocation.assignments)
     : plan.entries;
-  emit({ event: 'plan', apps: toPlanEventApps(shown) });
-  if (!input.json) io.writeOut(formatPlanTable(shown));
+  emit({
+    event: 'plan',
+    apps: toPlanEventApps(shown),
+    ...(plan.launch !== undefined
+      ? { launch: toPlanEventLaunch(plan.launch) }
+      : {}),
+  });
+  if (!input.json) {
+    io.writeOut(formatPlanTable(shown));
+    if (plan.launch !== undefined) io.writeOut(formatLaunchLine(plan.launch));
+  }
 
   let code = EXIT_CLEAN;
   if (allocation.ok) {
@@ -176,6 +213,48 @@ async function runDryRun(input: DryRunInput): Promise<number> {
   }
   emit({ event: 'exit', code });
   return code;
+}
+
+/**
+ * Report the `--launch` one-shot. Non-zero exit and spawn errors are loud on
+ * stderr (and as a `--json` event) but the session continues: servers keep serving and
+ * the exit code still reflects the apps only.
+ */
+function reportLaunch(
+  name: string,
+  result: OneShotEvent,
+  emit: (event: DevEvent) => void,
+  io: DevIo,
+  json: boolean
+): void {
+  if (result.status === 'started') {
+    emit({
+      event: 'launch',
+      status: 'started',
+      ...(result.pid !== null ? { pid: result.pid } : {}),
+    });
+    if (!json) io.writeOut(`dev: ${name} → started`);
+    return;
+  }
+  emit({
+    event: 'launch',
+    status: 'exited',
+    code: result.code,
+    ...(result.signal !== null ? { signal: result.signal } : {}),
+  });
+  if (result.code === 0) {
+    if (!json) io.writeOut(`dev: ${name} → exited (app launched)`);
+  } else {
+    // stderr in both modes (like the skipped-app warnings): never the
+    // `--json` stdout stream, never the exit code.
+    const how =
+      result.code !== null
+        ? `exited with code ${result.code}`
+        : result.signal === 'spawn-error'
+          ? 'could not be spawned'
+          : `was killed (${result.signal ?? 'unknown signal'})`;
+    io.writeErr(`dev: ${name} ${how}; the session keeps serving`);
+  }
 }
 
 export async function runDevCommand(
@@ -254,6 +333,29 @@ export async function runDevCommand(
     }
   }
 
+  // Upstream parity: launching needs exactly one platform (there is no
+  // `run-all`), and the two launch flags are opposites. Both are usage errors
+  // before anything is read or spawned. Without `--launch` nothing launches
+  // (the wizard asks on a TTY in a later slice); `--device` alone is ignored.
+  const wantLaunch = parsed.flags.has('launch');
+  if (wantLaunch && parsed.flags.has('no-launch')) {
+    io.writeErr('dev: --launch and --no-launch cannot be combined');
+    return EXIT_NO_ANSWER;
+  }
+  if (wantLaunch && platform === undefined) {
+    io.writeErr(
+      'dev: --launch needs a single platform: pass --platform ios or --platform android (or drop --launch to serve only)'
+    );
+    return EXIT_NO_ANSWER;
+  }
+  const device = lastValue(parsed, 'device');
+  if (device !== undefined && !wantLaunch) {
+    io.writeErr('dev: warning  --device is ignored without --launch');
+  }
+  const launch = wantLaunch
+    ? { ...(device !== undefined ? { device } : {}) }
+    : undefined;
+
   const appsFlag = lastValue(parsed, 'apps');
   const appNames =
     appsFlag !== undefined
@@ -280,6 +382,7 @@ export async function runDevCommand(
       hostPort,
       platform,
       standalone,
+      launch,
       autoPorts,
       json,
       io,
@@ -306,6 +409,7 @@ export async function runDevCommand(
     ...(hostPort !== undefined ? { hostPort } : {}),
     ...(platform !== undefined ? { platform } : {}),
     ...(standalone !== undefined ? { standalone } : {}),
+    ...(launch !== undefined ? { launch } : {}),
   });
   if (!plan.ok) {
     for (const reason of plan.reasons) io.writeErr(`dev: ${reason}`);
@@ -317,7 +421,13 @@ export async function runDevCommand(
     for (const note of plan.reassignments) io.writeErr(`dev: ${note}`);
   }
   // The plan event carries the final (allocated) ports, auto ones included.
-  emit({ event: 'plan', apps: toPlanEventApps(plan.entries) });
+  emit({
+    event: 'plan',
+    apps: toPlanEventApps(plan.entries),
+    ...(plan.launch !== undefined
+      ? { launch: toPlanEventLaunch(plan.launch) }
+      : {}),
+  });
 
   // 2. Studio before spawning: its bind failure must not orphan children.
   const supervisorRef: { current: ReturnType<typeof createDevSupervisor> | null } =
@@ -380,8 +490,19 @@ export async function runDevCommand(
       if (!json) io.writeOut(`dev: ${app} → ${status} (port ${port})`);
       void studio?.notify();
     },
+    onOneShot(name, result) {
+      reportLaunch(name, result, emit, io, json);
+    },
   });
   supervisorRef.current = supervisor;
+  // The launch fires once, on the target's first `ready`; a failure is only
+  // ever reported (see `reportLaunch`), never the session's exit code.
+  if (plan.launch !== undefined) {
+    const { file, args, cwd } = plan.launch;
+    supervisor.onFirstReady(plan.launch.triggerKey, () =>
+      supervisor.spawnOneShot('launch', { file, args, cwd })
+    );
+  }
 
   // 4. Shutdown plumbing: q / Ctrl-C / SIGTERM → ordered shutdown, once.
   let resolveFinished: (() => void) | null = null;
