@@ -395,4 +395,70 @@ describe('init: derived commands and port validation', () => {
     assert.ok(result.ok);
     assert.equal(result.plan.host?.port, 8081);
   });
+
+  describe('command derivation branches', () => {
+    const planFor = async (
+      host: { package?: string | undefined },
+      extra: Record<string, string> = {}
+    ) => {
+      const files: Record<string, string> = {
+        [`${WS}/pnpm-lock.yaml`]: '',
+        [`${WS}/apps/host/rspack.config.js`]: '',
+        ...extra,
+      };
+      if (host.package !== undefined) {
+        files[`${WS}/apps/host/package.json`] = host.package;
+      }
+      const result = await buildInitPlan(WS, memoryFs(files), introspectorWith({}));
+      assert.ok(result.ok);
+      return result.plan.host!;
+    };
+    const valid = pkg('@x/host', { start: 'go' });
+
+    it('omits with a note: no package.json, invalid JSON, no or empty name', async () => {
+      const cases: [string | undefined, RegExp][] = [
+        [undefined, /no package\.json/],
+        ['{nope', /not valid JSON/],
+        [JSON.stringify({ scripts: { start: 'go' } }), /has no name/],
+        [pkg('', { start: 'go' }), /has no name/],
+      ];
+      for (const [content, note] of cases) {
+        const host = await planFor({ package: content });
+        assert.equal(host.command, undefined);
+        assert.match(host.notes.join(' '), note);
+      }
+    });
+
+    it('omits the command for a name that is not a valid npm name', async () => {
+      for (const name of ['bad name; rm -rf', 'Upper', '$(id)', '.hidden', '_x', 'a'.repeat(215)]) {
+        const host = await planFor({ package: pkg(name, { start: 'go' }) });
+        assert.equal(host.command, undefined, name);
+        assert.match(host.notes.join(' '), /not a valid npm package name/);
+      }
+      const ok = await planFor({ package: pkg('plain-name_1.x', { start: 'go' }) });
+      assert.equal(ok.command, 'pnpm --filter plain-name_1.x start');
+    });
+
+    it('detects pnpm from pnpm-lock.yaml alone', async () => {
+      const host = await planFor({ package: valid });
+      assert.equal(host.command, 'pnpm --filter @x/host start');
+    });
+
+    it('prefers pnpm, then yarn, then npm when several lockfiles exist', async () => {
+      const all = await planFor(
+        { package: valid },
+        { [`${WS}/yarn.lock`]: '', [`${WS}/package-lock.json`]: '' }
+      );
+      assert.equal(all.command, 'pnpm --filter @x/host start');
+      const files = {
+        [`${WS}/apps/host/rspack.config.js`]: '',
+        [`${WS}/apps/host/package.json`]: valid,
+        [`${WS}/yarn.lock`]: '',
+        [`${WS}/package-lock.json`]: '',
+      };
+      const result = await buildInitPlan(WS, memoryFs(files), introspectorWith({}));
+      assert.ok(result.ok);
+      assert.equal(result.plan.host?.command, 'yarn workspace @x/host start');
+    });
+  });
 });

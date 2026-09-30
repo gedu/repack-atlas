@@ -106,6 +106,13 @@ function startCommand(manager: PackageManager, name: string): string {
   return `npm --workspace ${name} run start`;
 }
 
+/** npm's package-name rules: lowercase, optional `@scope/`, max 214 chars. */
+const NPM_NAME = /^(?:@[a-z0-9~-][a-z0-9-._~]*\/)?[a-z0-9~-][a-z0-9-._~]*$/;
+
+function isValidPackageName(name: string): boolean {
+  return name.length <= 214 && NPM_NAME.test(name);
+}
+
 /** Derive the start command for one app, or explain why it cannot be. */
 async function deriveCommand(
   appDir: string,
@@ -126,6 +133,9 @@ async function deriveCommand(
       : {};
   if (typeof record.name !== 'string' || record.name === '') {
     return { note: 'no command: package.json has no name' };
+  }
+  if (!isValidPackageName(record.name)) {
+    return { note: 'no command: package name is not a valid npm package name' };
   }
   const scripts = record.scripts;
   const hasStart =
