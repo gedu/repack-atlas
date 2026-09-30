@@ -48,6 +48,7 @@ Mode: off (no project/session TDD config). Runner: `pnpm test`.
   `Error | undefined`.
 - T4 `b9488e9`: fallback guard derived from the built geometry; e2e bounding
   boxes for badge vs status dot.
+- T5 `8996b11`: runbook facts supplied by the coordinator from atlas-demo.
 - Evidence: build, typecheck, lint ok; `pnpm test` 343/343; `pnpm test:e2e`
   12 passed; runner suite 5/5 consecutive runs (6 pass each);
   `commit-check --range main..HEAD` ok.
