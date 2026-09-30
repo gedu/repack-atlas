@@ -6,7 +6,7 @@ Status: **in progress** · Created: 2026-09-30 · Engram mirror: `odd/showcase-d
 
 Prove repack-atlas works on a REAL Module Federation workspace: the
 super-app-showcase fork at
-`the ../super-app-showcase sibling checkout`
+the `../super-app-showcase` sibling checkout
 (pnpm monorepo, apps under `packages/{host,auth,trading,wallet}`, sdk lib,
 process configs under `mprocs/`). Produce real doctor findings, a live
 `repack-atlas dev` + Studio session, and evidence for the README GIF.
