@@ -33,6 +33,7 @@ layout is testable (`tests/studio/page.test.ts`, `tests/e2e/studio.spec.ts`).
   intermediate nodes instead of through them.
 - [x] T2 `fix(studio)`: edge labels are never occluded by a node.
 - [x] T3 `fix(studio)`: confidence badges never wrap.
+- [x] T4 `fix(studio)`: review follow-up (label placement and test hardening).
 
 Route: delegated writer (layout code needs preparation reading of an 895-line
 file plus tests).
@@ -59,3 +60,11 @@ Branch `fix/studio-layout` from `main` (390f00e).
   the CSS.
 - Checks: see the final report of the writer (lint, typecheck, build, test,
   test:e2e, check:commits).
+- T4 `819dd08`: label placement picks the least-overlap slot (8 nudge steps
+  each way) and says so; the viewBox grows vertically (including above the
+  top) to hold every label; lane constants are named; `planEdges` takes the
+  edge list; e2e measures rendered `<text>` bboxes (no node overlap, inside
+  its background and the viewBox), asserts distinct lanes, shares the box
+  helpers and guards `afterAll`.
+- T4 checks: lint, typecheck, build exit 0; `pnpm test` 294 pass / 0 fail;
+  `pnpm test:e2e` 10 passed; `pnpm check:commits` OK.
