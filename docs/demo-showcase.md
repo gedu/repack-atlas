@@ -16,7 +16,7 @@ Two checkouts side by side:
 
 ```
 <parent>/
-├── repack-atlas/            # the tool (Node >= 20, pnpm >= 10)
+├── repack-atlas/            # the tool (Node >= 22.13, pnpm >= 10)
 └── super-app-showcase/      # the demo workspace (Node >= 24.18, pnpm 11)
 ```
 
