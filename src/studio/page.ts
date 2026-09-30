@@ -161,6 +161,8 @@ export const STUDIO_PAGE_HTML = `<!doctype html>
   .node .role { font-size: 10px; font-weight: 700; letter-spacing: 0.08em; fill: var(--accent-ink); }
   .badge-c { fill: var(--bad-fill); }
   .badge-w { fill: var(--warn-fill); }
+  .tag-standalone { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 1; }
+  .tag-standalone-t { font-size: 10px; font-weight: 600; fill: var(--accent-ink); }
   .badge-t { font-size: 11px; font-weight: 700; fill: #201f24; }
   .grid-dot { fill: var(--grid); }
   @media (prefers-reduced-motion: no-preference) {
@@ -293,6 +295,8 @@ export const STUDIO_PAGE_HTML = `<!doctype html>
 
   var NS = 'http://www.w3.org/2000/svg';
   var W = 168, H = 78;
+  // Standalone pill: right edge sits 32px inside the node, left of the status dot.
+  var TAG_W = 62, TAG_RIGHT = 32;
   var graph = { apps: [], edges: [], findings: [] };
   var selected = null;
   var tab = 'exposes';
@@ -561,7 +565,8 @@ export const STUDIO_PAGE_HTML = `<!doctype html>
       var node = svgEl('g', {
         'class': 'node' + (name === selected ? ' sel' : ''),
         tabindex: '0', role: 'button',
-        'aria-label': name + ', ' + app.role + ' on ' + portLabel(app) + ', ' + statusOf(app),
+        'aria-label': name + ', ' + app.role + ' on ' + portLabel(app) + ', ' + statusOf(app) +
+          (app.standalone === true ? ', standalone' : ''),
         'data-node': name
       }, svg);
       svgEl('rect', { x: place.x, y: place.y, width: W, height: H, rx: 9, 'class': 'box' }, node);
@@ -570,6 +575,18 @@ export const STUDIO_PAGE_HTML = `<!doctype html>
       svgText(node, {
         x: place.x + 14, y: place.y + 62, 'class': 'meta'
       }, portLabel(app) + ' ' + statusOf(app) + ' ' + app.exposes.length + ' exp');
+      if (app.standalone === true) {
+        // Read-only declaration from the config; text node only, nowrap by
+        // construction (fixed-width pill, single SVG text).
+        svgEl('rect', {
+          x: place.x + W - TAG_RIGHT - TAG_W, y: place.y + 8, width: TAG_W, height: 16, rx: 8,
+          'class': 'tag-standalone'
+        }, node);
+        svgText(node, {
+          x: place.x + W - TAG_RIGHT - TAG_W / 2, y: place.y + 19, 'text-anchor': 'middle',
+          'class': 'tag-standalone-t'
+        }, 'standalone');
+      }
       svgEl('circle', {
         cx: place.x + W - 14, cy: place.y + 16, r: 4,
         fill: statusFill(app)
@@ -840,6 +857,7 @@ export const STUDIO_PAGE_HTML = `<!doctype html>
     nameNode.appendChild(document.createTextNode(app.name));
     metaNode.appendChild(document.createTextNode(
       app.role.toUpperCase() + ' ' + portLabel(app) + ' ' + statusOf(app) +
+      (app.standalone === true ? ' \\u00b7 standalone' : '') +
       (truthy(app.consumedBy.length) ? ' \\u2190 used by ' + app.consumedBy.join(', ') : '')
     ));
 

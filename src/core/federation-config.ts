@@ -19,7 +19,10 @@ export const FEDERATION_CONFIG_FILENAME = 'repack-federation.json';
 export interface FederationHostConfig {
   /** Manifest source: .json path, directory, or http(s) URL. */
   manifest: string;
-  /** App root, for consumers that need it (init, dry-run, runner). */
+  /** App root. Only the dev runner uses it: resolved against the config
+   * directory and passed to the app process as `ATLAS_APP_ROOT` (the process
+   * cwd stays the config directory). Doctor, graph and Studio resolve
+   * `manifest` relative to the config directory and ignore `root`. */
   root?: string;
   /** Start command for `repack-atlas dev` (see `src/runner/**` for the
    * exact resolution semantics). Absent → the runner skips the app. */
@@ -32,8 +35,11 @@ export interface FederationHostConfig {
 /** One named entry of the `remotes` map. */
 export interface FederationRemoteConfig {
   manifest: string;
+  /** App root. Only the dev runner uses it (see the host `root`). */
   root?: string;
-  /** Whether this remote supports `--standalone` mode. */
+  /** Declared by the app owner: "this remote can run without the host".
+   * Validated only as a boolean. Atlas does not detect, verify or act on it;
+   * the Studio shows a read-only `standalone` badge when it is `true`. */
   standalone?: boolean;
   /** Dev-server port (consumed by the T9 runner). */
   port?: number;

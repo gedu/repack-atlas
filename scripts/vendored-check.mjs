@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * vendored-check — CI guard for the `vendored-provenance` rule (PRD §12,
+ * vendored-check — CI guard for the CI `Vendored provenance check` step (PRD §12,
  * AGENTS.md rule 1).
  *
  * Every file under `src/repack-bridge/vendored/**` must:

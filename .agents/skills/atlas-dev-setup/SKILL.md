@@ -53,9 +53,9 @@ The fixture doctor suite is the fast end-to-end proof and needs no device:
 
 ```bash
 pnpm test                                    # fixture suite included
-node dist/cli.js doctor --fixtures fixtures/fixture-version-drift --json
+node dist/cli.js doctor --workspace fixtures/fixture-version-drift --json
 echo "exit=$?"                               # expect 1 (drift found)
-node dist/cli.js doctor --fixtures fixtures/fixture-clean --json
+node dist/cli.js doctor --workspace fixtures/workspace --json
 echo "exit=$?"                               # expect 0
 ```
 

@@ -42,7 +42,9 @@ Work through it in order; every box is a file in the same PR.
    A `heuristic` finding (or `dynamicImportDetected`) downgrades to an advisory
    rather than an error — Atlas reports what it cannot check instead of
    guessing. Never promote a heuristic to an error to make a test pass.
-4. **Fixture variant.** One variant per finding under `fixtures/fixture-<code>/`
+4. **Fixture variant.** One variant per finding under `fixtures/fixture-<kebab-name>/`
+   (a short descriptive name such as `fixture-remote-cycle` for `REMOTE_CYCLE`;
+   the clean baseline is `fixtures/workspace`)
    with a `README.md` stating the provoked finding and the expected exit code.
    Keep it Rspack + MF2, no real UI, no simulator, no network, and keep the
    whole suite inside the seconds budget (PRD §9).
@@ -71,23 +73,23 @@ Stable, machine-readable, one report per run:
   "tool": "repack-atlas",
   "doctorVersion": "1",
   "exitCode": 1,
-  "summary": { "errors": 1, "warnings": 0, "advisories": 0 },
+  "summary": { "errors": 1, "warnings": 0, "advisories": 0, "infos": 0 },
   "findings": [
     {
-      "code": "SHARED_VERSION_DRIFT",
       "severity": "error",
+      "code": "SHARED_VERSION_DRIFT",
       "confidence": "static",
-      "package": "react",
-      "message": "host requires 18.2.0 but remote wallet resolves 18.3.1",
-      "subjects": ["host", "wallet"]
+      "message": "Singleton shared dependency \"react\" resolves to different versions: host \"host\" has 19.0.0, remote \"mini_store\" has 19.1.0. Align the versions (or remove singleton)."
     }
   ]
 }
 ```
 
+Excerpt from `node dist/cli.js doctor --workspace fixtures/fixture-version-drift --json`.
+
 Contract rules: human-readable output is the default and `--json` is the
 machine interface; `exitCode` in the payload mirrors the process exit code;
-every finding carries `code`, `severity`, `confidence` and a message naming the
+every finding carries `severity`, `code`, `confidence` and a message naming the
 package and versions. Additive fields are allowed, removals or renames are
 breaking.
 
@@ -95,7 +97,7 @@ breaking.
 
 ```bash
 pnpm lint && pnpm typecheck && pnpm test
-node dist/cli.js doctor --fixtures fixtures/fixture-<code> --json; echo "exit=$?"
+node dist/cli.js doctor --workspace fixtures/fixture-<kebab-name> --json; echo "exit=$?"
 ```
 
 Report the real exit code and output in the PR — never a claimed pass.

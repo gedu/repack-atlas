@@ -281,6 +281,12 @@ Atlas reports what it cannot check instead of guessing.
 - Layout: top bar (title, URL, one pill per app with status dot + port); graph
   (1.55fr) + inspector (1fr, tabs Exposes / Shared / Native / Bundle); full-width
   doctor findings list with severity stripes; cycle edges dashed red.
+- A remote that declares `standalone: true` in `repack-federation.json` gets a
+  read-only `standalone` badge on its node (and inspector line). The flag is an
+  owner declaration: Atlas validates only its type and never detects or acts on
+  it. Likewise `root` affects only the dev runner (passed to the app process as
+  `ATLAS_APP_ROOT`); doctor, graph and Studio resolve manifests relative to the
+  config directory.
 - Manifests are fetched from each running dev server at the default
   `repack-federation-manifest.json` asset route (a custom `fileName` is not
   served by the repack dev-server allowlist).
@@ -442,10 +448,10 @@ Single `ci.yml` + `pr-checks.yml` to start:
 
 - **lint + typecheck** — ESLint (incl. the bridge fence and core-boundary import
   rules), `tsc --noEmit`.
-- **agent-files** — `agent-sync --check`: every `.agents/skills/*` has its
+- **Agent files sync check** step — `pnpm agent:check` (`agent-sync --check`): every `.agents/skills/*` has its
   `.claude/skills` symlink, `AGENTS.md` table in sync, SKILL.md frontmatter valid
   (name/dir match, description bounds).
-- **vendored-provenance** — every file under `vendored/` appears in `VENDORED.md`
+- **Vendored provenance check** step — `pnpm check:vendored`: every file under `vendored/` appears in `VENDORED.md`
   with a commit SHA; fail otherwise.
 - **test** — unit + CLI integration (fixture workspaces) on macOS + Linux,
   Node LTS ×2.

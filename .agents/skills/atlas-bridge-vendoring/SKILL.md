@@ -25,7 +25,7 @@ the only place that debt is allowed to live.
 
 1. `src/repack-bridge/vendored/**` is imported **only** from
    `src/repack-bridge/**`. The `atlas/bridge-fence` ESLint rule enforces it; the
-   CI `vendored-provenance` check requires every vendored file to appear in
+   CI `Vendored provenance check` step (`pnpm check:vendored`) requires every vendored file to appear in
    `VENDORED.md`. Never weaken either to make a build pass.
 2. `src/repack-bridge/index.ts` is the **only import surface** the rest of the
    app may use. Everything else goes through it.

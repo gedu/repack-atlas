@@ -140,3 +140,11 @@ describe('Studio page keeps badges on one line', () => {
     assert.match(page, /table\.kv td\.has-pill \{[^}]*white-space: nowrap/);
   });
 });
+
+describe('Studio page standalone badge', () => {
+  it('source draws the badge from app.standalone with a literal label', () => {
+    assert.match(page, /app\.standalone === true/);
+    assert.match(page, /'standalone'\);/, 'literal label, never data');
+    assert.match(page, /\.tag-standalone-t/);
+  });
+});
