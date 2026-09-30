@@ -13,6 +13,8 @@
 
 import { expect, test, type Page } from '@playwright/test';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -236,5 +238,132 @@ test.describe('Studio over the rendering probe fixture', () => {
     expect(await page.locator('script').count()).toBe(1);
     // A manifest probe must never reach alert(): no dialog was observed.
     expect(dialogs).toEqual([]);
+  });
+});
+
+/**
+ * Minimal workspace with the shape that used to draw badly: a host on the
+ * left and three remotes stacked in one column (auth, trading, wallet), with
+ * host -> each remote plus trading -> auth and wallet -> auth (the last one
+ * spans the trading node). The wallet declares a heuristic native module.
+ */
+async function writeStackedWorkspace(dir: string): Promise<void> {
+  const remoteNames = ['auth', 'trading', 'wallet'];
+  const entry = (name: string, port: number) => ({
+    federationContainerName: name,
+    moduleName: name,
+    alias: name,
+    entry: `http://127.0.0.1:${port}/${name}.container.js`,
+  });
+  const manifest = (
+    name: string,
+    type: 'host' | 'remote',
+    remotes: string[],
+    nativeModules: object[]
+  ) => ({
+    manifestVersion: 1,
+    id: name,
+    name,
+    metaData: {
+      name,
+      globalName: name,
+      type,
+      buildInfo: { buildVersion: 'e2e', buildName: name },
+      ...(type === 'remote'
+        ? { remoteEntry: { name: `${name}.container.js`, path: '', type: 'var' } }
+        : {}),
+      publicPath: 'auto',
+    },
+    shared: [],
+    remotes: remotes.map((remote) => entry(remote, 9000 + remoteNames.indexOf(remote))),
+    exposes: [],
+    reactNative: { version: '0.79.2', platforms: ['ios'], nativeModules, dynamicImportDetected: false },
+  });
+  const native = (confidence: string) => [
+    { package: 'react-native-mmkv', version: '3.0.0', turboModule: true, confidence },
+  ];
+  const manifests: Record<string, object> = {
+    host: manifest('host', 'host', remoteNames, []),
+    auth: manifest('auth', 'remote', [], []),
+    trading: manifest('trading', 'remote', ['auth'], []),
+    wallet: manifest('wallet', 'remote', ['auth'], native('heuristic')),
+  };
+  await mkdir(path.join(dir, 'manifests'), { recursive: true });
+  for (const [name, content] of Object.entries(manifests)) {
+    await writeFile(path.join(dir, 'manifests', `${name}.json`), JSON.stringify(content));
+  }
+  const config = {
+    host: { manifest: './manifests/host.json' },
+    remotes: Object.fromEntries(
+      remoteNames.map((name, index) => [
+        name,
+        { manifest: `./manifests/${name}.json`, port: 9100 + index },
+      ])
+    ),
+  };
+  await writeFile(path.join(dir, 'repack-federation.json'), JSON.stringify(config));
+}
+
+test.describe('Studio over a stacked one-column workspace', () => {
+  let preview: Preview;
+  let workspace: string;
+
+  test.beforeAll(async () => {
+    workspace = await mkdtemp(path.join(os.tmpdir(), 'atlas-stacked-'));
+    await writeStackedWorkspace(workspace);
+    preview = await startPreview(workspace, basePort + 37);
+  });
+  test.afterAll(async () => {
+    await preview?.stop();
+    await rm(workspace, { recursive: true, force: true });
+  });
+
+  interface Box {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  }
+  test('same-column edges route around the nodes between their ends', async ({ page }) => {
+    await page.goto(preview.url);
+    await expect(page.locator('svg.graph g.node')).toHaveCount(4);
+    await expect(page.locator('svg.graph path.edge')).toHaveCount(5);
+
+    const boxOf = (selector: string) =>
+      page.locator(selector).evaluate((node) => {
+        const box = (node as SVGGraphicsElement).getBBox();
+        return { x: box.x, y: box.y, width: box.width, height: box.height };
+      });
+    const nodeBoxes: Record<string, Box> = {};
+    for (const name of ['host', 'auth', 'trading', 'wallet']) {
+      nodeBoxes[name] = await boxOf(`svg.graph g.node[data-node="${name}"] rect.box`);
+    }
+
+    // wallet -> auth spans the trading node: its curve must bow out to the
+    // right of the column instead of crossing the trading rectangle.
+    const points = await page
+      .locator('svg.graph path.edge[data-edge="wallet->auth"]')
+      .evaluate((node) => {
+        const path = node as unknown as SVGGeometryElement;
+        const total = path.getTotalLength();
+        return Array.from({ length: 41 }, (_, step) => {
+          const point = path.getPointAtLength((total * step) / 40);
+          return { x: point.x, y: point.y };
+        });
+      });
+    const trading = nodeBoxes['trading']!;
+    for (const point of points) {
+      const inside =
+        point.x > trading.x && point.x < trading.x + trading.width &&
+        point.y > trading.y && point.y < trading.y + trading.height;
+      expect(inside, `wallet->auth passes through trading at ${point.x},${point.y}`).toBe(false);
+    }
+    // The end of the edge sits at the auth node and points at it (right side).
+    const last = points[points.length - 1]!;
+    const auth = nodeBoxes['auth']!;
+    expect(Math.abs(last.x - (auth.x + auth.width))).toBeLessThan(10);
+    expect(last.y).toBeGreaterThan(auth.y);
+    expect(last.y).toBeLessThan(auth.y + auth.height);
+
   });
 });
