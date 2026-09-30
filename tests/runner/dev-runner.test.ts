@@ -265,14 +265,19 @@ async function session(args: string[], cwd = WORKSPACE): Promise<Session> {
   return s;
 }
 
-/** Signal a process group only if it is still alive; ESRCH is the only ignored error. */
-function killGroupIfAlive(pid: number): void {
+/**
+ * SIGKILL an app process group (children are detached group leaders). An
+ * already-gone group (ESRCH) is fine; any other error is returned so the
+ * caller can finish cleanup before surfacing it. Reused-pid protection is the
+ * last-status filter in `reap`, not this function.
+ */
+function killGroup(pid: number): unknown {
   try {
-    process.kill(-pid, 0); // liveness probe, sends no signal
-    process.kill(-pid, 'SIGKILL'); // children are detached group leaders
+    process.kill(-pid, 'SIGKILL');
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error;
+    if ((error as NodeJS.ErrnoException).code !== 'ESRCH') return error;
   }
+  return undefined;
 }
 
 /** Kill the runner and the app groups still running, then await the exit. */
@@ -289,11 +294,13 @@ async function reap(s: Session): Promise<void> {
     if (event.status === 'error' || event.status === 'stopped') continue;
     pids.add(event.pid);
   }
-  for (const pid of pids) killGroupIfAlive(pid);
+  // Every group and the runner are always signalled; errors surface after.
+  const errors = [...pids].map(killGroup).filter((e) => e !== undefined);
   if (s.child.exitCode === null && s.child.signalCode === null) {
     s.child.kill('SIGKILL');
   }
   await s.exited;
+  if (errors.length > 0) throw errors[0];
 }
 
 beforeEach(async () => {
