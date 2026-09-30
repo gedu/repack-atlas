@@ -74,4 +74,18 @@ Mode: off (no project/session TDD config found in AGENTS.md). Runner:
   unquoted into the command; SUGGESTION: untested deriveCommand branches.
 - Follow-up `8e1310b` (+76): command only for valid npm package names, tests
   for the missing branches. Parent re-run: `pnpm test` 311/311 pass.
-- Next: RDD slice 2 (`c8a93c1..HEAD`), then push/PR on owner decision.
+- RDD slice 2 (`c8a93c1..fa59707`): high, 4 lenses, granted, approved and
+  acknowledged (lineage review-811e5e3b31ea951c). Advisory warnings: unbounded
+  `**` walk, no symlink-cycle guard, negation-only globs skip the fallback,
+  basename collisions.
+- Follow-up `394c7b0` (+112/-12): `**` stops below apps, prunes native/build
+  dirs, depth cap 8; positive-glob-only branch; dashed names on basename
+  collisions. Parent re-run: `pnpm test` 314/314 pass.
+- RDD `fa59707..394c7b0`: medium, 1 lens, granted, approved and acknowledged
+  (lineage review-1a4ae125011b9c77).
+- Open follow-ups (advisory, not fixed): `!` exclusions ignored in the
+  `apps/*` fallback; dashed collision names are not re-checked for
+  uniqueness; ios/android/Pods pruning and the depth cap have no direct test;
+  the depth cap drops deep apps silently.
+- Delivery: PR 1 `feat/init-commands` (c8a93c1, Closes #9); PR 2 stacked on
+  it, `feat/init-discovery-commands` (Closes #8). Push/PR on owner decision.
