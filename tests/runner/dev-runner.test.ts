@@ -271,11 +271,11 @@ async function session(args: string[], cwd = WORKSPACE): Promise<Session> {
  * caller can finish cleanup before surfacing it. Reused-pid protection is the
  * last-status filter in `reap`, not this function.
  */
-function killGroup(pid: number): unknown {
+function killGroup(pid: number): Error | undefined {
   try {
     process.kill(-pid, 'SIGKILL');
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ESRCH') return error;
+    if ((error as NodeJS.ErrnoException).code !== 'ESRCH') return error as Error;
   }
   return undefined;
 }
@@ -295,12 +295,17 @@ async function reap(s: Session): Promise<void> {
     pids.add(event.pid);
   }
   // Every group and the runner are always signalled; errors surface after.
-  const errors = [...pids].map(killGroup).filter((e) => e !== undefined);
+  const errors = [...pids]
+    .map(killGroup)
+    .filter((e): e is Error => e !== undefined);
   if (s.child.exitCode === null && s.child.signalCode === null) {
     s.child.kill('SIGKILL');
   }
   await s.exited;
-  if (errors.length > 0) throw errors[0];
+  if (errors.length === 1) throw errors[0];
+  if (errors.length > 1) {
+    throw new AggregateError(errors, `${errors.length} app groups could not be killed`);
+  }
 }
 
 beforeEach(async () => {
