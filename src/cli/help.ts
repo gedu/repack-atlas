@@ -53,7 +53,7 @@ Exit codes
      manifest that does not exist (MISSING_REMOTE_MANIFEST) or exists but
      cannot be read (MANIFEST_UNREADABLE) is a finding, not a failure to run
   2  could not answer (unknown option/mode, no config found, host manifest
-     missing or corrupt, every remote manifest unreadable)
+     missing or corrupt, no remote manifest can be compared)
 `;
 
 export const INSPECT_HELP = `repack-atlas inspect — pretty-print a federation manifest

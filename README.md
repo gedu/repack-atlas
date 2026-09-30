@@ -63,8 +63,8 @@ Exit codes are a contract: `0` clean (warnings allowed), `1` ran and found
 errors, `2` could not answer. The clean fixture exits `0`. A remote manifest
 that exists but cannot be read is a named `MANIFEST_UNREADABLE` error (exit `1`,
 the other remotes are still checked); exit `2` is for runs with nothing to
-compare: no or invalid config, an unreadable host manifest, or every remote
-manifest unreadable.
+compare: no or invalid config, an unreadable host manifest, or no remote
+manifest can be compared (each one unreadable or missing).
 
 The dev runner starts every app in a workspace and serves the Studio page:
 

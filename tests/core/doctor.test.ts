@@ -203,7 +203,10 @@ describe('runDoctor', () => {
   it('errors on a missing remote manifest, warning when allowed', () => {
     const strict = runDoctor({
       host,
-      remotes: [{ name: 'payments', missing: true }],
+      remotes: [
+        { name: 'payments', missing: true },
+        { name: 'store', manifest: remoteClean },
+      ],
     });
     const missing = strict.findings.find(
       (finding) => finding.code === 'MISSING_REMOTE_MANIFEST'
@@ -215,7 +218,10 @@ describe('runDoctor', () => {
 
     const lenient = runDoctor({
       host,
-      remotes: [{ name: 'payments', missing: true }],
+      remotes: [
+        { name: 'payments', missing: true },
+        { name: 'store', manifest: remoteClean },
+      ],
       allowMissingManifests: true,
     });
     assert.equal(
@@ -417,6 +423,41 @@ describe('runDoctor REMOTE_CYCLE integration and exit-code 2 (Atlas additions)',
       2
     );
     assert.equal(doctorExitCode(report), 2);
+  });
+
+  it('is unable to answer when remotes are a mix of unreadable and missing, with or without --allow-missing-manifests', () => {
+    const remotes = [
+      { name: 'payments', corrupt: true, reason: 'bad' },
+      { name: 'store', missing: true },
+    ];
+    for (const allowMissingManifests of [false, true]) {
+      const report = runDoctor({ host, remotes, allowMissingManifests });
+      assert.ok(codes(report).includes('MANIFEST_UNREADABLE'));
+      assert.ok(codes(report).includes('MISSING_REMOTE_MANIFEST'));
+      assert.equal(doctorExitCode(report), 2);
+    }
+  });
+
+  it('is unable to answer when every remote is missing, even when allowed', () => {
+    const report = runDoctor({
+      host,
+      remotes: [{ name: 'store', missing: true }],
+      allowMissingManifests: true,
+    });
+    assert.equal(doctorExitCode(report), 2);
+  });
+
+  it('exits 1 when one remote is compared next to unreadable and missing ones', () => {
+    const report = runDoctor({
+      host,
+      remotes: [
+        { name: 'payments', corrupt: true, reason: 'bad' },
+        { name: 'cart', missing: true },
+        { name: 'store', manifest: remoteClean },
+      ],
+    });
+    assert.equal(report.unableToAnswer, undefined);
+    assert.equal(doctorExitCode(report), 1);
   });
 
   it('carries MANIFEST_UNREADABLE in the --json report with exitCode 1', () => {

@@ -256,7 +256,7 @@ function checkUnreadableManifests(
  * shared-dependency, native-module and remote-cycle inconsistency found.
  * An unreadable remote manifest is a named `MANIFEST_UNREADABLE` error (exit
  * 1) and the other remotes are still checked. Only when remotes exist and
- * none of them can be compared (all unreadable) does the report set
+ * none of them can be compared (each unreadable or missing) does the report set
  * `unableToAnswer` (exit 2); a caller-side host failure does too, keeping
  * "no answer" distinguishable from "bad answer".
  */
@@ -285,9 +285,11 @@ export function runDoctor(input: DoctorInput): DoctorReport {
   checkRemoteManifests(input, findings);
   checkUnreadableManifests(input, findings);
 
+  // Exit 2 when remotes exist but none was actually compared (each one is
+  // unreadable or missing), whatever `allowMissingManifests` says.
   const nothingComparable =
     input.remotes.length > 0 &&
-    input.remotes.every((remote) => remote.corrupt);
+    input.remotes.every((remote) => remote.corrupt || remote.missing);
   return nothingComparable ? { findings, unableToAnswer: true } : { findings };
 }
 

@@ -17,7 +17,8 @@ same Module Federation `shared` object to both plugins.
 - #7 exit code (decided 2026-09-30, owner delegated): an unreadable manifest
   is a named error finding `MANIFEST_UNREADABLE` and `doctor` exits `1` when
   it can still answer for the other apps. Exit `2` stays for runs that cannot
-  answer at all (missing or invalid config, nothing readable).
+  answer at all (missing or invalid config, host unreadable, or no remote
+  manifest can be compared: each one unreadable or missing).
 - #10: accept the MF map and keep the array; normalize to the array shape;
   resolve a missing `version` from the installed package and mark its
   confidence honestly.

@@ -263,7 +263,7 @@ Doctor exit codes (locked in the fork's design doc, kept here): `0` clean
 unless `--allow-missing-manifests`; `MANIFEST_UNREADABLE` when a remote manifest
 exists but cannot be read, while other remotes can still be checked) · `2` could
 not run — missing option, no/invalid config, host manifest missing/corrupt, or
-no remote manifest readable. `2` means "no answer", `1` means "bad answer"; CI
+no remote manifest can be compared (each unreadable or missing). `2` means "no answer", `1` means "bad answer"; CI
 treats both as failure. Heuristic honesty is preserved: `dynamicImportDetected`
 or `confidence: heuristic` downgrades missing-native findings to advisories —
 Atlas reports what it cannot check instead of guessing.
