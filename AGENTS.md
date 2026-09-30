@@ -58,7 +58,15 @@ pnpm test:e2e    # Playwright + chromium over the Studio preview (needs the
                  # browser: pnpm exec playwright install chromium)
 pnpm agent:sync  # regenerate skill symlinks + AGENTS.md tables
 pnpm agent:check # CI-mode verification of the above (exit 1 on drift)
+pnpm check:vendored # CI: every vendored file in VENDORED.md with a commit
+                 # sha + Copyright header (exit 1 on drift)
 ```
+
+CI (`.github/workflows/ci.yml`) runs lint, typecheck, build, test,
+`agent:check` and `check:vendored` on macOS+Linux × Node 20/22, plus a
+Playwright studio-e2e job on Linux. PR gates (title, 400-line budget, linked
+issue) live in `pr-checks.yml`. Reproduce every job locally with the commands
+above; CONTRIBUTING.md maps each CI step to its command.
 
 ## Layout
 
@@ -91,6 +99,8 @@ VENDORED.md              # provenance ledger for src/repack-bridge/vendored/
 .agents/skills/          # canonical skills (agentskills.io format)
 .claude/skills/          # generated symlinks -> .agents/skills/*  (do not edit)
 scripts/agent-sync.mjs   # generates the adapters + the tables below
+scripts/vendored-check.mjs # CI provenance guard for VENDORED.md (pnpm check:vendored)
+.github/workflows/       # ci.yml (matrix + studio-e2e) + pr-checks.yml (gates)
 ```
 
 Direction of dependency: adapters → ports in core. Core never imports outward.
