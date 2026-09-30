@@ -1,0 +1,63 @@
+{
+  "manifestVersion": 1,
+  "id": "host",
+  "name": "host",
+  "metaData": {
+    "name": "host",
+    "globalName": "host",
+    "type": "host",
+    "buildInfo": {
+      "buildVersion": "fixture00",
+      "buildName": "host"
+    },
+    "publicPath": "auto"
+  },
+  "shared": [
+    {
+      "name": "react",
+      "version": "19.0.0",
+      "singleton": true,
+      "eager": true,
+      "requiredVersion": "^19.0.0"
+    },
+    {
+      "name": "react-native",
+      "version": "0.79.2",
+      "singleton": true,
+      "eager": true,
+      "requiredVersion": "~0.79.2"
+    }
+  ],
+  "remotes": [
+    {
+      "federationContainerName": "mini_auth",
+      "moduleName": "mini_auth",
+      "alias": "mini_auth",
+      "entry": "http://127.0.0.1:8082/mini_auth.container.js"
+    },
+    {
+      "federationContainerName": "mini_store",
+      "moduleName": "mini_store",
+      "alias": "mini_store",
+      "entry": "http://127.0.0.1:8083/mini_store.container.js"
+    }
+  ],
+  "exposes": [],
+  "reactNative": {
+    "version": "0.79.2",
+    "platforms": [
+      "ios",
+      "android"
+    ],
+    "nativeModules": [
+      {
+        "package": "react-native-reanimated",
+        "version": "3.17.1",
+        "turboModule": true,
+        "confidence": "static"
+      }
+    ],
+    "dynamicImportDetected": true
+  },
+  "_provenance": "Hand-authored fixture manifest for repack-atlas tests (T6). Schema: src/core/manifest-types.ts (FederationManifestSchema v1). Not produced by a real rspack build; see fixtures/README.md."
+}

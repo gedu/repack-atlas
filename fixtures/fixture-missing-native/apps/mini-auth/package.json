@@ -1,0 +1,11 @@
+{
+  "name": "@repack-atlas-fixture/mini-auth",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "Fixture remote app (fixture-missing-native) for repack-atlas tests — never installed or built.",
+  "dependencies": {
+    "react": "19.0.0",
+    "react-native": "0.79.2"
+  }
+}

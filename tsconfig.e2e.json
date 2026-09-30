@@ -1,0 +1,12 @@
+{
+  // Browser-side tests get the DOM lib; the Node-test project deliberately
+  // does not, so `document` cannot leak into a test that runs in Node.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "lib": ["ES2022", "DOM"],
+    "rootDir": ".",
+    "noEmit": true
+  },
+  "include": ["tests/e2e/**/*.ts", "playwright.config.ts"],
+  "exclude": ["node_modules", "dist"]
+}

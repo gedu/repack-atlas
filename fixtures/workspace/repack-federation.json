@@ -1,0 +1,23 @@
+{
+  "host": {
+    "manifest": "./manifests/host.json",
+    "root": "./apps/host",
+    "command": "node tools/stub-bundler.mjs"
+  },
+  "remotes": {
+    "mini_auth": {
+      "manifest": "./manifests/mini-auth.json",
+      "root": "./apps/mini-auth",
+      "standalone": false,
+      "port": 8082,
+      "command": "node tools/stub-bundler.mjs"
+    },
+    "mini_store": {
+      "manifest": "./manifests/mini-store.json",
+      "root": "./apps/mini-store",
+      "standalone": false,
+      "port": 8083,
+      "command": "node tools/stub-bundler.mjs"
+    }
+  }
+}
