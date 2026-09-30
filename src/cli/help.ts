@@ -51,7 +51,9 @@ Exit codes
   0  clean (warnings allowed by default)
   1  ran and found errors (or warnings with --fail-on-warnings); a remote
      manifest that does not exist (MISSING_REMOTE_MANIFEST) or exists but
-     cannot be read (MANIFEST_UNREADABLE) is a finding, not a failure to run
+     cannot be read (MANIFEST_UNREADABLE) is a finding, not a failure to run.
+     NOTHING_COMPARED (warning) means no remote manifest was compared; it
+     adds no exit-code rule (only --fail-on-warnings escalates it)
   2  could not answer (unknown option/mode, no config found, host manifest
      missing or corrupt, every remote manifest exists but is unreadable)
 `;

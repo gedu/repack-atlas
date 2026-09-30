@@ -181,10 +181,9 @@ describe('fixture manifests satisfy the core schema', () => {
       const names = await fs.readdir(manifestDir);
       assert.deepEqual(
         [...names].sort(),
-        expectation.missingManifest
-          ? // The variant deletes one remote manifest: exactly two remain.
-            ['host.json', 'mini-auth.json']
-          : ['host.json', 'mini-auth.json', 'mini-store.json'],
+        ['host.json', 'mini-auth.json', 'mini-store.json']
+          .filter((name) => !expectation.missingManifests?.includes(name))
+          .sort(),
         `${expectation.dir}: manifests/ content`
       );
       for (const name of names) {
@@ -255,9 +254,12 @@ describe('fixture workspaces reproduce their expectation table', () => {
       );
       for (const expected of expectation.findings) {
         if (!expected.app) continue;
-        const finding = report.findings.find((f) => f.code === expected.code);
         assert.ok(
-          finding?.message.includes(`"${expected.app}"`),
+          report.findings.some(
+            (f) =>
+              f.code === expected.code &&
+              f.message.includes(`"${expected.app}"`)
+          ),
           `${expectation.dir}: ${expected.code} must name "${expected.app}"`
         );
       }
@@ -358,8 +360,8 @@ describe('fixture rspack configs are valid ESM registering both plugins', () => 
         // missing-manifest variant deleted the file outright — same reason
         // to skip the cross-check for that app.
         const manifestComparable = !(
-          (expectation.corrupt || expectation.missingManifest) &&
-          app.manifest === 'mini-store.json'
+          (expectation.corrupt && app.manifest === 'mini-store.json') ||
+          expectation.missingManifests?.includes(app.manifest)
         );
         const manifest = manifestComparable
           ? ((await readJson(

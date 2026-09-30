@@ -433,6 +433,68 @@ describe('runDoctor REMOTE_CYCLE integration and exit-code 2 (Atlas additions)',
     }
   });
 
+  it('warns NOTHING_COMPARED when every remote is missing, without moving the exit code', () => {
+    const remotes = [
+      { name: 'payments', missing: true },
+      { name: 'store', missing: true },
+    ];
+    const strict = runDoctor({ host, remotes });
+    const lenient = runDoctor({ host, remotes, allowMissingManifests: true });
+    for (const report of [strict, lenient]) {
+      const finding = report.findings.find(
+        (f) => f.code === 'NOTHING_COMPARED'
+      );
+      assert.equal(finding?.severity, 'warning');
+      assert.equal(finding?.confidence, 'static');
+      assert.ok(finding?.message.includes('clean exit does not mean'));
+      assert.equal(report.unableToAnswer, undefined);
+    }
+    assert.equal(doctorExitCode(strict), 1);
+    assert.equal(doctorExitCode(lenient), 0);
+  });
+
+  it('does not warn NOTHING_COMPARED when at least one remote was compared', () => {
+    const report = runDoctor({
+      host,
+      remotes: [
+        { name: 'payments', missing: true },
+        { name: 'store', manifest: remoteClean },
+      ],
+      allowMissingManifests: true,
+    });
+    assert.ok(!codes(report).includes('NOTHING_COMPARED'));
+    assert.equal(doctorExitCode(report), 0);
+  });
+
+  it('does not warn NOTHING_COMPARED when every remote is unreadable (exit 2 already says it)', () => {
+    const report = runDoctor({
+      host,
+      remotes: [
+        { name: 'payments', corrupt: true, reason: 'bad' },
+        { name: 'store', corrupt: true, reason: 'bad' },
+      ],
+    });
+    assert.ok(!codes(report).includes('NOTHING_COMPARED'));
+    assert.ok(codes(report).includes('MANIFEST_UNREADABLE'));
+    assert.equal(doctorExitCode(report), 2);
+  });
+
+  it('warns NOTHING_COMPARED for missing plus unreadable remotes, exit stays 1', () => {
+    const report = runDoctor({
+      host,
+      remotes: [
+        { name: 'payments', corrupt: true, reason: 'bad' },
+        { name: 'store', missing: true },
+      ],
+    });
+    assert.ok(codes(report).includes('NOTHING_COMPARED'));
+    assert.equal(doctorExitCode(report), 1);
+  });
+
+  it('does not warn NOTHING_COMPARED when there are no remotes', () => {
+    assert.ok(!codes(runDoctor({ host, remotes: [] })).includes('NOTHING_COMPARED'));
+  });
+
   it('keeps a sole missing remote at exit 1, or 0 when allowed', () => {
     const remotes = [{ name: 'store', missing: true }];
     assert.equal(doctorExitCode(runDoctor({ host, remotes })), 1);

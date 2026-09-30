@@ -22,11 +22,11 @@ export interface WorkspaceExpectation {
   exitCode: 0 | 1 | 2;
   /** True when a manifest exists but must fail to parse (`MANIFEST_UNREADABLE`). */
   corrupt?: boolean;
-  /** True when a remote's manifest file was deleted from the workspace. */
-  missingManifest?: boolean;
+  /** Manifest files deleted from the workspace's `manifests/` directory. */
+  missingManifests?: string[];
   /**
    * Expected exit code with `--allow-missing-manifests` (only meaningful
-   * together with `missingManifest`).
+   * together with `missingManifests`).
    */
   allowMissingExit?: 0 | 1;
   /**
@@ -111,7 +111,35 @@ export const EXPECTATIONS: WorkspaceExpectation[] = [
       },
     ],
     exitCode: 1,
-    missingManifest: true,
+    missingManifests: ['mini-store.json'],
+    allowMissingExit: 0,
+    failOnWarningsExit: 1,
+  },
+  {
+    // Every remote manifest is deleted: nothing was compared. The warning
+    // never moves the exit code (still 1, or 0 with the flag).
+    dir: 'fixture-nothing-compared',
+    findings: [
+      {
+        code: 'MISSING_REMOTE_MANIFEST',
+        severity: 'error',
+        confidence: 'static',
+        app: 'mini_auth',
+      },
+      {
+        code: 'MISSING_REMOTE_MANIFEST',
+        severity: 'error',
+        confidence: 'static',
+        app: 'mini_store',
+      },
+      {
+        code: 'NOTHING_COMPARED',
+        severity: 'warning',
+        confidence: 'static',
+      },
+    ],
+    exitCode: 1,
+    missingManifests: ['mini-auth.json', 'mini-store.json'],
     allowMissingExit: 0,
     failOnWarningsExit: 1,
   },

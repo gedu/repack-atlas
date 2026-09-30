@@ -252,6 +252,34 @@ function checkUnreadableManifests(
 }
 
 /**
+ * Warn when remotes exist but none was compared (every one is missing or
+ * unreadable), so a clean exit cannot be mistaken for "the federation was
+ * checked". Severity stays `warning`: the exit code is decided by the
+ * missing/unreadable findings, never by this one. Skipped when every remote
+ * is unreadable: that run is already exit 2 with a named
+ * `MANIFEST_UNREADABLE` per app.
+ */
+function checkNothingCompared(
+  input: DoctorInput,
+  findings: DoctorFinding[]
+): void {
+  if (input.remotes.length === 0) return;
+  const compared = input.remotes.some(
+    (remote) => !remote.missing && !remote.corrupt && remote.manifest
+  );
+  if (compared) return;
+  if (input.remotes.every((remote) => remote.corrupt)) return;
+  findings.push({
+    severity: 'warning',
+    code: 'NOTHING_COMPARED',
+    message:
+      `None of the ${input.remotes.length} remote manifest${input.remotes.length === 1 ? ' was' : 's were'} compared against host "${input.host.name}", ` +
+      'so a clean exit does not mean the federation was checked. Provide or generate the remote manifests and run doctor again.',
+    confidence: 'static',
+  });
+}
+
+/**
  * Compare a host manifest against a set of remote manifests and report every
  * shared-dependency, native-module and remote-cycle inconsistency found.
  * An unreadable remote manifest is a named `MANIFEST_UNREADABLE` error (exit
@@ -284,6 +312,7 @@ export function runDoctor(input: DoctorInput): DoctorReport {
 
   checkRemoteManifests(input, findings);
   checkUnreadableManifests(input, findings);
+  checkNothingCompared(input, findings);
 
   // Exit 2 only when remotes exist and every one is unreadable. Missing
   // remotes do not count: they keep MISSING_REMOTE_MANIFEST semantics

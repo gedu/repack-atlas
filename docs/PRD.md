@@ -255,7 +255,7 @@ subcommand tree). In the demo phase the same commands ship as an `repack-atlas` 
 |---|---|---|
 | `repack-atlas init` | Generate/repair `repack-federation.json` + single-source shared config from installed versions. Plan first, apply explicitly. | `--dry-run --json` |
 | `repack-atlas inspect <path\|url>` | Pretty-print a federation manifest (file, build output, or URL). | `--json` |
-| `repack-atlas doctor` | Compare host + remote manifests: drift, singleton/eager mismatch, `REMOTE_CYCLE`, missing natives, heuristic-honesty downgrades. | `--json`, exit codes below |
+| `repack-atlas doctor` | Compare host + remote manifests: drift, singleton/eager mismatch, `REMOTE_CYCLE`, `NOTHING_COMPARED`, missing natives, heuristic-honesty downgrades. | `--json`, exit codes below |
 | `repack-atlas dev` | Interactive workspace runner (pick remotes, platforms, ports), equal non-interactive flags (`--ios --remotes wallet,trading --ci`); serves Studio. | `--json` events, incl. `{event:'studio', url}` |
 
 Doctor exit codes (locked in the fork's design doc, kept here): `0` clean
@@ -263,7 +263,7 @@ Doctor exit codes (locked in the fork's design doc, kept here): `0` clean
 unless `--allow-missing-manifests`; `MANIFEST_UNREADABLE` when a remote manifest
 exists but cannot be read, while other remotes can still be checked) · `2` could
 not run — missing option, no/invalid config, host manifest missing/corrupt, or
-every remote manifest exists but is unreadable (missing manifests keep `1`, or `0` with `--allow-missing-manifests`). `2` means "no answer", `1` means "bad answer"; CI
+every remote manifest exists but is unreadable (missing manifests keep `1`, or `0` with `--allow-missing-manifests`). `NOTHING_COMPARED` (warning, static) is added when remotes exist and none was compared (all missing, or missing plus unreadable), with or without `--allow-missing-manifests`, so a clean exit does not read as "the federation was checked"; like any warning it only affects the exit code under `--fail-on-warnings`, and it is not added in the all-unreadable exit-`2` case, where `MANIFEST_UNREADABLE` already says it. `2` means "no answer", `1` means "bad answer"; CI
 treats both as failure. Heuristic honesty is preserved: `dynamicImportDetected`
 or `confidence: heuristic` downgrades missing-native findings to advisories —
 Atlas reports what it cannot check instead of guessing.

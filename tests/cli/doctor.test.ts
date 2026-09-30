@@ -82,10 +82,13 @@ describe('doctor workspace mode (spawned bin)', () => {
       }
       for (const expected of expectation.findings) {
         if (!expected.app) continue;
-        const finding = payload.findings.find((f) => f.code === expected.code);
         assert.ok(
-          finding?.message.includes(`"${expected.app}"`),
-          `${expectation.dir}: ${expected.code} must name "${expected.app}" (got ${finding?.message})`
+          payload.findings.some(
+            (f) =>
+              f.code === expected.code &&
+              f.message.includes(`"${expected.app}"`)
+          ),
+          `${expectation.dir}: ${expected.code} must name "${expected.app}" (got ${JSON.stringify(payload.findings)})`
         );
       }
     });
@@ -146,6 +149,59 @@ describe('doctor workspace mode (spawned bin)', () => {
       });
     }
   }
+});
+
+describe('doctor NOTHING_COMPARED (spawned bin)', () => {
+  const nothing = path.join(fixturesDir, 'fixture-nothing-compared');
+  const partial = path.join(fixturesDir, 'fixture-missing-remote-manifest');
+
+  it('--allow-missing-manifests still exits 0 and --json carries the warning', async () => {
+    const result = await runBin(
+      'doctor',
+      '--workspace',
+      nothing,
+      '--allow-missing-manifests',
+      '--json'
+    );
+    assert.equal(result.code, 0);
+    const payload = parseJson<DoctorJson>(result.stdout);
+    assert.equal(payload.exitCode, 0);
+    assert.deepEqual(payload.summary, {
+      errors: 0,
+      warnings: 3,
+      advisories: 0,
+      infos: 0,
+    });
+    const finding = payload.findings.find((f) => f.code === 'NOTHING_COMPARED');
+    assert.equal(finding?.severity, 'warning');
+    assert.equal(finding?.confidence, 'static');
+    assert.match(finding?.message ?? '', /clean exit does not mean/);
+  });
+
+  it('without the flag the exit code stays 1 and the warning is also reported', async () => {
+    const result = await runBin('doctor', '--workspace', nothing, '--json');
+    assert.equal(result.code, 1);
+    const payload = parseJson<DoctorJson>(result.stdout);
+    assert.ok(payload.findings.some((f) => f.code === 'NOTHING_COMPARED'));
+  });
+
+  it('one compared remote means no NOTHING_COMPARED, exit codes unchanged', async () => {
+    for (const [flags, code] of [
+      [[], 1],
+      [['--allow-missing-manifests'], 0],
+    ] as const) {
+      const result = await runBin(
+        'doctor',
+        '--workspace',
+        partial,
+        ...flags,
+        '--json'
+      );
+      assert.equal(result.code, code);
+      const payload = parseJson<DoctorJson>(result.stdout);
+      assert.ok(!payload.findings.some((f) => f.code === 'NOTHING_COMPARED'));
+    }
+  });
 });
 
 describe('doctor explicit mode (spawned bin)', () => {
