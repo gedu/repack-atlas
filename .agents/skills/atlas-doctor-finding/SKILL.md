@@ -64,6 +64,14 @@ Work through it in order; every box is a file in the same PR.
 `1` and `2` must stay distinguishable — "bad answer" and "no answer" imply
 different fixes. Warnings and advisories never move the exit code off `0`.
 
+Existing findings worth knowing when you add one: `MISSING_REMOTE_MANIFEST`,
+`MANIFEST_UNREADABLE`, and `NOTHING_COMPARED` (warning, static: remotes exist
+but none was compared, all missing or missing plus unreadable, with or without
+`--allow-missing-manifests`; not emitted in the all-unreadable exit-2 case,
+where `MANIFEST_UNREADABLE` already says it). `NOTHING_COMPARED` exists so a
+clean exit cannot be mistaken for "the federation was checked"; it adds no exit-code
+rule of its own (like any warning, only `--fail-on-warnings` escalates it).
+
 ## `--json` shape
 
 Stable, machine-readable, one report per run:

@@ -65,7 +65,11 @@ that exists but cannot be read is a named `MANIFEST_UNREADABLE` error (exit `1`,
 the other remotes are still checked); exit `2` is for runs with nothing to
 compare: no or invalid config, an unreadable host manifest, or every remote
 manifest exists but is unreadable. Missing remote manifests keep exit `1`
-(`0` with `--allow-missing-manifests`).
+(`0` with `--allow-missing-manifests`). When remotes exist but none of them
+could be compared (all missing, or missing plus unreadable), doctor adds a
+`NOTHING_COMPARED` warning so a clean exit is not read as "the federation was
+checked"; like any warning it only affects the exit code under
+`--fail-on-warnings`.
 
 The dev runner starts every app in a workspace and serves the Studio page:
 
@@ -133,6 +137,7 @@ row. Expectations also live in `fixtures/README.md`.
 | `fixture-corrupt-manifest/` | `MANIFEST_UNREADABLE` (names the app) | `1` |
 | `fixture-heuristic-downgrade/` | `HEURISTIC_ADVISORY` (warning) | `0` |
 | `fixture-missing-remote-manifest/` | `MISSING_REMOTE_MANIFEST` | `1` (`0` with `--allow-missing-manifests`) |
+| `fixture-nothing-compared/` | `NOTHING_COMPARED` (warning) plus a `MISSING_REMOTE_MANIFEST` per remote | `1` (`0` with `--allow-missing-manifests`) |
 | `fixture-xss/` | hostile strings render as text in Studio | `0` |
 
 ## Agent files

@@ -233,7 +233,8 @@ the voiceover.
   `confidence: static | heuristic` and heuristic results downgrade to
   advisories; `SHARED_VERSION_DRIFT` needs manifests that were actually
   built; an unreadable remote manifest is reported by name
-  (`MANIFEST_UNREADABLE`) but that remote is not compared.
+  (`MANIFEST_UNREADABLE`) but that remote is not compared; if no remote is
+  compared at all, `NOTHING_COMPARED` warns that a clean exit proves nothing.
 
 ## 5. Cleanup
 
