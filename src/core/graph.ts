@@ -92,6 +92,13 @@ export interface GraphApp {
   role: 'host' | 'remote';
   /** Dev-server port when the workspace config or the app declares one. */
   port?: number;
+  /**
+   * Present (and `true`) only when the workspace config declares
+   * `remotes.<name>.standalone: true`. A declaration by the app owner that
+   * the remote can run without the host; Atlas neither detects nor verifies
+   * it, and the Studio only displays it.
+   */
+  standalone?: true;
   /** Absent until the serving layer injects live statuses. */
   status?: AppRuntimeStatus;
   exposes: GraphExpose[];
@@ -283,7 +290,10 @@ export function buildFederationGraph(
     inputsByName.set(hostName, hostInput);
   }
 
-  const roster = new Map<string, { role: 'host' | 'remote'; port?: number }>();
+  const roster = new Map<
+    string,
+    { role: 'host' | 'remote'; port?: number; standalone?: true }
+  >();
   roster.set(hostName, {
     role: 'host',
     ...(typeof config.host.port === 'number' ? { port: config.host.port } : {}),
@@ -292,6 +302,7 @@ export function buildFederationGraph(
     roster.set(name, {
       role: 'remote',
       ...(typeof remote.port === 'number' ? { port: remote.port } : {}),
+      ...(remote.standalone === true ? { standalone: true as const } : {}),
     });
   }
   for (const input of manifests) {
@@ -440,6 +451,7 @@ export function buildFederationGraph(
         },
       };
       if (typeof port === 'number') app.port = port;
+      if (entry.standalone === true) app.standalone = true;
       const status = statuses[name];
       if (status !== undefined) app.status = status;
       return app;

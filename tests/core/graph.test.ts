@@ -125,6 +125,29 @@ describe('buildFederationGraph over the clean workspace fixture', () => {
     assert.equal(store?.detection.dynamicImportDetected, false);
   });
 
+  it('carries standalone only for a remote that declares it', async () => {
+    const { config, inputs, findings } = await loadWorkspace('workspace');
+    const none = buildFederationGraph(config, inputs, findings);
+    assert.equal(
+      none.apps.every((app) => !('standalone' in app)),
+      true,
+      'standalone: false in the config is not carried'
+    );
+
+    const declared: FederationConfig = {
+      ...config,
+      remotes: {
+        ...config.remotes,
+        mini_auth: { ...config.remotes['mini_auth']!, standalone: true },
+      },
+    };
+    const graph = buildFederationGraph(declared, inputs, findings);
+    assert.equal(graph.apps.find((app) => app.name === 'mini_auth')?.standalone, true);
+    assert.equal('standalone' in graph.apps.find((app) => app.name === 'mini_store')!, false);
+    assert.equal('standalone' in graph.apps.find((app) => app.name === 'host')!, false);
+    assert.equal(JSON.parse(JSON.stringify(graph)).apps[1].standalone, true, 'reaches /api/graph JSON');
+  });
+
   it('injects statuses only when the caller supplies them', async () => {
     const { config, inputs, findings } = await loadWorkspace('workspace');
     const without = buildFederationGraph(config, inputs, findings);

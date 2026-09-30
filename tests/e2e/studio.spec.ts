@@ -247,7 +247,7 @@ test.describe('Studio over the rendering probe fixture', () => {
  * host -> each remote plus trading -> auth and wallet -> auth (the last one
  * spans the trading node). The wallet declares a heuristic native module.
  */
-async function writeStackedWorkspace(dir: string): Promise<void> {
+async function writeStackedWorkspace(dir: string, standalone: string[] = []): Promise<void> {
   const remoteNames = ['auth', 'trading', 'wallet'];
   const entry = (name: string, port: number) => ({
     federationContainerName: name,
@@ -297,7 +297,11 @@ async function writeStackedWorkspace(dir: string): Promise<void> {
     remotes: Object.fromEntries(
       remoteNames.map((name, index) => [
         name,
-        { manifest: `./manifests/${name}.json`, port: 9100 + index },
+        {
+          manifest: `./manifests/${name}.json`,
+          port: 9100 + index,
+          ...(standalone.includes(name) ? { standalone: true } : {}),
+        },
       ])
     ),
   };
@@ -431,5 +435,39 @@ test.describe('Studio over a stacked one-column workspace', () => {
     });
     expect(size.whiteSpace).toBe('nowrap');
     expect(size.lines).toBe(1);
+  });
+});
+
+test.describe('Studio over a workspace with a standalone-declaring remote', () => {
+  let preview: Preview;
+  let workspace: string;
+
+  test.beforeAll(async () => {
+    workspace = await mkdtemp(path.join(os.tmpdir(), 'atlas-standalone-'));
+    await writeStackedWorkspace(workspace, ['auth']);
+    preview = await startPreview(workspace, basePort + 41);
+  });
+  test.afterAll(async () => {
+    await preview?.stop();
+    if (workspace) await rm(workspace, { recursive: true, force: true });
+  });
+
+  test('shows a read-only standalone badge only on the declaring remote', async ({ page }) => {
+    await page.goto(preview.url);
+    await expect(page.locator('svg.graph g.node')).toHaveCount(4);
+
+    const badge = page.locator('svg.graph g.node[data-node="auth"] text.tag-standalone-t');
+    await expect(badge).toHaveCount(1);
+    await expect(badge).toHaveText('standalone');
+    await expect(page.locator('svg.graph text.tag-standalone-t')).toHaveCount(1);
+    await expect(page.locator('svg.graph g.node[data-node="wallet"] .tag-standalone')).toHaveCount(0);
+
+    // The badge is not a control: no extra interactive element appears.
+    await expect(page.locator('svg.graph g.node[data-node="auth"] [role="button"]')).toHaveCount(0);
+
+    await page.locator('svg.graph g.node[data-node="auth"]').click();
+    await expect(page.locator('#insp-meta')).toContainText('standalone');
+    await page.locator('svg.graph g.node[data-node="wallet"]').click();
+    await expect(page.locator('#insp-meta')).not.toContainText('standalone');
   });
 });
