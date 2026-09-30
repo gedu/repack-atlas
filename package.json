@@ -41,6 +41,7 @@
     "lint:fix": "eslint . --fix",
     "test": "tsx --test \"tests/**/*.test.ts\"",
     "check:vendored": "node scripts/vendored-check.mjs",
+    "check:commits": "node scripts/commit-check.mjs",
     "agent:sync": "node scripts/agent-sync.mjs",
     "agent:check": "node scripts/agent-sync.mjs --check",
     "test:e2e": "playwright test",

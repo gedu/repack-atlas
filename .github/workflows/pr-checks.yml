@@ -18,19 +18,29 @@ jobs:
     name: Conventional Commit PR title
     runs-on: ubuntu-latest
     steps:
+      # Checkout only for scripts/commit-check.mjs, so the title and the
+      # commits share one list of types.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Check title
         env:
           TITLE: ${{ github.event.pull_request.title }}
-        run: |
-          if printf '%s' "$TITLE" | grep -qE '^(feat|fix|docs|test|chore|refactor|perf|build|ci)(\([a-z0-9./-]+\))?!?: .+'; then
-            echo "PR title follows Conventional Commits."
-          else
-            echo "::error::PR title must follow Conventional Commits:"
-            echo "  feat|fix|docs|test|chore(scope): imperative summary"
-            echo "  e.g. \"feat(ci): add vendored provenance check\""
-            echo "See CONTRIBUTING.md."
-            exit 1
-          fi
+        run: node scripts/commit-check.mjs --message "$TITLE"
+
+  commit-messages:
+    name: Commit messages
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+        with:
+          node-version: '22'
+      - name: Check every commit in the PR
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: node scripts/commit-check.mjs --range "$BASE_SHA..$HEAD_SHA"
 
   size-budget:
     name: 400-line review budget

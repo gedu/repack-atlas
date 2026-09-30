@@ -36,8 +36,11 @@ check will be closed.
 7. **Honest heuristics.** Static-analysis findings declare `confidence:
    static | heuristic`; heuristic results downgrade to advisories. Never claim
    exhaustive guarantees.
-8. **Conventional Commits.** `feat|fix|docs|test|chore(scope): imperative
-   summary`. **Never** add AI attribution or `Co-Authored-By` trailers.
+8. **Conventional Commits.** `type(scope): imperative summary` with type one of
+   `feat|fix|docs|test|chore|refactor|perf|build|ci|style|revert`, header
+   <= 100 chars, no `fixup!`/`squash!` left in the PR. **Never** add AI
+   attribution or `Co-Authored-By` trailers. Enforced by `pnpm check:commits`
+   in CI (PR title and every commit).
 9. **Report real output.** Paste the actual command output for every check you
    claim passed. A claimed check without observed output is a failed check.
 10. **English artifacts.** All code, comments, docs, UI copy and commits in
@@ -60,6 +63,8 @@ pnpm agent:sync  # regenerate skill symlinks + AGENTS.md tables
 pnpm agent:check # CI-mode verification of the above (exit 1 on drift)
 pnpm check:vendored # CI: every vendored file in VENDORED.md with a commit
                  # sha + Copyright header (exit 1 on drift)
+pnpm check:commits # CI: Conventional Commits + no AI attribution on
+                 # origin/main..HEAD (or --range <base>..<head>, --message)
 ```
 
 CI (`.github/workflows/ci.yml`) is light: lint, typecheck, build, test,
@@ -102,6 +107,7 @@ VENDORED.md              # provenance ledger for src/repack-bridge/vendored/
 .claude/skills/          # generated symlinks -> .agents/skills/*  (do not edit)
 scripts/agent-sync.mjs   # generates the adapters + the tables below
 scripts/vendored-check.mjs # CI provenance guard for VENDORED.md (pnpm check:vendored)
+scripts/commit-check.mjs # CI commit-message guard (pnpm check:commits)
 .github/workflows/       # ci.yml (light) + ci-full.yml (matrix + e2e) + pr-checks.yml
 ```
 
