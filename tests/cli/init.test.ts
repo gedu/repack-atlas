@@ -10,7 +10,16 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { after, before, describe, it } from 'node:test';
-import { validateFederationConfig } from '../../src/core/index.js';
+import {
+  buildInitPlan,
+  formatInitPlan,
+  initPlanToJson,
+} from '../../src/cli/init.js';
+import {
+  validateFederationConfig,
+  type ConfigIntrospector,
+  type ProjectFs,
+} from '../../src/core/index.js';
 import {
   copyTree,
   ensureBin,
@@ -185,5 +194,143 @@ describe('init (spawned bin, reduced scope)', () => {
       path.join(os.tmpdir(), 'definitely-not-here-atlas-init')
     );
     assert.equal(result.code, 2);
+  });
+});
+
+// In-memory workspace: `files` maps absolute paths to contents; directories
+// are implied by their children.
+function memoryFs(files: Record<string, string>): ProjectFs {
+  const paths = Object.keys(files);
+  const isDir = (p: string): boolean =>
+    paths.some((file) => file.startsWith(`${p}/`));
+  return {
+    stat: async (p) =>
+      p in files
+        ? { isDirectory: false, sizeBytes: files[p]!.length }
+        : isDir(p)
+          ? { isDirectory: true, sizeBytes: 0 }
+          : null,
+    exists: async (p) => p in files || isDir(p),
+    readFile: async (p) => files[p] ?? null,
+    readdir: async (p) => [
+      ...new Set(
+        paths
+          .filter((file) => file.startsWith(`${p}/`))
+          .map((file) => file.slice(p.length + 1).split('/')[0]!)
+      ),
+    ],
+    walk: async () => [],
+  };
+}
+
+function introspectorWith(
+  ports: Record<string, number>
+): ConfigIntrospector {
+  return {
+    read: async (appRoot) => {
+      const port = ports[path.basename(appRoot)];
+      if (port === undefined) return { status: 'missing' } as never;
+      return {
+        status: 'ok',
+        facts: {
+          schemaVersion: 1,
+          name: path.basename(appRoot),
+          exposes: [],
+          remotes: {},
+          shared: [],
+          port,
+        },
+      } as never;
+    },
+  };
+}
+
+const WS = '/ws';
+const pkg = (name: string, scripts?: Record<string, string>): string =>
+  JSON.stringify({ name, ...(scripts ? { scripts } : {}) });
+
+describe('init: derived commands and port validation', () => {
+  const baseFiles = {
+    [`${WS}/pnpm-workspace.yaml`]: 'packages:\n  - apps/*\n',
+    [`${WS}/apps/host/rspack.config.js`]: '',
+    [`${WS}/apps/host/package.json`]: pkg('@x/host', { start: 'rspack start' }),
+    [`${WS}/apps/auth/rspack.config.js`]: '',
+    [`${WS}/apps/auth/package.json`]: pkg('@x/auth'),
+  };
+
+  it('derives a command where safe and the config validates', async () => {
+    const result = await buildInitPlan(
+      WS,
+      memoryFs(baseFiles),
+      introspectorWith({})
+    );
+    assert.ok(result.ok);
+    const json = JSON.parse(initPlanToJson(result.plan, false)) as {
+      apps: { name: string; command?: string; notes: string[] }[];
+      config: { host: { command?: string } };
+    };
+    const byName = new Map(json.apps.map((app) => [app.name, app]));
+    assert.equal(byName.get('host')?.command, 'pnpm --filter @x/host start');
+    assert.equal(json.config.host.command, 'pnpm --filter @x/host start');
+    // Missing start script: no command, and the reason is reported.
+    assert.equal(byName.get('auth')?.command, undefined);
+    assert.match(byName.get('auth')!.notes.join(' '), /no scripts\.start/);
+    assert.deepEqual(validateFederationConfig(result.plan.config), []);
+    assert.match(formatInitPlan(result.plan, false), /note: no command/);
+  });
+
+  it('picks the package manager from the workspace root', async () => {
+    const files = { ...baseFiles };
+    delete (files as Record<string, string>)[`${WS}/pnpm-workspace.yaml`];
+    const commandFor = async (lock: string): Promise<string | undefined> => {
+      const result = await buildInitPlan(
+        WS,
+        memoryFs({ ...files, [`${WS}/${lock}`]: '' }),
+        introspectorWith({})
+      );
+      assert.ok(result.ok);
+      return result.plan.host?.command;
+    };
+    assert.equal(await commandFor('yarn.lock'), 'yarn workspace @x/host start');
+    assert.equal(
+      await commandFor('package-lock.json'),
+      'npm --workspace @x/host run start'
+    );
+    const none = await buildInitPlan(
+      WS,
+      memoryFs(files),
+      introspectorWith({})
+    );
+    assert.ok(none.ok);
+    assert.equal(none.plan.host?.command, undefined);
+    assert.match(none.plan.host!.notes.join(' '), /package manager not detected/);
+  });
+
+  it('drops out-of-range introspected ports and reports them', async () => {
+    const result = await buildInitPlan(
+      WS,
+      memoryFs(baseFiles),
+      introspectorWith({ host: 0, auth: 80.5 })
+    );
+    assert.ok(result.ok);
+    for (const app of result.plan.apps) {
+      assert.equal(app.port, undefined);
+      assert.match(app.notes.join(' '), /dropped introspected port/);
+    }
+    assert.deepEqual(validateFederationConfig(result.plan.config), []);
+    const text = formatInitPlan(result.plan, false);
+    assert.match(text, /dropped introspected port 0/);
+    assert.match(text, /dropped introspected port 80\.5/);
+    assert.match(initPlanToJson(result.plan, false), /dropped introspected port 80\.5/);
+  });
+
+  it('keeps a valid introspected port', async () => {
+    const result = await buildInitPlan(
+      WS,
+      memoryFs(baseFiles),
+      introspectorWith({ host: 8081 })
+    );
+    assert.ok(result.ok);
+    assert.equal(result.plan.host?.port, 8081);
   });
 });

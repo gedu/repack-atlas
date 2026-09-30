@@ -67,10 +67,20 @@ const optionalBoolean: FieldCheck = (value, where) =>
     ? undefined
     : `${where} must be a boolean`;
 
+/** The shared dev-server port rule: an integer in 1..65535. */
+export function isValidPort(value: unknown): value is number {
+  return (
+    typeof value === 'number' &&
+    Number.isInteger(value) &&
+    value >= 1 &&
+    value <= 65535
+  );
+}
+
 const optionalPort: FieldCheck = (value, where) => {
   if (value === undefined) return undefined;
   if (typeof value !== 'number') return `${where} must be a number`;
-  return Number.isInteger(value) && value >= 1 && value <= 65535
+  return isValidPort(value)
     ? undefined
     : `${where} must be an integer between 1 and 65535`;
 };
