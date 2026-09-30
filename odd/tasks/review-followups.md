@@ -22,6 +22,10 @@ Close the advisory findings native reviews raised on PRs #21, #22, #23 and
       the geometry it builds; e2e assertion that the `standalone` badge sits
       left of the status dot without overlapping. Route: delegated direct.
 
+- [x] T5 (#10) docs/demo-showcase.md refreshed for atlas-demo: 6 commits,
+      `getSharedDependencies({ eager })` note, corrupt-step summary, init
+      dry-run parity note. Route: inline (single doc).
+
 ## Checks
 
 `pnpm build && pnpm typecheck && pnpm lint && pnpm test && pnpm test:e2e`,
