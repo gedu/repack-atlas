@@ -32,6 +32,23 @@ fixtures/<name>/
 Each app carries a minimal `package.json`, one or two trivial `src/` modules,
 and an `rspack.config.js` (see the convention below).
 
+## Dev-runner commands (`repack-atlas dev`)
+
+`workspace/` is the only fixture whose config entries declare a `command`
+(`node tools/stub-bundler.mjs` for every app): the runner resolves commands
+through a shell with the **config directory as cwd** and injects
+`ATLAS_APP_PORT` (the runner-assigned port), `ATLAS_APP_NAME`,
+`ATLAS_APP_ROOT` and `ATLAS_APP_MANIFEST`. The stub bundler
+(`workspace/tools/stub-bundler.mjs`) serves that app's checked-in
+`manifests/*.json` at `/repack-federation-manifest.json` on that port — a
+fake dev-server in seconds, honoring the budget rule. Each app's
+`package.json` also carries a `dev` script pointing at the same stub for
+manual runs from the app directory.
+
+The broken variants intentionally declare **no** commands: `repack-atlas dev`
+skips commandless apps with a warning, which is exactly what their runner
+tests (e.g. the remote-cycle graph test) rely on.
+
 ## Expectation table
 
 | Workspace | Provokes | Severity | Exit |

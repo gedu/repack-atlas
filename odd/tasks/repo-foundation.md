@@ -68,7 +68,7 @@ Out: showcase-fork integration (next feature), npm publish, MCP/Proxy (PRD §16)
 - [x] T8. Studio: `graph.ts` + `server.ts` (node:http 127.0.0.1, `/`,
       `/api/graph`, SSE) + `page.ts` port of the mock (offline, textContent-only)
       + Playwright e2e incl. XSS fixture.
-- [ ] T9. Runner: supervisor port of #1467 (start workspace, keymap incl. `v`,
+- [x] T9. Runner: supervisor port of #1467 (start workspace, keymap incl. `v`,
       ports, `--json` events, `--studio-port`/`--no-studio`), ProcessRunner port.
 - [ ] T10. CI: ci.yml (lint+typecheck, agent-files check, vendored-provenance,
       tests macOS+Linux Node LTS×2, studio-e2e), pr-checks.yml (conventional
@@ -156,3 +156,7 @@ Out: showcase-fork integration (next feature), npm publish, MCP/Proxy (PRD §16)
   Playwright suite 7/7 incl. XSS rendering probe (fixture-xss). 268 unit tests.
   Gotcha: reuseExistingServer + stale preview on 8099 caused false failures —
   kill stale servers before trusting e2e.
+- 2026-09-29: T9 done: src/runner/supervisor + `dev` cmd (schema: host.port +
+  per-app command, skip-with-warning when absent; ATLAS_APP_* env; readiness =
+  port busy, 'bundling' never claimed). Stub bundler for fixtures (workspace
+  only; broken variants skip). --json events, killTree shutdown exit 0. 274 tests.

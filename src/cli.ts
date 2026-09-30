@@ -26,6 +26,7 @@ import {
   INSPECT_HELP,
   ROOT_HELP,
 } from './cli/help.js';
+import { runDevCommand } from './cli/dev.js';
 import {
   buildDoctorPlan,
   runDoctorFromPlan,
@@ -324,6 +325,16 @@ async function main(argv: string[]): Promise<number> {
   }
 
   switch (command) {
+    case 'dev':
+      return runDevCommand(rest, {
+        writeOut(text) {
+          writeOut(text);
+          // The runner is long-lived: flush what it prints as it goes.
+        },
+        writeErr(text) {
+          writeErr(text);
+        },
+      });
     case 'doctor':
       return runDoctorCommand(rest);
     case 'inspect':

@@ -53,6 +53,8 @@ export function createWorkspaceGraphSource(
   async function load(): Promise<{
     config: FederationConfig | null;
     configDir: string;
+    /** Graph node name of the host (manifest name, else `host`). */
+    hostName: string;
     report: DoctorReport;
     inputs: FederationGraphInput[];
   }> {
@@ -66,6 +68,7 @@ export function createWorkspaceGraphSource(
       return {
         config: null,
         configDir: options.workspaceDir,
+        hostName: 'host',
         report: unableToAnswerReport(`Studio: ${reason}`),
         inputs: [],
       };
@@ -82,6 +85,7 @@ export function createWorkspaceGraphSource(
       return {
         config,
         configDir,
+        hostName: 'host',
         report: unableToAnswerReport(
           `Studio: host manifest could not be used: ${hostResult.message}`
         ),
@@ -114,6 +118,7 @@ export function createWorkspaceGraphSource(
     return {
       config,
       configDir,
+      hostName: inputs[0]!.name,
       report: runDoctor({ host: hostResult.manifest, remotes }),
       inputs,
     };
@@ -122,11 +127,23 @@ export function createWorkspaceGraphSource(
   return {
     statuses: options.statuses ?? (() => ({})),
     async build(statuses: AppStatusMap): Promise<FederationGraph> {
-      const { config, report, inputs } = await load();
+      const { config, hostName, report, inputs } = await load();
       if (!config) {
         return { apps: [], edges: [], findings: report.findings };
       }
-      return buildFederationGraph(config, inputs, report.findings, { statuses });
+      // The runner keys statuses by the config key `host` (the only name a
+      // user types); the graph node is named from the host manifest. Alias
+      // so live statuses land on the right node even when the two differ —
+      // including when the manifest is missing or corrupt (the graph names
+      // the node `host` then, and an unreadable app is exactly when a live
+      // `error` status matters most).
+      const keyed: AppStatusMap = { ...statuses };
+      if (statuses.host !== undefined && keyed[hostName] === undefined) {
+        keyed[hostName] = statuses.host;
+      }
+      return buildFederationGraph(config, inputs, report.findings, {
+        statuses: keyed,
+      });
     },
   };
 }

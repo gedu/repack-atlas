@@ -21,6 +21,12 @@ export interface FederationHostConfig {
   manifest: string;
   /** App root, for consumers that need it (init, dry-run, runner). */
   root?: string;
+  /** Start command for `repack-atlas dev` (see `src/runner/**` for the
+   * exact resolution semantics). Absent → the runner skips the app. */
+  command?: string;
+  /** Dev-server port (consumed by the T9 runner; host counterpart of
+   * `remotes.<name>.port`). */
+  port?: number;
 }
 
 /** One named entry of the `remotes` map. */
@@ -31,6 +37,9 @@ export interface FederationRemoteConfig {
   standalone?: boolean;
   /** Dev-server port (consumed by the T9 runner). */
   port?: number;
+  /** Start command for `repack-atlas dev` (see `src/runner/**` for the
+   * exact resolution semantics). Absent → the runner skips the app. */
+  command?: string;
 }
 
 export interface FederationConfig {
@@ -115,7 +124,12 @@ export function validateFederationConfig(document: unknown): string[] {
   } else {
     checkFields(
       host,
-      { manifest: requireString, root: optionalString },
+      {
+        manifest: requireString,
+        root: optionalString,
+        command: optionalString,
+        port: optionalNumber,
+      },
       'host',
       reasons
     );
@@ -146,6 +160,7 @@ export function validateFederationConfig(document: unknown): string[] {
           root: optionalString,
           standalone: optionalBoolean,
           port: optionalNumber,
+          command: optionalString,
         },
         where,
         reasons
