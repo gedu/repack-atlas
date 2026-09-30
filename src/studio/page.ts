@@ -204,6 +204,7 @@ export const STUDIO_PAGE_HTML = `<!doctype html>
   table.kv th { text-align: left; font-weight: 500; color: var(--ink-3); font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; padding: 4px 6px; border-bottom: 1px solid var(--line); }
   table.kv td { padding: 6px; border-bottom: 1px solid var(--line); font-family: var(--mono); font-variant-numeric: tabular-nums; vertical-align: top; overflow-wrap: anywhere; }
   table.kv td.has-pill { white-space: nowrap; min-width: 88px; overflow-wrap: normal; }
+  table.kv td.nowrap { white-space: nowrap; overflow-wrap: normal; }
   table.kv td.st { font-family: var(--sans); white-space: normal; }
   .pill { display: inline-block; white-space: nowrap; font-size: 11px; font-weight: 600; padding: 1px 7px; border-radius: 999px; }
   .pill.ok { color: var(--ok); background: var(--ok-soft); }
@@ -397,6 +398,8 @@ export const STUDIO_PAGE_HTML = `<!doctype html>
   var LANE_STEP = 22;     // extra bow per lane so nested edges stay apart
   var ANCHOR_STEP = 10;   // vertical spread of the attach points per lane...
   var ANCHOR_LANES = 3;   // ...capped so they stay well inside the node (H = 78)
+  var LABEL_NUDGE_STEPS = 8;  // how many slots a label may move up and down...
+  var LABEL_NUDGE_PX = 20;    // ...and how far apart those slots sit
   function edgeGeometry(from, to, sameColumn, lane) {
     if (sameColumn) {
       var x1 = from.x + W;
@@ -448,9 +451,6 @@ export const STUDIO_PAGE_HTML = `<!doctype html>
     var x = geometry.anchor === 'start' ? geometry.lx - 5 : geometry.lx - width / 2;
     return { x: x, y: geometry.ly - 12, width: width, height: 17 };
   }
-  function overlaps(a, b) {
-    return a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
-  }
 
   function overlapArea(a, b) {
     var w = Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x);
@@ -472,7 +472,7 @@ export const STUDIO_PAGE_HTML = `<!doctype html>
     }
     var lanes = assignLanes(edges, box.places);
     var nudges = [0];
-    for (var step = 1; step <= 8; step++) nudges.push(-20 * step, 20 * step);
+    for (var step = 1; step <= LABEL_NUDGE_STEPS; step++) nudges.push(-LABEL_NUDGE_PX * step, LABEL_NUDGE_PX * step);
     var items = [];
     var maxX = box.width;
     var minY = 0;
@@ -776,7 +776,7 @@ export const STUDIO_PAGE_HTML = `<!doctype html>
     var rowNode = el('tr');
     for (var i = 0; i < cells.length; i++) {
       var cell = cells[i];
-      var td = el('td', cell.plain ? 'st' : cell.pill ? 'has-pill' : null);
+      var td = el('td', cell.plain ? 'st' : cell.pill ? 'has-pill' : cell.nowrap ? 'nowrap' : null);
       if (cell.pill) {
         var pill = el('span', 'pill ' + cell.pill, cell.text);
         td.appendChild(pill);
@@ -830,7 +830,7 @@ export const STUDIO_PAGE_HTML = `<!doctype html>
       var entry = app.native[i];
       built.body.appendChild(row([
         { text: entry['package'] },
-        { text: entry.version },
+        { text: entry.version, nowrap: true },
         { text: entry.turboModule ? 'yes' : 'no', plain: true },
         { text: entry.confidence, pill: entry.confidence === 'heuristic' ? 'warn' : 'ok' }
       ]));

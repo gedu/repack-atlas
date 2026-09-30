@@ -280,7 +280,7 @@ async function writeStackedWorkspace(dir: string, standalone: string[] = []): Pr
     reactNative: { version: '0.79.2', platforms: ['ios'], nativeModules, dynamicImportDetected: false },
   });
   const native = (confidence: string) => [
-    { package: 'react-native-mmkv', version: '3.0.0', turboModule: true, confidence },
+    { package: 'react-native-mmkv', version: '7.21.11', turboModule: true, confidence },
   ];
   const manifests: Record<string, object> = {
     host: manifest('host', 'host', remoteNames, []),
@@ -395,7 +395,7 @@ test.describe('Studio over a stacked one-column workspace', () => {
     const labels = await page.locator('svg.graph text.elabel').evaluateAll((texts) =>
       texts.map((text) => {
         const box = (text as SVGGraphicsElement).getBBox();
-        const bg = (text.parentElement!.querySelector('rect') as SVGGraphicsElement).getBBox();
+        const bg = (text.parentElement!.querySelector('rect.elabel-bg') as SVGGraphicsElement).getBBox();
         return {
           text: { x: box.x, y: box.y, width: box.width, height: box.height },
           bg: { x: bg.x, y: bg.y, width: bg.width, height: bg.height },
@@ -429,6 +429,21 @@ test.describe('Studio over a stacked one-column workspace', () => {
     const badge = page.locator('#tab-body .pill', { hasText: 'heuristic' });
     await expect(badge).toHaveCount(1);
     const size = await badge.evaluate((node) => {
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      return { lines: range.getClientRects().length, whiteSpace: getComputedStyle(node).whiteSpace };
+    });
+    expect(size.whiteSpace).toBe('nowrap');
+    expect(size.lines).toBe(1);
+  });
+
+  test('long native module versions never wrap', async ({ page }) => {
+    await page.goto(preview.url);
+    await page.locator('svg.graph g.node[data-node="wallet"]').click();
+    await page.locator('.tab[data-tab="native"]').click();
+    const cell = page.locator('#tab-body table.kv td', { hasText: '7.21.11' });
+    await expect(cell).toHaveCount(1);
+    const size = await cell.evaluate((node) => {
       const range = document.createRange();
       range.selectNodeContents(node);
       return { lines: range.getClientRects().length, whiteSpace: getComputedStyle(node).whiteSpace };

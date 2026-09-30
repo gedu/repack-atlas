@@ -7,6 +7,7 @@
 
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
+import vm from 'node:vm';
 import { STUDIO_PAGE_HTML, studioPageHtml } from '../../src/studio/page.js';
 
 const page = studioPageHtml();
@@ -146,5 +147,63 @@ describe('Studio page standalone badge', () => {
     assert.match(page, /app\.standalone === true/);
     assert.match(page, /'standalone'\);/, 'literal label, never data');
     assert.match(page, /\.tag-standalone-t/);
+  });
+});
+
+interface PlannedItem {
+  geometry: { ly: number };
+  rect: { x: number; y: number; width: number; height: number };
+}
+type PlanEdges = (
+  box: { places: Record<string, { x: number; y: number }>; width: number; height: number },
+  edges: { from: string; to: string; label: string }[]
+) => { items: PlannedItem[] };
+
+/**
+ * Load the page's pure layout functions (constants through planEdges) into a
+ * bare vm context. The span holds no DOM access, so no document is provided.
+ */
+function loadPlanEdges(): { planEdges: PlanEdges; nodeWidth: number; nodeHeight: number } {
+  const script = page.slice(page.indexOf('<script>'));
+  const size = script.match(/var W = (\d+), H = (\d+);/);
+  const from = script.indexOf('var ARROW_GAP');
+  const to = script.indexOf('function drawGraph');
+  assert.ok(size && from > 0 && to > from, 'layout span found in the page script');
+  const nodeWidth = Number(size[1]);
+  const nodeHeight = Number(size[2]);
+  const context = vm.createContext({ W: nodeWidth, H: nodeHeight });
+  vm.runInContext(script.slice(from, to), context);
+  return { planEdges: (context as { planEdges: PlanEdges }).planEdges, nodeWidth, nodeHeight };
+}
+
+describe('Studio edge label placement', () => {
+  const { planEdges, nodeWidth, nodeHeight } = loadPlanEdges();
+  const edges = [{ from: 'a', to: 'b', label: 'x' }];
+  const ends = { a: { x: 0, y: 0 }, b: { x: 700, y: 200 } };
+
+  it('falls back to the slot with the least overlap when every slot is blocked', () => {
+    const free = planEdges({ places: { ...ends }, width: 900, height: 400 }, edges).items[0]!;
+    const baseLy = free.geometry.ly;
+    // Slot +40px covers [top, top + 17). Tile a column of nodes over the label
+    // so every slot overlaps, leaving only a 9px gap that clips that one slot.
+    const top = free.rect.y + 40;
+    const places: Record<string, { x: number; y: number }> = { ...ends };
+    const x = free.rect.x - 10;
+    for (let k = 0; k < 8; k++) {
+      places[`above${k}`] = { x, y: top + 10 - nodeHeight * (k + 1) };
+      places[`below${k}`] = { x, y: top + 19 + nodeHeight * k };
+    }
+    const { items } = planEdges({ places, width: 900, height: 400 }, edges);
+    const placed = items[0]!;
+    assert.equal(placed.geometry.ly, baseLy + 40, 'the partly clipped slot wins');
+    const blockers = Object.entries(places).filter(([name]) => name !== 'a' && name !== 'b');
+    const touched = blockers.some(
+      ([, at]) =>
+        placed.rect.x < at.x + nodeWidth &&
+        at.x < placed.rect.x + placed.rect.width &&
+        placed.rect.y < at.y + nodeHeight &&
+        at.y < placed.rect.y + placed.rect.height
+    );
+    assert.ok(touched, 'best effort: the chosen slot still overlaps a node');
   });
 });
