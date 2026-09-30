@@ -37,8 +37,8 @@ Raw prompts and chat logs are not required by default.
 AI tools receive no human attribution. No `Co-Authored-By`, `Reviewed-by`,
 `Tested-by`, `Signed-off-by` or equivalent credit for a model or tool, in
 commits or anywhere else. This is a hard rule enforced in review
-(AGENTS.md rule 8); the PR declaration above is the only place AI involvement
-is recorded.
+and by CI (AGENTS.md rule 8); the PR declaration above is the only place AI
+involvement is recorded.
 
 ## Submission quality
 
@@ -56,5 +56,9 @@ the smallest change that restores it. Specifically rejected here:
 
 ## Enforcement
 
-Maintainers enforce this through review judgment and documented review
-decisions. No automated AI detection, no automated disclosure gate.
+Attribution is checked automatically: CI (`pnpm check:commits`) fails a PR
+whose commits carry an AI attribution trailer, a "Generated with" banner, or an
+AI tool as author or committer. Human `Co-authored-by` trailers are fine.
+
+Disclosure and everything else stay a matter of review judgment and documented
+review decisions. No automated AI detection, no automated disclosure gate.

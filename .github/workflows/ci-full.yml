@@ -1,0 +1,90 @@
+name: CI full
+
+# Heavy CI (macOS + Linux, Node 22/24 matrix and Studio e2e), kept off the default PR
+# path to save free Actions minutes on a public repo.
+#
+# Label gate: on a pull request these jobs run only while the PR carries the
+# `ready-to-merge` label (the label must exist in the repo; a maintainer adds
+# it before merging). Adding it triggers the run; new pushes while it is set
+# re-run. `labeled` events for any other label are skipped and never cancel a
+# run in progress. A skipped job
+# means "not requested yet", not "passed". Run it manually from the Actions
+# tab (workflow_dispatch) when needed. Removing the label does not cancel a run
+# already in progress; merges to main only run the light CI (ci.yml).
+
+on:
+  pull_request:
+    types: [labeled, synchronize, reopened]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-full-${{ github.event.pull_request.number || github.ref }}
+  # An unrelated label event is skipped below; it must not cancel a live run.
+  cancel-in-progress: ${{ github.event.action != 'labeled' || github.event.label.name == 'ready-to-merge' }}
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    name: Build, lint & test (${{ matrix.os }}, Node ${{ matrix.node }})
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (contains(github.event.pull_request.labels.*.name, 'ready-to-merge') &&
+      (github.event.action != 'labeled' ||
+      github.event.label.name == 'ready-to-merge'))
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            node: '22'
+          - os: macos-latest
+            node: '24'
+          - os: ubuntu-latest
+            node: '24'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        # pnpm version comes from the packageManager field in package.json.
+      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+        with:
+          node-version: ${{ matrix.node }}
+          cache: pnpm
+      - name: Install
+        run: pnpm install --frozen-lockfile
+      - name: Lint
+        run: pnpm lint
+      - name: Typecheck
+        run: pnpm typecheck
+      - name: Build
+        run: pnpm build
+      - name: Test
+        run: pnpm test
+
+  studio-e2e:
+    name: Studio e2e (Linux, Node 24)
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (contains(github.event.pull_request.labels.*.name, 'ready-to-merge') &&
+      (github.event.action != 'labeled' ||
+      github.event.label.name == 'ready-to-merge'))
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+        with:
+          node-version: '24'
+          cache: pnpm
+      - name: Install
+        run: pnpm install --frozen-lockfile
+      - name: Build
+        run: pnpm build
+      - name: Install Chromium
+        run: pnpm exec playwright install --with-deps chromium
+      # playwright.config.ts sets reuseExistingServer: !process.env.CI, so on
+      # CI the job always boots a fresh preview server (no stale-server risk).
+      - name: Studio e2e
+        run: pnpm test:e2e
