@@ -6,6 +6,8 @@
 //   - an MF array whose items are package names (`'react'`) or MF maps
 //   - an MF map `{ [pkg]: string | { singleton?, eager?, requiredVersion?,
 //     version?, packageName?, ... } }`; a string value is the requiredVersion
+// A map value of `true` or `false` means "no options" (the entry is kept with
+// its name only). A package listed twice, in any combination of forms, throws.
 // Unknown MF keys (`import`, `shareKey`, `shareScope`, `strictVersion`, ...)
 // are ignored; `requiredVersion: false` and other non-string values are dropped.
 // An object item with a string `name` is read as an Atlas entry, so an MF map
@@ -23,7 +25,7 @@ import { createRequire } from 'node:module';
 import path from 'node:path';
 import type { IntrospectionSharedEntry } from '../core/introspection-types.js';
 
-type MfSharedValue = string | Record<string, unknown>;
+type MfSharedValue = string | boolean | Record<string, unknown>;
 
 /** Accepted `shared` option: Atlas array, MF array, or MF map. */
 export type IntrospectionSharedInput =
@@ -129,10 +131,9 @@ export function normalizeShared(
       if (typeof item === 'string') {
         pending.push(fromMapEntry(item, undefined));
       } else if (isRecord(item) && typeof item.name === 'string') {
-        pending.push({
-          entry: { ...(item as unknown as IntrospectionSharedEntry) },
-          packageName: item.name,
-        });
+        // Pick schema keys only: `versionConfidence` is set by the plugin,
+        // never accepted from the caller.
+        pending.push(fromMapEntry(item.name, item));
       } else if (isRecord(item)) {
         addMap(item);
       } else {
@@ -145,6 +146,16 @@ export function normalizeShared(
     addMap(shared);
   } else {
     throw new Error('shared must be an array or a Module Federation map');
+  }
+
+  const seen = new Set<string>();
+  for (const { entry } of pending) {
+    if (seen.has(entry.name)) {
+      throw new Error(
+        `shared declares "${entry.name}" more than once; list each package once`
+      );
+    }
+    seen.add(entry.name);
   }
 
   return pending.map(({ entry, packageName }) => {

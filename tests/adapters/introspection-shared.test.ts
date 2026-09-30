@@ -96,6 +96,45 @@ describe('IntrospectionPlugin shared shapes', () => {
     ]);
   });
 
+  it('drops a caller-supplied versionConfidence from array entries', () => {
+    const result = facts([
+      { name: 'react', version: '19.0.0', versionConfidence: 'heuristic' },
+    ]);
+    assert.deepEqual(result, [{ name: 'react', version: '19.0.0' }]);
+  });
+
+  it('throws naming the package when it is declared twice', () => {
+    assert.throws(
+      () => facts(['react', { react: { singleton: true } }]),
+      /"react" more than once/
+    );
+    assert.throws(
+      () => facts([{ name: 'lodash' }, { name: 'lodash' }]),
+      /"lodash" more than once/
+    );
+  });
+
+  it('keeps the name only for true and false map values', () => {
+    assert.deepEqual(facts({ lodash: true, zustand: false }), [
+      { name: 'lodash' },
+      { name: 'zustand' },
+    ]);
+  });
+
+  it('throws for an array item that is neither a name nor an object', () => {
+    assert.throws(
+      () => facts([42] as never),
+      /shared\[0\] must be a package name or an object/
+    );
+  });
+
+  it('throws when shared is neither an array nor a map', () => {
+    assert.throws(
+      () => facts('react' as never),
+      /shared must be an array or a Module Federation map/
+    );
+  });
+
   it('rejects a value that is neither a string nor an object', () => {
     assert.throws(
       () => facts({ react: 42 } as never),
