@@ -142,3 +142,8 @@ test('merge commits skip the header rule but not attribution or identity', () =>
   });
   assert.deepEqual(rules(author), ['ai-author']);
 });
+
+test('accepts git\'s default revert header when the wrapped header is valid', () => {
+  assert.deepEqual(validateHeader('Revert "feat(cli): add doctor"'), []);
+  assert.deepEqual(rules(validateHeader('Revert "update stuff"')), ['header']);
+});

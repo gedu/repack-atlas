@@ -153,7 +153,10 @@ export function validateHeader(header) {
     });
     return out;
   }
-  if (!HEADER_RE.test(header)) {
+  // git's default revert header wraps the original one: Revert "feat: x".
+  const revert = /^Revert "(.+)"$/.exec(header);
+  const subject = revert ? revert[1] : header;
+  if (!HEADER_RE.test(subject)) {
     out.push({
       rule: 'header',
       detail: `"${header}" is not "<${COMMIT_TYPES.join('|')}>(scope)?: summary"`,

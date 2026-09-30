@@ -9,7 +9,7 @@ on:
     branches: [main]
   pull_request:
 
-# Oldest run per ref wins; PRs and main pushes never cancel each other.
+# Newest run per ref wins; PRs and main pushes never cancel each other.
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
