@@ -162,6 +162,49 @@ describe('IntrospectionPlugin shared version resolution', () => {
     assert.equal(entry?.version, '19.2.8');
   });
 
+  it('keeps singleton, eager and requiredVersion on array entries while resolving the version', () => {
+    const result = facts([
+      {
+        name: 'react',
+        singleton: true,
+        eager: true,
+        requiredVersion: '^19.0.0',
+      },
+    ]);
+    assert.deepEqual(result, [
+      {
+        name: 'react',
+        singleton: true,
+        eager: true,
+        requiredVersion: '^19.0.0',
+        version: '19.2.8',
+        versionConfidence: 'heuristic',
+      },
+    ]);
+  });
+
+  it('resolves packageName on array entries and keeps their other fields', () => {
+    const result = facts([
+      {
+        name: 'my-react',
+        packageName: 'react',
+        singleton: true,
+        eager: false,
+        requiredVersion: '19.x',
+      },
+    ]);
+    assert.deepEqual(result, [
+      {
+        name: 'my-react',
+        singleton: true,
+        eager: false,
+        requiredVersion: '19.x',
+        version: '19.2.8',
+        versionConfidence: 'heuristic',
+      },
+    ]);
+  });
+
   it('leaves the version absent for an unresolvable package, without throwing', () => {
     const [entry] = facts({ 'not-installed-anywhere': { singleton: true } });
     assert.equal(entry?.version, undefined);
