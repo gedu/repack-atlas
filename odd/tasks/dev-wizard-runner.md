@@ -48,7 +48,7 @@ part of the plan and must exist.
 - [x] T3 Default argv: config `config` field, RN CLI resolver adapter
       (`createRequire` from app root), `detectBundler`, `command` as override;
       `init` stops emitting `command`.
-- [ ] T4 `--platform ios|android`, `--standalone <remote>` (gated on
+- [x] T4 `--platform ios|android`, `--standalone <remote>` (gated on
       `standalone: true`), env contract for `command` apps.
 - [ ] T5 Launch: `--launch/--no-launch/--device`, one-shot
       `run-<platform> --no-packager` on the target's first ready, `[launch]`
@@ -134,6 +134,22 @@ branch merges to main once at the end.
 - Docs (T7) must say default `init` output needs `react-native` installed in
   each app root.
 
+- T4 done on `feat/dev-wizard-runner-t4`, commit `8cd0dbd`
+  (`feat(dev): add --platform and --standalone`), 717 authored lines.
+  Route: delegated direct. Standalone session composition matches upstream
+  (host always runs unless `--apps` excludes it; `--standalone r` adds r).
+  Deviations from upstream: duplicate declared ports are a conflict (exit 1);
+  a standalone remote with neither `command` nor `root` exits 2. `--json`
+  shows `reassignedFrom`. Checks: full chain green, 453/453; parent spot check
+  plan + ports + dev-runner (83/83). Native review: high, granted, 4 lenses,
+  approved, acknowledged.
+- Carried into T5: `ATLAS_APP_PLATFORM` from the user's shell survives when no
+  platform is set (delete it from the child env); advisories at
+  `supervisor.ts:191-193`, `plan.ts:175`, `help.ts:162-164`, weak
+  `--standalone` no-value assert (`dev-runner.test.ts:1338-1341`), dup-port
+  free-port race in tests (`:1364-1367`); fixture remote ports 8082/8083
+  must be free in tests.
+
 ## Next step
 
-T4 (platform, standalone, env), stacked on `feat/dev-wizard-runner-t3`.
+T5 (launch), stacked on `feat/dev-wizard-runner-t4`.
