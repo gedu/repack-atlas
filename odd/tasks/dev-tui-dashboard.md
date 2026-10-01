@@ -241,3 +241,26 @@ lines; 100% bar normalization only redraws what the child printed.
 - Parent spot check: `pnpm test` 663/663 pass (was 638; +25). check:commits
   OK (9 items). Deviation accepted: `! `-prefixed stderr lines settle
   instead of collapsing (warn/error text never swallowed).
+
+## Third round (user, 2026-10-01) — rules review + G-items
+Engineering-rules audit: #1 batched render ✅ (100ms tick, seam never renders);
+#2 visible-only ✅ (ring + logWindow); #4 flicker ✅ (ink diff), spinner
+isolation partial; #5 restore hardening partial (async crash could leave
+alt-screen); #6 multi-terminal ❌ (only Ghostty smoke so far); #7 pure logic ✅.
+- [ ] G1 — Panel-level notice: when scrolled above the bottom, show a dim
+      notice line at the panel bottom `↓ N new lines below` (N since
+      autoscroll paused), cleared on return to bottom. (rules #3)
+- [ ] G2 — Sidebar activity badge: keep the bounce glyph, DROP the number
+      (user: animation alone is great).
+- [ ] G3 — Restore hardening: while the TUI is mounted, an
+      uncaughtException/unhandledRejection must first unmount, leave
+      alt-screen, show cursor, disable mouse tracking, restore stdin, THEN
+      rethrow/exit; document SIGKILL leaves the terminal (inherent).
+- [ ] G4 — Startup banner: centered ASCII art atlas/map glyph in Re.Pack-ish
+      colors + `repack-atlas v<x>` + tagline, printed on the NORMAL screen
+      before the wizard/supervision (human paths only; --json/--ci/non-TTY
+      never print it). Art style: user-supplied braille flower as reference;
+      draw a compass/map, keep ≤12 rows, braille/box chars Ghostty-safe.
+- [ ] G5 (NEXT CYCLE, after user terminal smoke) — wizard-in-TUI: replace
+      clack prompts with selection inside the dashboard (sidebar = apps to
+      run). Separate work cycle; touches the prompt gate.
