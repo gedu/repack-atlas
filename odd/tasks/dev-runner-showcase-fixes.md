@@ -32,7 +32,7 @@ Repo tests passed because the stub RN CLI accepts any option.
 - [x] T2 Follow-ups: `--apps` wording (`remotes.<name>` → bare name) in PRD
       and DEV_HELP; AGENTS.md `runner/` layout line; gate test exit-code
       asserts; readline re-ask advisory.
-- [ ] T3 Re-verify on super-app-showcase (dry-run, `--apps auth`, full
+- [x] T3 Re-verify on super-app-showcase (dry-run, `--apps auth`, full
       session, wizard under a pseudo-TTY) and update `docs/demo-showcase.md`
       with verified output; drop "not yet re-verified" marks only for what ran.
 
@@ -85,7 +85,16 @@ delivery (#36).
 - Engram fixed: the session ended at `/clear`; registered
   `claude-code-repack-atlas-20261001-dev-runner` and mirrored.
 
+- T3: `dev --apps auth --no-studio --no-interactive` serves the auth manifest
+  (200, `id: auth`, react 19.2.8) ~1s after ready; wizard `--dry-run` under a
+  pseudo-TTY ran remotes → platform → launch-skipped note → ports and exit 0
+  (clack wraps one char per line at 0 columns; record in a real terminal).
+  Runbook updated in `299300d` (`docs: verify the demo runbook against the
+  real showcase`) plus the showcase commit list. Showcase commits (local
+  `atlas-demo`, not pushed): `28d43bf` drop `command`, `caf33f4` lockfile.
+  Still unverified: `--launch --platform ios` (simulator), `init` output on
+  the showcase.
+
 ## Next step
 
-T3: wizard under a pseudo-TTY on the showcase, `--apps auth`, update
-`docs/demo-showcase.md` with verified output; then review + PR.
+Native review of the fix commits, gga, PR to main, merge.

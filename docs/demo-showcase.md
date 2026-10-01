@@ -325,8 +325,10 @@ kill <dev-supervisor-pid>          # tears down all four children
 git status --porcelain             # showcase stays clean (demo files are gitignored)
 ```
 
-The showcase side lives entirely on the `atlas-demo` branch (6 commits:
-deps, plugins, writeToDisk, workspace config, lock refresh, and the
-shared-map refactor `d80e172 refactor(atlas): pass the federation shared map
-to introspection`) and is never pushed or sent
-upstream without the owner's call.
+The showcase side lives entirely on the `atlas-demo` branch. It has 8 commits:
+deps, plugins, writeToDisk, workspace config, lock refresh, the shared-map
+refactor (`d80e172 refactor(atlas): pass the federation shared map to
+introspection`), `28d43bf chore(atlas): let Atlas build each app's start
+argv` (which drops the `command` overrides) and a lockfile refresh,
+`caf33f4`. The branch is never pushed or sent upstream without the owner's
+call.
