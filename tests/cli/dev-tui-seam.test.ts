@@ -114,6 +114,36 @@ describe('dev TUI seam: rule 11 static-import fence', () => {
     );
   });
 
+  // G4 (static, honest): the banner must print on HUMAN paths only. Running
+  // a real TTY session under test is out of scope, so this checks the
+  // guard textually: the renderStartupBanner call sits inside an `if` whose
+  // condition carries all three machine-path exclusions. A regex over the
+  // source is weak (it cannot prove block structure), but the call appears
+  // exactly once, and the condition line is captured directly above it.
+  it('dev.ts gates the startup banner behind the human-TTY condition (G4)', () => {
+    const call = /\brenderStartupBanner\(/.exec(devSource);
+    assert.ok(call !== null, 'the seam must render the startup banner');
+    const before = devSource.slice(0, call?.index ?? 0);
+    const guard = /if\s*\(([^)]*)\)\s*\{[^{}]*$/s.exec(before);
+    assert.ok(guard !== null, 'the banner call must sit directly inside an if block');
+    const condition = guard[1] ?? '';
+    assert.match(condition, /!json/, 'the --json stream must never print the banner');
+    assert.match(condition, /!ci/, '--ci must never print the banner');
+    assert.match(condition, /stdoutIsTTY/, 'non-TTY stdout must never print the banner');
+  });
+
+  // banner.ts is statically imported by dev.ts, so it must hold the same
+  // purity promise model.ts holds (no ink/react, no io) — otherwise the
+  // static import would leak render-layer weight onto machine paths.
+  it('banner.ts stays pure: no ink/react import, static or dynamic', () => {
+    const bannerSource = readFileSync(
+      path.join(repoRoot, 'src', 'cli', 'dev-tui', 'banner.ts'),
+      'utf8'
+    );
+    assert.doesNotMatch(bannerSource, /^\s*import\b[^;]*?from\s+'(ink|react)'/m);
+    assert.doesNotMatch(bannerSource, /\bimport\('(ink|react)'\)/);
+  });
+
   it('model.ts stays pure: no ink/react import, static or dynamic', () => {
     const modelSource = readFileSync(
       path.join(repoRoot, 'src', 'cli', 'dev-tui', 'model.ts'),

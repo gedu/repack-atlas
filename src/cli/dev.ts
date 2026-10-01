@@ -80,6 +80,11 @@ import {
   type DevTuiModel,
   type DevTuiRosterEntry,
 } from './dev-tui/model.js';
+// G4 startup banner: PURE like model.ts (no ink/react, no fs), so the static
+// import keeps rule 11 exception (b) intact — dev-tui-seam.test.ts re-checks
+// banner.ts for purity the same way it checks model.ts.
+import { renderStartupBanner } from './dev-tui/banner.js';
+import { readVersion } from './version.js';
 import { lastValue, parseArgs, type ArgSpec } from './args.js';
 import { runDevWizard, shouldRunWizard } from './dev-wizard.js';
 import { DEV_HELP } from './help.js';
@@ -506,6 +511,25 @@ export async function runDevCommand(
   const ci = parsed.flags.has('ci');
   const useStudio = !parsed.flags.has('no-studio');
   const workspace = lastValue(parsed, 'workspace') ?? process.cwd();
+
+  // G4 startup banner: HUMAN runs only. The condition is exactly
+  // `!json && !ci && env.stdoutIsTTY` — machine paths (--json, --ci,
+  // --no-interactive, a piped stdout) print NOTHING new. It sits on the
+  // normal screen, before the wizard and the plan table, so the alt-screen
+  // TUI can never cover it. The version comes from the shared reader
+  // (src/cli/version.ts); a failure there must not sink the banner, so it
+  // renders without the version line in that case. Color follows the
+  // standard NO_COLOR convention on top of the TTY gate.
+  if (!json && !ci && env.stdoutIsTTY) {
+    const version = await readVersion().catch(() => '');
+    const banner = renderStartupBanner({
+      version,
+      columns: process.stdout.columns ?? 80,
+      color: process.env.NO_COLOR === undefined,
+    });
+    // Empty below BANNER_MIN_COLUMNS: print nothing, not even a blank line.
+    if (banner !== '') io.writeOut(banner);
+  }
 
   let studioPort: number | undefined;
   if (parsed.options.has('studio-port')) {
