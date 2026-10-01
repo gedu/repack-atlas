@@ -81,35 +81,49 @@ describe('runDevWizard', () => {
     assert.equal(prompts.remaining(), 0);
   });
 
-  it('an empty remotes answer is a host-only session, same plan as --apps host', async () => {
-    const { prompts, outcome } = await run([
-      [], // remotes: none
-      'ios',
-      false, // launch no
-      true, // host port
-    ]);
-    assert.deepEqual(prompts.emptyHints, ['host only']);
-    assert.ok(!prompts.asked.some((q) => q.includes('alpha')));
-    const answers = completed(outcome);
-    assert.deepEqual(answers.apps, ['host']);
-    assert.equal(answers.standalone, undefined);
+  describe('an empty remotes answer (host-only session)', () => {
+    const hostOnly = () =>
+      run([
+        [], // remotes: none
+        'ios',
+        false, // launch no
+        true, // host port
+      ]);
 
-    const config: FederationConfig = {
-      host: { manifest: './m/host.json', command: 'run host' },
-      remotes: {
-        alpha: { manifest: './m/alpha.json', command: 'run alpha' },
-        beta: { manifest: './m/beta.json', command: 'run beta' },
-      },
-    };
-    const plan = (apps: string[]) =>
-      buildDevPlan({ config, configDir: '/ws', hostName: 'host_app', apps });
-    const flagged = plan(['host']);
-    assert.ok(flagged.ok);
-    assert.deepEqual(plan(answers.apps), flagged);
-    assert.deepEqual(
-      flagged.entries.map((e) => e.key),
-      ['host']
-    );
+    it('is offered by passing a host-only emptyHint to the remotes question', async () => {
+      const { prompts } = await hostOnly();
+      assert.deepEqual(prompts.emptyHints, ['host only']);
+    });
+
+    it('selects only the host and asks nothing about remotes', async () => {
+      const { prompts, outcome } = await hostOnly();
+      assert.ok(!prompts.asked.some((q) => q.includes('alpha')));
+      assert.ok(!prompts.asked.some((q) => q.includes('beta')));
+      const answers = completed(outcome);
+      assert.deepEqual(answers.apps, ['host']);
+      assert.equal(answers.standalone, undefined);
+      assert.equal(prompts.remaining(), 0);
+    });
+
+    it('builds the same plan as --apps host', async () => {
+      const { outcome } = await hostOnly();
+      const config: FederationConfig = {
+        host: { manifest: './m/host.json', command: 'run host' },
+        remotes: {
+          alpha: { manifest: './m/alpha.json', command: 'run alpha' },
+          beta: { manifest: './m/beta.json', command: 'run beta' },
+        },
+      };
+      const plan = (apps: string[]) =>
+        buildDevPlan({ config, configDir: '/ws', hostName: 'host_app', apps });
+      const flagged = plan(['host']);
+      assert.ok(flagged.ok);
+      assert.deepEqual(plan(completed(outcome).apps), flagged);
+      assert.deepEqual(
+        flagged.entries.map((e) => e.key),
+        ['host']
+      );
+    });
   });
 
   it('asks ports only for the host and the selected remotes', async () => {

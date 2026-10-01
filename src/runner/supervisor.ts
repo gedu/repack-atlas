@@ -56,6 +56,7 @@ import {
   isAppSelected,
   resolveRef,
   type DevPlanEntry,
+  type DevPlanWarning,
   type DevPlatform,
   type DevSkippedApp,
 } from './plan.js';
@@ -65,7 +66,11 @@ import {
   describeReassignments,
   PORT_CONFLICT_HINT,
 } from './ports.js';
-import { buildLaunchPlan, type LaunchPlan } from './launch-plan.js';
+import {
+  buildLaunchPlan,
+  LAUNCH_NEEDS_PLATFORM_REASON,
+  type LaunchPlan,
+} from './launch-plan.js';
 import { cmdShimSpawn, startArgs, type DevLaunch } from './start-argv.js';
 import { resolveToolchains } from './toolchain.js';
 
@@ -110,13 +115,15 @@ export interface DevAppPlan {
   manifestPath?: string;
 }
 
-export type { DevSkippedApp };
+export type { DevPlanWarning, DevSkippedApp };
 
 /** A plan with no ports allocated yet (what `--dry-run` reports). */
 export interface LoadedDevPlan {
   configDir: string;
   entries: DevPlanEntry[];
   skipped: DevSkippedApp[];
+  /** Assumptions made for apps that do run (reported, never silent). */
+  warnings: DevPlanWarning[];
   /** Config keys of the remotes declaring `standalone: true` (the wizard
    * offers standalone only for these). */
   standaloneRemotes: string[];
@@ -139,6 +146,7 @@ export type DevPlanResult =
       apps: DevAppPlan[];
       /** Apps with neither `command` nor `root` (left out, warned). */
       skipped: DevSkippedApp[];
+      warnings: DevPlanWarning[];
       /** One line per `--auto-ports` reassignment (empty when none). */
       reassignments: string[];
       /** Present only with `--launch`. */
@@ -166,7 +174,8 @@ export interface DevPlanOptions {
   ports?: Readonly<Record<string, number>>;
   /** `--auto-ports`: busy declared ports move to a free port. */
   autoPorts?: boolean;
-  /** `--launch` (needs `platform`; the CLI gates that first) + `--device`. */
+  /** `--launch` (needs `platform`; the CLI gates that first, this plan
+   * re-checks with the same reason for callers that skip the CLI) + `--device`. */
   launch?: { device?: string };
 }
 
@@ -251,7 +260,7 @@ export async function loadDevPlan(
   let launch: LaunchPlan | undefined;
   if (options.launch !== undefined) {
     if (options.platform === undefined) {
-      return { ok: false, reasons: ['--launch needs a single --platform'] };
+      return { ok: false, reasons: [LAUNCH_NEEDS_PLATFORM_REASON] };
     }
     const launchPlan = buildLaunchPlan({
       entries: built.entries,
@@ -269,6 +278,7 @@ export async function loadDevPlan(
     configDir,
     entries: built.entries,
     skipped: built.skipped,
+    warnings: built.warnings,
     standaloneRemotes: Object.entries(config.remotes)
       .filter(([, remote]) => remote.standalone === true)
       .map(([key]) => key),
@@ -332,6 +342,7 @@ export async function resolveDevPlan(
     entries,
     apps,
     skipped: loaded.skipped,
+    warnings: loaded.warnings,
     reassignments: describeReassignments(allocation.assignments),
     ...(loaded.launch !== undefined ? { launch: loaded.launch } : {}),
   };
@@ -351,15 +362,20 @@ export interface SupervisorEvents {
   ): void;
   /**
    * Lifecycle of a one-shot child (the `--launch` run). `exited` carries the
-   * raw result; a spawn failure arrives as `code: null, signal:
-   * 'spawn-error'`. Not called for the kill `shutdown()` itself causes.
+   * raw result; a child that could not be spawned arrives as `spawn-failed`.
+   * Not called for the kill `shutdown()` itself causes. A throwing hook is
+   * contained: it never breaks supervision of the child.
    */
   onOneShot?(name: string, event: OneShotEvent): void;
 }
 
 export type OneShotEvent =
   | { status: 'started'; pid: number | null }
-  | { status: 'exited'; code: number | null; signal: string | null };
+  | { status: 'exited'; code: number | null; signal: string | null }
+  | { status: 'spawn-failed' };
+
+/** `ProcessHandle.waitForExit` reports a failed spawn with this signal. */
+const SPAWN_ERROR_SIGNAL = 'spawn-error';
 
 /** What `spawnOneShot` runs (the launch plan's spawn shape). */
 export interface OneShotSpec {
@@ -533,6 +549,15 @@ export function createDevSupervisor(options: DevSupervisorOptions) {
      */
     spawnOneShot(name: string, spec: OneShotSpec): void {
       if (shuttingDown) return;
+      // A reporting hook that throws must neither crash the session nor
+      // leave the child unsupervised: contain it at every call.
+      const notify = (event: OneShotEvent): void => {
+        try {
+          options.onOneShot?.(name, event);
+        } catch {
+          // The hook only reports; supervision carries on.
+        }
+      };
       let handle: ProcessHandle;
       try {
         handle = options.processRunner.start({
@@ -540,23 +565,35 @@ export function createDevSupervisor(options: DevSupervisorOptions) {
           cwd: spec.cwd,
         });
       } catch {
-        options.onOneShot?.(name, {
-          status: 'exited',
-          code: null,
-          signal: 'spawn-error',
-        });
+        notify({ status: 'spawn-failed' });
         return;
       }
       oneShots.add(handle);
-      options.onOneShot?.(name, { status: 'started', pid: handle.pid });
+      notify({ status: 'started', pid: handle.pid });
       handle.subscribeToStdout((line) => options.onLog(name, 'stdout', line));
       handle.subscribeToStderr((line) => options.onLog(name, 'stderr', line));
-      void handle.waitForExit().then(({ code, signal }) => {
-        oneShots.delete(handle);
-        // Ordered shutdown killed it: the session's doing, not news.
-        if (shuttingDown) return;
-        options.onOneShot?.(name, { status: 'exited', code, signal });
-      });
+      void handle
+        .waitForExit()
+        .then(
+          (exit) => {
+            oneShots.delete(handle);
+            return exit;
+          },
+          // The port promises never to reject. If one does anyway, the exit
+          // is reported with neither code nor signal (the CLI words it "was
+          // killed (unknown signal)"). The child may still be running, so its
+          // handle stays in `oneShots` and `shutdown()` still kills it.
+          () => ({ code: null, signal: null })
+        )
+        .then(({ code, signal }) => {
+          // Ordered shutdown killed it: the session's doing, not news.
+          if (shuttingDown) return;
+          notify(
+            signal === SPAWN_ERROR_SIGNAL
+              ? { status: 'spawn-failed' }
+              : { status: 'exited', code, signal }
+          );
+        });
     },
 
     /** Live status map keyed by graph node name (for the Studio source). */

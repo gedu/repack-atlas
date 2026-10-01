@@ -5,15 +5,18 @@
 // stub bundler (fixtures/workspace/tools/stub-bundler.mjs), so each session
 // costs seconds, per the fixture budget rule.
 //
-// Port policy: `--studio-port 0` (ephemeral, parsed from the studio event);
-// the fixture host is pinned to a known-free port with `--port` (its default
-// would be 8081). The stub remotes keep their declared 8082/8083 ports: the plan probes them free
-// before spawning, and a collision fails loudly, never silently.
+// Port policy: `--studio-port 0` (ephemeral, parsed from the studio event).
+// The fixture workspace is copied to a temp dir once per run, with its remotes'
+// declared ports rewritten to free ones (the fixture itself keeps 8082/8083),
+// and the host is pinned with `--port` (its default would be 8081). No test
+// depends on a fixed port being free; the plan still probes every port before
+// spawning, so a collision fails loudly, never silently.
 
 import assert from 'node:assert/strict';
 import { spawn, type ChildProcess } from 'node:child_process';
 import {
   chmodSync,
+  cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -26,14 +29,21 @@ import http from 'node:http';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, before, beforeEach, describe, it } from 'node:test';
+import { after, afterEach, before, beforeEach, describe, it } from 'node:test';
 import { binPath, ensureBin, repoRoot } from '../cli/run-bin.js';
 
-const WORKSPACE = path.join(repoRoot, 'fixtures', 'workspace');
+const FIXTURE_WORKSPACE = path.join(repoRoot, 'fixtures', 'workspace');
+// Throwaway copy of the fixture with free remote ports, made in `before`.
+let WORKSPACE = FIXTURE_WORKSPACE;
 // The fixture's host declares no port, so the runner default would be 8081
 // (often held by a real Metro). Tests on it pin the host with `--port`, a
 // free port allocated once per run in `before` (never a fixed number).
 let WORKSPACE_HOST_PORT = 0;
+// The copy's remotes (`mini_auth`, `mini_store`) declare these instead of the
+// fixture's 8082/8083.
+let REMOTE_AUTH_PORT = 0;
+let REMOTE_STORE_PORT = 0;
+let workspaceCopy = '';
 const CYCLE_WORKSPACE = path.join(repoRoot, 'fixtures', 'fixture-remote-cycle');
 
 /**
@@ -316,15 +326,40 @@ async function waitPortFree(port: number, timeoutMs = 5_000): Promise<void> {
 
 before(async () => {
   ensureBin();
-  WORKSPACE_HOST_PORT = await freePort();
+  // Three distinct free ports at once (sequential freePort() calls may repeat).
+  const held = await occupyPorts(3);
+  [WORKSPACE_HOST_PORT, REMOTE_AUTH_PORT, REMOTE_STORE_PORT] = held.ports as [
+    number,
+    number,
+    number,
+  ];
+  await held.close();
+  workspaceCopy = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'atlas-workspace-')));
+  cpSync(FIXTURE_WORKSPACE, workspaceCopy, { recursive: true });
+  const configPath = path.join(workspaceCopy, 'repack-federation.json');
+  const config = JSON.parse(readFileSync(configPath, 'utf8')) as {
+    remotes: Record<string, { port?: number }>;
+  };
+  config.remotes.mini_auth!.port = REMOTE_AUTH_PORT;
+  config.remotes.mini_store!.port = REMOTE_STORE_PORT;
+  writeFileSync(configPath, JSON.stringify(config, null, 2));
+  WORKSPACE = workspaceCopy;
 });
 
-// The stub apps keep the ports the fixture declares (remotes 8082/8083, host via --port), so every test
-// must start from released ports even if the previous one failed midway.
-const stubPorts = (): number[] => [8082, 8083, WORKSPACE_HOST_PORT];
+after(() => {
+  if (workspaceCopy !== '') rmSync(workspaceCopy, { recursive: true, force: true });
+});
+
+// The stub apps run on the ports chosen in `before`, so every test must start
+// from released ports even if the previous one failed midway.
+const stubPorts = (): number[] => [
+  REMOTE_AUTH_PORT,
+  REMOTE_STORE_PORT,
+  WORKSPACE_HOST_PORT,
+];
 
 // Close over every session so `afterEach` can always reap children, even if a
-// test fails midway (a leaked stub bundler holds 8082 for the next test).
+// test fails midway (a leaked stub bundler holds a remote port for the next test).
 let openSessions: Session[] = [];
 
 async function session(
@@ -671,8 +706,8 @@ describe('dev --dry-run', () => {
       events[0]!.apps!.map((a) => [a.app, a.role, a.port]),
       [
         ['host', 'host', WORKSPACE_HOST_PORT],
-        ['mini_auth', 'remote', 8082],
-        ['mini_store', 'remote', 8083],
+        ['mini_auth', 'remote', REMOTE_AUTH_PORT],
+        ['mini_store', 'remote', REMOTE_STORE_PORT],
       ]
     );
     assert.equal(events[1]!.code, 0);
@@ -779,8 +814,8 @@ describe('dev ports (--port, --auto-ports, unified conflicts)', () => {
       parseEvents(result.stdout)[0]!.apps!.map((a) => [a.app, a.port]),
       [
         ['host', port],
-        ['mini_auth', 8082],
-        ['mini_store', 8083],
+        ['mini_auth', REMOTE_AUTH_PORT],
+        ['mini_store', REMOTE_STORE_PORT],
       ]
     );
   });
@@ -1264,6 +1299,38 @@ describe('dev default argv (root without command)', () => {
     const result = await runToCompletion(['--dry-run', '--json', '--port', String(port)], dir);
     assert.equal(result.code, 0, result.stderr);
     assert.match(parseEvents(result.stdout)[0]!.apps![0]!.command, /--bundler webpack /);
+  });
+
+  it('a missing app root with a resolvable CLI warns that the bundler was not detected', async () => {
+    // The CLI resolves from a parent directory, so only the root is missing.
+    const dir = workspaceWith(
+      { host: { manifest: './h.json', root: './ghost' }, remotes: {} },
+      (d) => makeApp(d, '.')
+    );
+    const result = await runToCompletion(
+      ['--dry-run', '--json', '--port', String(await freePort())],
+      dir
+    );
+    assert.equal(result.code, 0, result.stderr);
+    assert.match(
+      result.stderr,
+      /dev: warning {2}host: the app root could not be read, so its bundler was not detected; falling back to rspack/
+    );
+    // The warning never reaches the --json stream.
+    assert.doesNotMatch(result.stdout, /warning/);
+  });
+
+  it('a missing app root with no CLI at all exits 2 naming the app', async () => {
+    const dir = workspaceWith(
+      { host: { manifest: './h.json', root: './ghost' }, remotes: {} },
+      () => {}
+    );
+    const result = await runToCompletion(
+      ['--dry-run', '--port', String(await freePort())],
+      dir
+    );
+    assert.equal(result.code, 2, result.stderr);
+    assert.match(result.stderr, /dev: host: /);
   });
 
   it('dry-run --json with a built argv is byte-identical across runs', async () => {
@@ -1794,6 +1861,40 @@ describe('dev --launch', () => {
     s.child.kill('SIGINT');
     assert.equal((await s.exited).code, 0);
     assert.equal(s.events.at(-1)!.code, 0);
+  });
+
+  it('a launch that cannot be spawned emits the spawn-error exit event and keeps the session', async () => {
+    const hostPort = await freePort();
+    const dir = workspaceWith(
+      {
+        host: {
+          manifest: './h.json',
+          root: './apps/host',
+          command:
+            "node -e \"require('net').createServer().listen(Number(process.env.ATLAS_APP_PORT),'127.0.0.1')\"",
+        },
+        remotes: {},
+      },
+      (d) => {
+        makeApp(d, 'apps/host', { shim: true });
+        // A shim that is not executable: spawning it fails (EACCES).
+        chmodSync(path.join(d, 'apps', 'host', 'node_modules', '.bin', 'react-native'), 0o644);
+      }
+    );
+    const s = await session(
+      ['--ci', '--json', '--no-studio', '--port', String(hostPort), '--platform', 'ios', '--launch'],
+      dir
+    );
+    const failed = await s.waitForEvent((e) => e.event === 'launch' && e.status === 'exited');
+    assert.equal(failed.code, null);
+    assert.equal((failed as DevEvent & { signal?: string }).signal, 'spawn-error');
+    await waitFor(
+      () => s.lines.some((l) => l.includes('dev: launch could not be spawned; the session keeps serving')),
+      'the human failure line'
+    );
+    assert.ok(!s.events.some((e) => e.event === 'app' && e.status === 'error'));
+    s.child.kill('SIGINT');
+    assert.equal((await s.exited).code, 0);
   });
 
   it('shutdown kills a launch that is still running', async () => {

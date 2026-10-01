@@ -63,14 +63,14 @@ does it fall back to `node <cli.js>`. Plans show
 - `--json` events (`plan`, `studio`, `app`, `launch`, `exit`) only grow: add fields, never rename or drop.
 - A new flag needs, in one change: `DEV_HELP`, a wizard answer or an explicit "flag only" reason, README/PRD §7.1.1 rows, and tests.
 - The wizard must not offer an answer the flags would reject (for example "all" platform under `--launch`).
-- Host-only sessions: the remotes question passes `emptyHint: 'host only'`. With it, clack gets `required: false` (deselect all) and readline accepts `none` (case-insensitive; an option literally named `none` wins). Both end as `apps: ['host']`, the same plan input as `--apps host`. An empty readline line still takes the preselection (all remotes). Without `emptyHint` an empty selection is never valid (readline re-asks, clack stays required).
+- Host-only sessions: the remotes question passes `emptyHint: 'host only'`. With it, clack gets `required: false` (deselect all) and readline accepts `none` (case-insensitive; an option whose `value` is `none` wins; a label alone does not). Both end as `apps: ['host']`, the same plan input as `--apps host`. An empty readline line still takes the preselection (all remotes). Without `emptyHint` an empty selection is never valid (readline re-asks, clack stays required).
 
 ## Testing
 
 - Plan and port logic: unit tests on `buildDevPlan` and `ports.ts`, no processes.
 - Wizard: `tests/cli/fake-prompts.ts` scripts answers; assert the questions asked (`asked`) and the options offered (`offered`), not only the result.
 - Spawned runs: `tests/runner/dev-runner.test.ts` uses `fixtures/workspace/tools/stub-bundler.mjs` and a stub `react-native` CLI (`makeApp`) that records argv and cwd. `makeApp` writes a `react-native.config.js` declaring the start options of the chosen shape (`repack: 'repack5' | 'pr1467'`, default `pr1467`) and the stub REJECTS undeclared options with `error: unknown option`, so a flag the installed Re.Pack lacks fails the test. Never require a simulator or a real RN install.
-- Use free ports (`freePort()`); the fixture remotes keep 8082/8083, so wait for them to be free between tests.
+- Use free ports (`freePort()`). Runner tests run on a temp copy of `fixtures/workspace` whose remote ports are rewritten to free ones in `before` (the fixture keeps 8082/8083 for its other readers); never depend on a fixed port being free.
 
 ## Verify
 

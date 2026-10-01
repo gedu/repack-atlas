@@ -141,7 +141,7 @@ describe('readline prompts (piped stdin)', () => {
     prompts.close();
   });
 
-  it('an option named none wins over the keyword and is not advertised', async () => {
+  it('an option with the value none wins over the keyword and is not advertised', async () => {
     const io = piped('none\n');
     const prompts = createReadlinePrompts({ input: io.stdin, output: io.stdout });
     const options = [
@@ -153,6 +153,27 @@ describe('readline prompts (piped stdin)', () => {
       { status: 'ok', value: ['none'] }
     );
     assert.doesNotMatch(io.output(), /none = /);
+    prompts.close();
+  });
+
+  it('an option merely labelled None does not suppress the keyword', async () => {
+    const io = piped('none\nx\n');
+    const prompts = createReadlinePrompts({ input: io.stdin, output: io.stdout });
+    const options = [
+      { value: 'x', label: 'None' },
+      { value: 'alpha', label: 'alpha' },
+    ];
+    const question = { message: 'Remotes?', options, emptyHint: 'host only' };
+    assert.deepEqual(await prompts.multiselect(question), {
+      status: 'ok',
+      value: [],
+    });
+    assert.match(io.output(), /none = host only/);
+    // The labelled option stays reachable by its value.
+    assert.deepEqual(await prompts.multiselect(question), {
+      status: 'ok',
+      value: ['x'],
+    });
     prompts.close();
   });
 

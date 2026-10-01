@@ -118,9 +118,15 @@ describe('allocatePorts', () => {
       resolveAuto: false,
     });
     assert.ok(result.ok);
+    const applied = applyAssignments(ENTRIES, result.assignments);
     assert.deepEqual(
-      applyAssignments(ENTRIES, result.assignments).map((e) => e.declaredPort),
+      applied.map((e) => e.allocatedPort ?? null),
       [50_001, 8082, null]
+    );
+    assert.deepEqual(
+      applied.map((e) => e.declaredPort),
+      ENTRIES.map((e) => e.declaredPort),
+      'allocation never rewrites what the plan declared'
     );
   });
 

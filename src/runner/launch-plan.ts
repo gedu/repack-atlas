@@ -21,6 +21,14 @@ import type { ReactNativeCliResult } from '../core/index.js';
 import type { DevPlanEntry, DevPlatform } from './plan.js';
 import { cliInvocation, describeArgv, describeShim } from './start-argv.js';
 
+/**
+ * Why `--launch` without a single platform is refused. The one wording shared
+ * by the CLI gate (usage error, exit 2 before anything is read) and the
+ * plan's own guard for callers that skip the CLI.
+ */
+export const LAUNCH_NEEDS_PLATFORM_REASON =
+  '--launch needs a single platform: pass --platform ios or --platform android (or drop --launch to serve only)';
+
 /** The one-shot `run-<platform>` child, in the supervisor's spawn shape. */
 export interface LaunchPlan {
   /** Config key of the app whose first `ready` triggers the launch. */

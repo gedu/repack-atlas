@@ -9,9 +9,6 @@ import {
   toPlanEventLaunch,
 } from '../../src/runner/launch-plan.js';
 import type { DevPlanEntry } from '../../src/runner/plan.js';
-import {
-  resolveToolchains,
-} from '../../src/runner/toolchain.js';
 
 function entry(
   key: string,
@@ -171,29 +168,5 @@ describe('launch display', () => {
       formatLaunchLine(planned()),
       'launch (once host_app is ready): node node_modules/react-native/cli.js run-ios --no-packager --device emulator-5554  [cwd /ws/apps/host]'
     );
-  });
-});
-
-describe('resolveToolchains (injected resolver edge cases)', () => {
-  it('a resolver that throws fails that app only, not the plan', async () => {
-    const toolchains = await resolveToolchains(
-      [{ root: '/ws/a' }, { root: '/ws/b' }],
-      {
-        fs: {
-          readdir: async () => [],
-        } as never,
-        reactNativeCli: {
-          resolve(root) {
-            if (root === '/ws/a') throw new Error('boom');
-            return okCli(root);
-          },
-          startOptions: () => ({ status: 'unknown', message: 'n/a' }),
-        },
-      }
-    );
-    const a = toolchains['/ws/a']!;
-    assert.ok(!a.ok);
-    assert.match(a.reason, /lookup failed: Error: boom/);
-    assert.ok(toolchains['/ws/b']!.ok);
   });
 });

@@ -10,6 +10,7 @@ import type {
   ReactNativeCliResolver,
 } from '../core/index.js';
 import {
+  bundlerFromConfigName,
   detectBundler,
   RSPACK_CONFIG_FILES,
   WEBPACK_CONFIG_FILES,
@@ -23,6 +24,9 @@ export type ToolchainResolution =
       cli: string;
       /** The app's `.bin/react-native` shim, when it has one. */
       shim?: string;
+      /** Set when the bundler is a guess: the app root could not be read, so
+       * rspack (Re.Pack's default) was assumed. */
+      bundlerNote?: string;
       /** Options the app's `start` declares; absent = undetermined. */
       startOptions?: readonly string[];
       /** Why `startOptions` is absent. */
@@ -53,6 +57,7 @@ async function listConfigFiles(fs: ProjectFs, root: string): Promise<string[]> {
   );
 }
 
+
 export interface ToolchainTarget {
   /** Absolute app root. */
   root: string;
@@ -73,11 +78,16 @@ export async function resolveToolchains(
     const key = toolchainKey(target.root, target.config);
     // Apps with the same root and config resolve once.
     if (key in resolved) continue;
+    // `ProjectFs` encodes "cannot list" as `[]`, never a throw, so an
+    // unreadable root is told apart by statting it first. Without a listing
+    // the bundler is a guess (rspack) unless `config` already decides it.
     let files: string[] = [];
-    try {
+    let unreadableRoot = false;
+    const rootStat = await deps.fs.stat(target.root);
+    if (rootStat === null || !rootStat.isDirectory) {
+      unreadableRoot = true;
+    } else {
       files = await listConfigFiles(deps.fs, target.root);
-    } catch {
-      // An unreadable root lists nothing: detection falls back to rspack.
     }
     const bundler = detectBundler({
       files,
@@ -109,6 +119,12 @@ export async function resolveToolchains(
       bundler,
       cli: cli.cli,
       ...(cli.shim !== undefined ? { shim: cli.shim } : {}),
+      ...(unreadableRoot && bundlerFromConfigName(target.config) === undefined
+        ? {
+            bundlerNote:
+              "the app root could not be read, so its bundler was not detected; falling back to rspack, Re.Pack's default",
+          }
+        : {}),
       ...(inspected.status === 'ok'
         ? { startOptions: inspected.options }
         : { startOptionsNote: inspected.message }),
