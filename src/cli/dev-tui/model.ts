@@ -32,8 +32,9 @@ export const DEV_TUI_RING_CAP = 2000;
 /** Roster status space: the live app statuses plus the two the model adds. */
 export type DevTuiStatus = AppRuntimeStatus | 'pending' | 'exited';
 
-/** Ink color tokens the T3 layer maps to `<Text color={...}>`. */
-export type DevTuiColor = 'green' | 'yellow' | 'red' | 'cyan' | 'gray';
+/** Ink color tokens the T3 layer maps to `<Text color={...}>`. `blue`
+ * exists for the Re.Pack console palette (F5): the info glyph `ℹ`. */
+export type DevTuiColor = 'green' | 'yellow' | 'red' | 'cyan' | 'gray' | 'blue';
 
 /** Classification of one log line, for coloring (heuristic, presentation only). */
 export type LineKind = 'info' | 'success' | 'warn' | 'error' | 'progress';
@@ -90,6 +91,94 @@ export function classifyLine(text: string): LineKind {
     return 'progress';
   }
   return 'info';
+}
+
+// ---------------------------------------------------------------------------
+// Log window + progress-bar pinning (exported pure for tests; app.tsx renders)
+// ---------------------------------------------------------------------------
+
+/**
+ * Window `[start, end)` of the lines to render for a scroll offset counted
+ * FROM THE BOTTOM (0 = autoscroll at the bottom). The offset is clamped so
+ * at least one line stays visible when the buffer is shorter than asked.
+ */
+export function logWindow(
+  total: number,
+  offset: number,
+  pageHeight: number
+): { start: number; end: number } {
+  const clamped = Math.min(Math.max(0, offset), Math.max(0, total - 1));
+  const end = total - clamped;
+  const start = Math.max(0, end - Math.max(1, pageHeight));
+  return { start, end };
+}
+
+/** How close to the buffer's end a progress frame must appear for the bar to
+ * still count as ACTIVE (F4). Beyond this many quiet lines the last bar frame
+ * is history, not a live pin — a stale 93% bar must never sit at the bottom
+ * forever once `Compiled` and later lines have flowed past it. */
+export const PROGRESS_PIN_RECENCY = 3;
+
+/** Progress SHAPE: a braille spinner glyph or a bracketed bar with fill
+ * chars, classified as `progress`. Dotted spinner lines (`Building…....`)
+ * are deliberately NOT progress-shaped — they animate in place (F3) and
+ * belong to the normal body flow. */
+export function isProgressShaped(line: DevTuiLine): boolean {
+  if (line.kind !== 'progress') return false;
+  return BRAILLE.test(line.text) || PROGRESS_BAR.test(line.text);
+}
+
+/** A pinned bar plus the lines that render as the panel body (everything
+ * except the pinned line). */
+export interface DevTuiPinnedPartition {
+  pinned: DevTuiLine | undefined;
+  body: DevTuiLine[];
+}
+
+/**
+ * F4 pin rule: `pinned` = the LAST progress-shaped line, but only while it
+ * still sits within the last `recency` lines of the buffer — i.e. the
+ * animation is active (frames collapse IN PLACE, so a live bar is always at
+ * or near the end). Once `Compiled` and later lines push the bar past that
+ * window it unpins and flows as normal history: a stale 93% frame never
+ * stays parked at the bottom.
+ */
+export function partitionPinned(
+  lines: readonly DevTuiLine[],
+  recency: number = PROGRESS_PIN_RECENCY
+): DevTuiPinnedPartition {
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    const line = lines[i];
+    if (line === undefined || !isProgressShaped(line)) continue;
+    if (i < lines.length - Math.max(1, recency)) break; // stale: history
+    return { pinned: line, body: lines.filter((_, j) => j !== i) };
+  }
+  return { pinned: undefined, body: [...lines] };
+}
+
+// Fill chars inside a bracketed bar, in the order a growing bar uses them.
+const BAR_RUN_IN_TEXT = /\[([^\]]*[=\-█▓▒░#][^\]]*)\]/;
+const LAST_PERCENT = /(\d{1,3}(?:\.\d+)?)%(?![\d.]*%)/;
+
+/**
+ * Bar-graphics normalization (F4): when the printed percent says exactly 100
+ * but the child's last frame still shows a PARTIAL fill, expand the fill to
+ * the full bracket width. This only redraws what the child already declared
+ * (`100%`) — when the percent is below 100 (or absent) the text is returned
+ * verbatim; a completion the child did not print is never invented.
+ */
+export function renderProgressFrame(text: string): string {
+  const bar = BAR_RUN_IN_TEXT.exec(text);
+  const percent = LAST_PERCENT.exec(text);
+  if (bar === null || bar.index === undefined || percent === null) {
+    return text;
+  }
+  if (Number.parseFloat(percent[1] as string) !== 100) return text;
+  const inner = bar[1];
+  if (inner === undefined) return text;
+  const full = '█'.repeat(inner.length);
+  if (inner === full) return text;
+  return `${text.slice(0, bar.index)}[${full}]${text.slice(bar.index + bar[0].length)}`;
 }
 
 // ---------------------------------------------------------------------------

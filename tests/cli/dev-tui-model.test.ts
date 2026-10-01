@@ -1,7 +1,9 @@
 // Unit tests for the pure dev-TUI view-model (odd/tasks T2): roster order,
 // status/one-shot ingestion, ring buffer, spinner-frame collapsing,
 // classification, navigation and the status→glyph/color map. No ink, no
-// react, no terminal — data in, assertions out.
+// react, no terminal — data in, assertions out. Also covers the pure render
+// selectors the TUI consumes (F4): logWindow, partitionPinned and
+// renderProgressFrame.
 
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
@@ -9,8 +11,12 @@ import {
   createDevTuiModel,
   collapseCandidate,
   classifyLine,
+  logWindow,
+  partitionPinned,
+  renderProgressFrame,
   statusPresentation,
   STATUS_PRESENTATION,
+  type DevTuiLine,
   type DevTuiModel,
   type DevTuiRosterEntry,
 } from '../../src/cli/dev-tui/model.js';
@@ -377,5 +383,121 @@ describe('render rows and status map', () => {
     const lines = m.lines('host');
     assert.equal(lines[0]?.at, 1_700_000_000_000);
     assert.equal(lines[1]?.at, undefined);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Pure render selectors (F4): windowing, pinned progress bar, bar graphics
+// ---------------------------------------------------------------------------
+
+function line(text: string): DevTuiLine {
+  return { stream: 'stdout', text, kind: classifyLine(text) };
+}
+
+describe('logWindow', () => {
+  it('anchors at the bottom and clamps the offset', () => {
+    assert.deepEqual(logWindow(10, 0, 5), { start: 5, end: 10 });
+    assert.deepEqual(logWindow(10, 3, 5), { start: 2, end: 7 });
+    // Offset beyond the buffer still keeps at least one line.
+    assert.deepEqual(logWindow(3, 100, 5), { start: 0, end: 1 });
+    assert.deepEqual(logWindow(0, 5, 5), { start: 0, end: 0 });
+  });
+});
+
+describe('partitionPinned', () => {
+  it('no pin without a progress-shaped line', () => {
+    const lines = [line('info: hello'), line('✔ Compiled')];
+    const { pinned, body } = partitionPinned(lines);
+    assert.equal(pinned, undefined);
+    assert.deepEqual(body, lines);
+  });
+
+  it('pins the last progress bar while frames keep arriving', () => {
+    const lines = [
+      line('info: start'),
+      line('transforming [===-------] 30%'),
+      line('transforming [========---] 93%'),
+    ];
+    const { pinned, body } = partitionPinned(lines);
+    assert.equal(pinned?.text, 'transforming [========---] 93%');
+    assert.deepEqual(
+      body.map((l) => l.text),
+      ['info: start', 'transforming [===-------] 30%']
+    );
+  });
+
+  it('later lines render ABOVE the pinned bar (pin rule, live buffer)', () => {
+    // Model reality: frames collapse IN PLACE, so a live bar is the LAST
+    // buffer line; lines printed before it stay in the body.
+    const m = model();
+    m.log('host', 'stdout', 'info: start');
+    m.log('host', 'stdout', 'transforming [===-------] 30%');
+    m.log('host', 'stdout', 'transforming [========---] 93%');
+    const lines = m.lines('host');
+    const { pinned, body } = partitionPinned(lines);
+    assert.equal(pinned?.text, 'transforming [========---] 93%');
+    assert.ok(body.some((l) => l.text === 'info: start'));
+  });
+
+  it('unpins once Compiled and later lines pushed the bar out of recency', () => {
+    const lines = [
+      line('transforming [========---] 93%'),
+      line('✔ Compiled in 4.2s'),
+      line('info: asset main.js 1.2 MiB'),
+      line('info: listening on 8081'),
+    ];
+    const { pinned, body } = partitionPinned(lines);
+    assert.equal(pinned, undefined);
+    assert.equal(body.length, 4);
+  });
+
+  it('a bar frame still within the last lines pins even as a single frame', () => {
+    // Recency is the activeness signal (frames collapse in place, so a live
+    // bar sits at/near the buffer end): a fresh bar pins immediately.
+    const { pinned } = partitionPinned([
+      line('info: start'),
+      line('transforming [====] 40%'),
+    ]);
+    assert.equal(pinned?.text, 'transforming [====] 40%');
+  });
+
+  it('a live dotted spinner is NOT pinned (F3 animates it in place)', () => {
+    const spinner: DevTuiLine = {
+      stream: 'stdout',
+      text: '- Building the app......',
+      kind: 'progress',
+      live: true,
+    };
+    const { pinned, body } = partitionPinned([
+      line('info: start'),
+      spinner,
+    ]);
+    assert.equal(pinned, undefined);
+    assert.equal(body.length, 2);
+  });
+});
+
+describe('renderProgressFrame', () => {
+  it('expands the fill when the printed percent says 100', () => {
+    assert.equal(
+      renderProgressFrame('transforming [========--] 100%'),
+      'transforming [██████████] 100%'
+    );
+  });
+
+  it('is a no-op below 100, without a bar, or without a percent', () => {
+    assert.equal(
+      renderProgressFrame('transforming [===-------] 93%'),
+      'transforming [===-------] 93%'
+    );
+    assert.equal(renderProgressFrame('info: plain line'), 'info: plain line');
+    assert.equal(renderProgressFrame('transforming [===---]'), 'transforming [===---]');
+  });
+
+  it('a frame already fully drawn stays untouched', () => {
+    assert.equal(
+      renderProgressFrame('transforming [██████████] 100%'),
+      'transforming [██████████] 100%'
+    );
   });
 });

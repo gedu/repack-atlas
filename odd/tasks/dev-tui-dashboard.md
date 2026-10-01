@@ -142,3 +142,49 @@ Launch the writer for T4 (dev.ts seam: interactive gate + lazy mount).
   return boolean (unknown app rejected); STATUS_PRESENTATION glyph+color;
   collapseCandidate + classifyLine exported; snapshot()/visibleRows() for a
   dumb UI; navigation clamps; caller passes `at` (no Date in model).
+
+## Follow-up: first real-terminal smoke (user, 2026-10-01)
+Smoke PASSED visually ("se ve bien"), five feedback items → follow-up tasks:
+- [x] F1 — Mouse wheel over the log pane selects sidebar rows. Routing the
+      wheel by pointer position needs mouse-tracking capture (SGR 1006),
+      which would break native copy/paste. Minimum fix: wheel must never
+      change app selection; keyboard scroll (PgUp/PgDn) already exists.
+      Consider capturing wheel → log scroll ONLY behind a toggle key that
+      also warns copy needs a modifier; decide simplest honest option.
+- [x] F2 — Copy grabs the sidebar too because rows are padded to the full
+      sidebar width. Drop the full-width blank pad + `│` gutter glyph so a
+      log-pane drag/selection yields clean log lines (no sidebar text, no
+      `│` artifacts). Full-row drag across both panes stays possible (user
+      should start the drag inside the panel); document in help/footer.
+- [x] F3 — `- Building the app...` live line: animate the dots growing and
+      shrinking (1→6→1) on the 100ms tick while the line is `live: true`,
+      instead of a single frozen settled frame.
+- [x] F4 — Progress bar pinned to the BOTTOM of the log panel: newest
+      progress frame renders as the last visible line while active; later
+      plain lines render ABOVE it so it is never buried; terminal
+      (Compiled/success/error) releases the pin. Bar must reach 100% (do
+      not truncate the final frame; if the child's last bar frame is <100
+      but a terminal line follows, render one synthetic 100% frame — mark
+      it clearly not-fabricated? No: only normalize the BAR GRAPHICS to
+      full when percent says 100; never invent a completion the child did
+      not print — the Compiled line is the completion signal).
+- [x] F5 — Palette: match Re.Pack's console reporter (verified from
+      callstack/repack packages/repack/src/logging): cyan module/issuer
+      names, green for success, yellow warn, red error, dim timestamps;
+      level words uncolored. Replace the current generic inverse/`live`
+      highlight with the Re.Pack-style scheme; keep stderr `!` marker.
+
+## Next step
+Delegate F1-F5 as one bounded UI-polish writer (files: app.tsx, model.ts if
+pinning belongs there, tests). Then user smoke again.
+
+### F1-F5 landed (uncommitted worker output finished + verified by parent)
+Worker died before reporting; parent verified: 2 real fixes applied by the
+parent — stripSpinner left a leading space (test expected trim); SGR mouse
+regexes used ESC literals banned by eslint no-control-regex (rebuilt via
+String.fromCharCode(0x1b)); splitLeadingSymbol trims the separator space the
+renderer re-inserts. Observed: build/lint/typecheck exit 0; pnpm test 638/638
+(was 618; +20 new). F1 = DECSET 1000+1006 capture, SGR wheel routed by column
+(sidebar=selection, panel=scroll 3 lines), footer notes shift+drag copy.
+F4 pin rule: progress-shaped line pinned only while within the last 3 buffer
+lines; 100% bar normalization only redraws what the child printed.
