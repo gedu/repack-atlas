@@ -33,11 +33,9 @@
 //   - federation facts (federation name, port, role) come from the app's
 //     `.repack-atlas/introspection.json` when the opt-in plugin has written
 //     it; otherwise the app dir name is the federation name;
-//   - a `command` is derived per app only when it is safe: the app has a
-//     package.json with a `name` and a `scripts.start`, and the workspace
-//     root identifies the package manager (`pnpm-lock.yaml` or
-//     `pnpm-workspace.yaml` -> pnpm, `yarn.lock` -> yarn, `package-lock.json`
-//     -> npm); otherwise the command is omitted and the reason is reported;
+//   - no `command` is emitted: `repack-atlas dev` builds each app's
+//     `react-native start` argv itself from `root` (a `command` in the config
+//     stays a hand-written override);
 //   - an introspected port outside the config rule (integer 1..65535) is
 //     dropped and reported;
 //   - the host is the discovered app whose facts say `role: "host"`, else
@@ -65,9 +63,7 @@ export interface InitAppPlan {
   role: 'host' | 'remote';
   manifest: string;
   port?: number;
-  /** Derived start command; absent when it could not be derived safely. */
-  command?: string;
-  /** Why a command or port was omitted; empty when nothing was dropped. */
+  /** Why a port was omitted; empty when nothing was dropped. */
   notes: string[];
   facts: 'introspection' | 'directory-name';
 }
@@ -97,73 +93,6 @@ const STAR_STAR_PRUNED = new Set(['ios', 'android', 'build', 'dist', 'Pods']);
 // ProjectFs cannot tell symlinks apart, so `**` is depth-capped instead of
 // following links into cycles.
 const MAX_GLOB_DEPTH = 8;
-
-type PackageManager = 'pnpm' | 'yarn' | 'npm';
-
-async function detectPackageManager(
-  workspaceDir: string,
-  fs: ProjectFs
-): Promise<PackageManager | undefined> {
-  const has = (name: string): Promise<boolean> =>
-    fs.exists(path.join(workspaceDir, name));
-  if ((await has('pnpm-lock.yaml')) || (await has('pnpm-workspace.yaml'))) {
-    return 'pnpm';
-  }
-  if (await has('yarn.lock')) return 'yarn';
-  if (await has('package-lock.json')) return 'npm';
-  return undefined;
-}
-
-function startCommand(manager: PackageManager, name: string): string {
-  if (manager === 'pnpm') return `pnpm --filter ${name} start`;
-  if (manager === 'yarn') return `yarn workspace ${name} start`;
-  return `npm --workspace ${name} run start`;
-}
-
-/** npm's package-name rules: lowercase, optional `@scope/`, max 214 chars. */
-const NPM_NAME = /^(?:@[a-z0-9~-][a-z0-9-._~]*\/)?[a-z0-9~-][a-z0-9-._~]*$/;
-
-function isValidPackageName(name: string): boolean {
-  return name.length <= 214 && NPM_NAME.test(name);
-}
-
-/** Derive the start command for one app, or explain why it cannot be. */
-async function deriveCommand(
-  appDir: string,
-  manager: PackageManager | undefined,
-  fs: ProjectFs
-): Promise<{ command?: string; note?: string }> {
-  const raw = await fs.readFile(path.join(appDir, 'package.json'));
-  if (raw === null) return { note: 'no command: no package.json' };
-  let pkg: unknown;
-  try {
-    pkg = JSON.parse(raw);
-  } catch {
-    return { note: 'no command: package.json is not valid JSON' };
-  }
-  const record =
-    typeof pkg === 'object' && pkg !== null
-      ? (pkg as { name?: unknown; scripts?: unknown })
-      : {};
-  if (typeof record.name !== 'string' || record.name === '') {
-    return { note: 'no command: package.json has no name' };
-  }
-  if (!isValidPackageName(record.name)) {
-    return { note: 'no command: package name is not a valid npm package name' };
-  }
-  const scripts = record.scripts;
-  const hasStart =
-    typeof scripts === 'object' &&
-    scripts !== null &&
-    typeof (scripts as { start?: unknown }).start === 'string';
-  if (!hasStart) return { note: 'no command: package.json has no scripts.start' };
-  if (manager === undefined) {
-    return {
-      note: 'no command: package manager not detected (no pnpm/yarn/npm lockfile or pnpm-workspace.yaml)',
-    };
-  }
-  return { command: startCommand(manager, record.name) };
-}
 
 function isPruned(name: string): boolean {
   return name.startsWith('.') || NEVER_EXPANDED.has(name);
@@ -429,7 +358,6 @@ export async function buildInitPlan(
     };
   }
 
-  const manager = await detectPackageManager(workspaceDir, fs);
   const apps: InitAppPlan[] = [];
   for (const app of discovered) {
     const appRoot = path.join(workspaceDir, app.dir);
@@ -446,15 +374,12 @@ export async function buildInitPlan(
         );
       }
     }
-    const derived = await deriveCommand(appRoot, manager, fs);
-    if (derived.note !== undefined) notes.push(derived.note);
     apps.push({
       dir: app.dir,
       name: facts?.name ?? app.dirName,
       role: facts?.role ?? 'remote',
       manifest: path.join('manifests', `${app.dirName}.json`),
       ...(port !== undefined ? { port } : {}),
-      ...(derived.command !== undefined ? { command: derived.command } : {}),
       notes,
       facts: facts ? 'introspection' : 'directory-name',
     });
@@ -471,7 +396,6 @@ export async function buildInitPlan(
       manifest: host.manifest,
       root: host.dir,
       ...(host.port !== undefined ? { port: host.port } : {}),
-      ...(host.command !== undefined ? { command: host.command } : {}),
     },
     remotes: {},
   };
@@ -481,7 +405,6 @@ export async function buildInitPlan(
       manifest: app.manifest,
       root: app.dir,
       ...(app.port !== undefined ? { port: app.port } : {}),
-      ...(app.command !== undefined ? { command: app.command } : {}),
     };
   }
 
@@ -518,7 +441,6 @@ export function initPlanToJson(plan: InitPlan, applied: boolean): string {
         manifest: app.manifest,
         facts: app.facts,
         ...(app.port !== undefined ? { port: app.port } : {}),
-        ...(app.command !== undefined ? { command: app.command } : {}),
         notes: app.notes,
       })),
       warnings: plan.warnings,
@@ -541,7 +463,6 @@ export function formatInitPlan(plan: InitPlan, applied: boolean): string {
     const notes = [app.role, `facts: ${app.facts}`];
     if (app.port !== undefined) notes.push(`port ${app.port}`);
     lines.push(`  ${app.dir}  ${app.name}  (${notes.join(', ')})`);
-    if (app.command !== undefined) lines.push(`    command: ${app.command}`);
     for (const note of app.notes) lines.push(`    note: ${note}`);
   }
   for (const warning of plan.warnings) lines.push('', `warning: ${warning}`);

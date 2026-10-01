@@ -25,6 +25,28 @@ function isAlive(pid: number): boolean {
   }
 }
 
+describe('start / env', () => {
+  it('an env key set to undefined is removed from the child; others merge over process.env', async () => {
+    process.env.ATLAS_TEST_STRAY = 'inherited';
+    try {
+      const handle = runner.start({
+        file: process.execPath,
+        args: [
+          '-e',
+          'console.log(JSON.stringify([process.env.ATLAS_TEST_STRAY ?? null, process.env.ATLAS_TEST_SET ?? null]))',
+        ],
+        env: { ATLAS_TEST_STRAY: undefined, ATLAS_TEST_SET: 'yes' },
+      });
+      const out: string[] = [];
+      handle.subscribeToStdout((line) => out.push(line));
+      await handle.waitForExit();
+      assert.deepEqual(JSON.parse(out[0]!), [null, 'yes']);
+    } finally {
+      delete process.env.ATLAS_TEST_STRAY;
+    }
+  });
+});
+
 describe('start / streams / exit', () => {
   it('captures stdout and stderr line-wise and reports the exit code', async () => {
     const handle = runner.start({

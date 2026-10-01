@@ -46,6 +46,15 @@ check will be closed.
    claim passed. A claimed check without observed output is a failed check.
 10. **English artifacts.** All code, comments, docs, UI copy and commits in
     English. Every skill the project needs lives in this repo.
+11. **No runtime dependencies, one exception.** Atlas ships without runtime
+    `dependencies`; the CLI is a thin adapter and argv parsing, Studio and the
+    runner use the Node standard library only. The single exception is
+    `@clack/prompts` (`^0.9.1`, the range upstream Re.Pack uses) for the
+    `dev` wizard: it gives wizard UX parity with Re.Pack's federation dev
+    runner. It stays confined behind the core-owned `PromptPort`
+    (`src/adapters/prompts-clack.ts`), is loaded by dynamic import, and falls
+    back to a `node:readline` adapter when the import fails. Do not add
+    another runtime dependency without updating this rule.
 
 Full rationale: `docs/PRD.md` (§6 architecture, §10 multi-agent setup, §14
 conventions).
@@ -125,6 +134,7 @@ Direction of dependency: adapters → ports in core. Core never imports outward.
 | `atlas-bridge-vendoring` | Trigger: touching src/repack-bridge/, src/repack-bridge/vendored/, or VENDORED.md; copying code out of Re.Pack; a bridge import fails with ERR_PACKAGE_PATH_NOT_EXPORTED. | `.agents/skills/atlas-bridge-vendoring/SKILL.md` |
 | `atlas-dev-setup` | Trigger: set up, install, build, run, test, or debug this repo locally; "it does not build"; fresh clone; CI failing on a check you cannot reproduce locally. | `.agents/skills/atlas-dev-setup/SKILL.md` |
 | `atlas-doctor-finding` | Trigger: adding or changing a doctor check or finding, a finding code such as REMOTE_CYCLE or SHARED_VERSION_DRIFT, the doctor --json output shape, or a finding that has no fixture yet. | `.agents/skills/atlas-doctor-finding/SKILL.md` |
+| `atlas-runner` | Trigger: touching repack-atlas dev, src/runner/, src/cli/dev.ts, src/cli/dev-wizard.ts, the prompt adapters, a dev flag, or a dev --json event. | `.agents/skills/atlas-runner/SKILL.md` |
 
 <!-- END auto-generated skills table -->
 
@@ -155,6 +165,8 @@ before writing code.
 | adding a new doctor finding code | `atlas-doctor-finding` |
 | changing an existing doctor rule or its severity | `atlas-doctor-finding` |
 | changing the doctor --json report shape | `atlas-doctor-finding` |
+| changing the dev runner, its flags or its --json events | `atlas-runner` |
+| changing the dev wizard or the prompt adapters | `atlas-runner` |
 
 <!-- END auto-generated auto-invoke table -->
 

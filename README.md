@@ -71,24 +71,84 @@ could be compared (all missing, or missing plus unreadable), doctor adds a
 checked"; like any warning it only affects the exit code under
 `--fail-on-warnings`.
 
-The dev runner starts every app in a workspace and serves the Studio page:
+### The dev runner
+
+`repack-atlas dev` starts every app in a workspace, serves the Studio page and,
+if you ask, launches the app on a device. On a terminal it opens a wizard:
+
+```bash
+repack-atlas dev
+```
+
+The wizard asks which remotes to run, the platform (iOS, Android or all),
+whether to launch the app (one platform only), a port for each app and, for
+remotes that declare `standalone: true`, whether to run one standalone. Ctrl-C
+at any question exits `0` with nothing started.
+
+The same session with flags, which is also what runs in CI and pipes (no wizard
+without a TTY):
+
+```bash
+repack-atlas dev --apps host,mini_auth --platform ios --no-interactive
+repack-atlas dev --platform ios --launch --device "iPhone 16"   # put the app on the device
+repack-atlas dev --dry-run --platform android                   # print the plan, spawn nothing
+```
+
+Real output on the fixture workspace (stub bundlers that serve checked-in
+manifests, which is why it takes seconds):
 
 ```
 $ node dist/cli.js dev --workspace fixtures/workspace --ci --studio-port 0
-Federation Studio (read-only): http://127.0.0.1:50955/
-dev: supervising 3 app(s) (host:50950 mini_auth:8082 mini_store:8083)
-dev: host → starting (port 50950)
+Federation Studio (read-only): http://127.0.0.1:62053/
+dev: supervising 3 app(s) (host:8081 mini_auth:8082 mini_store:8083)
+dev: host → starting (port 8081)
 [host] ready
+dev: mini_auth → starting (port 8082)
 [mini_auth] ready
+dev: mini_store → starting (port 8083)
 [mini_store] ready
-dev: host → ready (port 50950)
+dev: host → ready (port 8081)
 dev: mini_auth → ready (port 8082)
 dev: mini_store → ready (port 8083)
 ```
 
-Open the printed URL. Drop `--ci` on a real terminal for key handling (press
-`v` to open the Studio, `q` to quit). The fixture apps are stub bundlers that
-serve checked-in manifests, which is why this takes seconds.
+Open the printed URL. Without `--ci` a terminal also gets key handling (press
+`v` to open the Studio, `q` to quit).
+
+| Flag | Effect |
+|---|---|
+| `--apps <list>` | Config keys to run (`host`, remote names). Skips the wizard. |
+| `--platform ios\|android` | Platform for the session. |
+| `--port <n>` / `--auto-ports` | Host port (default 8081); move busy ports to free ones instead of failing. |
+| `--standalone <remote>` | Run a remote declared `standalone: true` on its own. |
+| `--launch` / `--no-launch` / `--device <id>` | Launch the app once the target is ready (needs `--platform`). |
+| `--no-interactive` / `--ci` | Never prompt (`--ci` also disables key handling). |
+| `--dry-run` / `--json` | Print the plan and exit / one JSON event per line. |
+| `--no-studio` / `--studio-port <n>` | Skip the Studio or pick its port. |
+
+Exit codes: `0` clean (also a wizard cancel), `1` a port conflict or an app
+that errored, `2` could not answer (bad flags, unknown app, missing
+`react-native`). The host defaults to 8081; if it is busy the run exits `1`
+unless you pass `--auto-ports`. `repack-atlas dev --help` has every detail and
+`docs/PRD.md` §7.1.1 the full contract.
+
+What each app runs is decided per app in `repack-federation.json`:
+
+- `root`: the app directory. By default Atlas runs `node <the app's
+  react-native CLI> start --bundler <rspack|webpack> --port <n>` from there, so
+  `react-native` must be installed in each app root. One app without it fails
+  the whole run (exit `2`).
+- `config`: the bundler config file, relative to the config directory. Without
+  it the bundler is detected from `rspack.config.*` / `webpack.config.*`.
+- `port`: the declared port. A remote without one gets a free port.
+- `standalone`: `true` lets `--standalone <remote>` run it alone.
+- `command`: an explicit override, run verbatim through a shell from the config
+  directory. It gets the platform and standalone choice only as
+  `ATLAS_APP_PLATFORM` and `ATLAS_APP_STANDALONE`. The fixtures use it for
+  their stub bundlers.
+
+`init` no longer writes `command`: it writes `root` and the default argv does
+the rest.
 
 ### Your own workspace
 
@@ -101,21 +161,21 @@ Federation compatibility is validated by Atlas, not upstream; see PRD §8.2.
 Then:
 
 ```bash
-npx repack-atlas init --workspace /path/to/workspace   # discovers apps, derives commands
+npx repack-atlas init --workspace /path/to/workspace   # discovers apps, writes root and port
 npx repack-atlas doctor --workspace /path/to/workspace
 ```
 
 Two optional `repack-federation.json` fields are easy to misread:
 
 - `root` (host and remotes): only the dev runner uses it. It is resolved
-  against the config directory and handed to the app process as
-  `ATLAS_APP_ROOT`; the process itself runs from the config directory. Doctor,
-  graph and Studio resolve `manifest` relative to the config directory and
-  ignore `root`.
+  against the config directory, handed to the app process as `ATLAS_APP_ROOT`,
+  and is where the default `react-native start` runs. Doctor, graph and Studio
+  resolve `manifest` relative to the config directory and ignore `root`.
 - `remotes.<name>.standalone`: a flag you declare ("this remote can run
-  without the host"). Atlas only checks that it is a boolean and never acts on
-  it. The Studio shows a read-only `standalone` badge on that remote when it is
-  `true`.
+  without the host"). Doctor and the Studio only check it is a boolean (the
+  Studio shows a read-only `standalone` badge when `true`); the dev runner
+  uses it to allow `--standalone <remote>` and the wizard's standalone
+  question.
 
 ### Installing Atlas in a project
 

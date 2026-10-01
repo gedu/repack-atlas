@@ -1,26 +1,34 @@
 // The `repack-atlas dev` supervisor (T9, docs/PRD.md §7.1): plans which apps
-// to run, spawns each app's start command through the `ProcessRunner` port,
+// to run, spawns each app (its command or built argv) through the `ProcessRunner` port,
 // and tracks one live status per app. This is a REIMPLEMENTATION of the
 // concept in upstream #1467 (`federation-dev`) at demo scope — not a port:
-// no wizard, no platforms, no launch, no adb. The upstream README
+// the wizard lives in `src/cli/dev-wizard.ts`, there is no adb. The upstream README
 // (`website/src/latest/api/cli/federation-dev.mdx` @ feat/federation-dev-runner)
 // was consulted for concepts only (prefixed logs, port probes before spawn,
 // ordered SIGINT→grace→SIGTERM shutdown, one JSON event per transition).
 //
-// Command resolution semantics (locked here; mirrored in DEV_HELP and
-// fixtures/README.md):
-//   - An app runs only when its `repack-atlas.json` entry declares `command`
-//     (schema: `src/core/federation-config.ts`). No command → the app is
-//     skipped with a console warning, never silently guessed.
-//   - The command runs through a platform shell (`sh -c` / `cmd /c`) with the
-//     working directory set to the directory holding `repack-federation.json`
-//     (the workspace root), so `node tools/stub-bundler.mjs` style relative
-//     paths read naturally.
-//   - The child receives `ATLAS_APP_NAME` (graph node name), `ATLAS_APP_PORT`
+// Launch semantics (locked here; mirrored in DEV_HELP and fixtures/README.md):
+//   - An app declaring `command` runs it verbatim through a platform shell
+//     (`sh -c` / `cmd /c`) with the directory holding `repack-federation.json`
+//     as cwd, so `node tools/stub-bundler.mjs` style relative paths read
+//     naturally. A command that wants the runner's port must read
+//     `ATLAS_APP_PORT` — the runner never rewrites a user's command line.
+//   - An app with only a `root` runs the argv Atlas builds (`src/runner/
+//     start-argv.ts`, upstream #1467 parity): `node <the app's own
+//     react-native CLI> start --bundler <detected> [--config <path>] --port N
+//     --no-interactive`, spawned WITHOUT a shell and with the app root as cwd.
+//   - An app with neither is skipped with a console warning, never guessed.
+//   - Both kinds receive `ATLAS_APP_NAME` (graph node name), `ATLAS_APP_PORT`
 //     (the runner-resolved port), `ATLAS_APP_ROOT` (resolved `root`, may be
-//     empty) and, for file manifests, `ATLAS_APP_MANIFEST`. A command that
-//     wants the runner's port must read `ATLAS_APP_PORT` — the runner never
-//     rewrites the user's command line.
+//     empty) and, for file manifests, `ATLAS_APP_MANIFEST`. With `--platform`
+//     they also get `ATLAS_APP_PLATFORM`, and the `--standalone` remote gets
+//     `ATLAS_APP_STANDALONE=1`: a `command` is never rewritten, so env is
+//     its only channel; built argvs carry the flags themselves. Neither var
+//     is inherited: when the runner does not set one, a stray value from the
+//     user's shell is removed from the child's environment.
+//   - `--launch` adds ONE supervised one-shot child (`spawnOneShot`): no
+//     readiness probe, logs as `[launch]`, killed on shutdown, and its exit
+//     never touches `hasErrors()`. `onFirstReady` is the trigger hook.
 //
 // Readiness is ONE documented signal: the app's port answers on 127.0.0.1
 // (two-leg `isPortBusy` probe). `bundling` is deliberately never claimed —
@@ -30,19 +38,38 @@
 
 import path from 'node:path';
 import {
-  isUrlSource,
   type AppRuntimeStatus,
   type FederationConfig,
   type ManifestSource,
   type ProcessHandle,
   type ProcessRunner,
+  type ProjectFs,
+  type ReactNativeCliResolver,
 } from '../core/index.js';
 import type { AtlasWorkspaceConfigReader } from '../adapters/index.js';
+import {
+  buildDevPlan,
+  HOST_APP_KEY,
+  isAppSelected,
+  resolveRef,
+  type DevPlanEntry,
+  type DevPlatform,
+  type DevSkippedApp,
+} from './plan.js';
+import {
+  allocatePorts,
+  applyAssignments,
+  describeReassignments,
+  PORT_CONFLICT_HINT,
+} from './ports.js';
+import { buildLaunchPlan, type LaunchPlan } from './launch-plan.js';
+import { startArgs, type DevLaunch } from './start-argv.js';
+import { resolveToolchains } from './toolchain.js';
 
-/** `--apps` / config key of the host entry (not its federation name). */
-export const HOST_APP_KEY = 'host';
 /** Fallback node name when the host manifest cannot be read. */
 const HOST_FALLBACK_NAME = 'host';
+
+export { HOST_APP_KEY };
 
 export interface DevAppPlan {
   /** Config key: `host` or the remote's name in `remotes`. */
@@ -50,30 +77,57 @@ export interface DevAppPlan {
   /** Graph node name (host: its manifest `name`; remote: the config key). */
   name: string;
   role: 'host' | 'remote';
-  command: string;
+  launch: DevLaunch;
+  /** Directory the app is spawned in. */
+  cwd: string;
   /** Runner-resolved port the readiness probe watches. */
   port: number;
-  portSource: 'declared' | 'auto';
+  /** `reassigned`: a busy declared/default port moved by `--auto-ports`. */
+  portSource: 'declared' | 'auto' | 'reassigned';
+  /** The port a `reassigned` app gave up. */
+  reassignedFrom?: number;
+  /** Session `--platform` (env `ATLAS_APP_PLATFORM`). */
+  platform?: DevPlatform;
+  /** The `--standalone` remote (env `ATLAS_APP_STANDALONE=1`). */
+  standalone?: true;
   root?: string;
   /** Absolute path of a file manifest; absent for URLs/unreadable refs. */
   manifestPath?: string;
 }
 
-export interface DevSkippedApp {
-  key: string;
-  name: string;
-  reason: string;
+export type { DevSkippedApp };
+
+/** A plan with no ports allocated yet (what `--dry-run` reports). */
+export interface LoadedDevPlan {
+  configDir: string;
+  entries: DevPlanEntry[];
+  skipped: DevSkippedApp[];
+  /** Config keys of the remotes declaring `standalone: true` (the wizard
+   * offers standalone only for these). */
+  standaloneRemotes: string[];
+  /** Present only with `--launch`: the one-shot app launch. */
+  launch?: LaunchPlan;
 }
 
 export type DevPlanResult =
-  | { ok: false; reasons: string[] }
+  | {
+      ok: false;
+      reasons: string[];
+      /** Set when the plan failed only on busy ports (exit 1, not 2). */
+      portConflict?: true;
+    }
   | {
       ok: true;
       configDir: string;
+      /** Pure plan entries the live apps were allocated from. */
+      entries: DevPlanEntry[];
       apps: DevAppPlan[];
+      /** Apps with neither `command` nor `root` (left out, warned). */
       skipped: DevSkippedApp[];
-      /** Apps listed in the config without a `command` (skipped, warned). */
-      commandless: DevSkippedApp[];
+      /** One line per `--auto-ports` reassignment (empty when none). */
+      reassignments: string[];
+      /** Present only with `--launch`. */
+      launch?: LaunchPlan;
     };
 
 export interface DevPlanOptions {
@@ -81,25 +135,34 @@ export interface DevPlanOptions {
   configReader: AtlasWorkspaceConfigReader;
   manifestSource: ManifestSource;
   processRunner: ProcessRunner;
+  /** Lists the app roots' bundler config files (default-argv apps only). */
+  fs: ProjectFs;
+  /** Resolves each app's own `react-native` CLI (default-argv apps only). */
+  reactNativeCli: ReactNativeCliResolver;
   /** `--apps` list (config keys). Unknown keys fail the plan. */
   apps?: string[];
-}
-
-/** Resolve `root`/`manifest` refs the way the doctor does (URLs stay). */
-function resolveRef(configDir: string, ref: string): string {
-  return isUrlSource(ref) ? ref : path.resolve(configDir, ref);
+  /** `--port`: host port override (validated by the CLI). */
+  hostPort?: number;
+  /** `--platform` (validated by the CLI). */
+  platform?: DevPlatform;
+  /** Remote key started with `--standalone` (gated on `standalone: true`). */
+  standalone?: string;
+  /** Per-app port overrides by config key (wizard answers, validated). */
+  ports?: Readonly<Record<string, number>>;
+  /** `--auto-ports`: busy declared ports move to a free port. */
+  autoPorts?: boolean;
+  /** `--launch` (needs `platform`; the CLI gates that first) + `--device`. */
+  launch?: { device?: string };
 }
 
 /**
- * Load the workspace config and produce the exact spawn plan: subset
- * filtering, port resolution (declared ports probed BEFORE spawning; apps
- * without one get an OS-assigned free port), and the per-app env inputs.
- * Never throws; every failure comes back as `reasons` (the CLI maps them
- * to exit 2 — the session could not be planned).
+ * Read the config and host manifest, then build the pure plan. Reads files
+ * but never probes or binds ports, so it is safe for `--dry-run`. Never
+ * throws; failures come back as `reasons` (the CLI maps them to exit 2).
  */
-export async function resolveDevPlan(
-  options: DevPlanOptions
-): Promise<DevPlanResult> {
+export async function loadDevPlan(
+  options: Omit<DevPlanOptions, 'processRunner'>
+): Promise<({ ok: true } & LoadedDevPlan) | { ok: false; reasons: string[] }> {
   const loaded = await options.configReader.load(options.workspaceDir);
   if (loaded.status === 'missing') {
     return {
@@ -119,51 +182,11 @@ export async function resolveDevPlan(
   const { config, filePath } = loaded;
   const configDir = path.dirname(filePath);
 
-  // Roster keyed by config key; the host participates under the literal
-  // key `host`, remotes under their config names.
-  type Entry = {
-    key: string;
-    role: 'host' | 'remote';
-    manifest: string;
-    root?: string;
-    port?: number;
-    command?: string;
-  };
-  const entries: Entry[] = [
-    {
-      key: HOST_APP_KEY,
-      role: 'host',
-      ...config.host,
-    },
-    ...Object.entries(config.remotes).map(([key, remote]) => ({
-      key,
-      role: 'remote' as const,
-      ...remote,
-    })),
-  ];
-
-  const known = new Set(entries.map((entry) => entry.key));
-  if (options.apps) {
-    const unknown = options.apps.filter((name) => !known.has(name));
-    if (unknown.length > 0) {
-      return {
-        ok: false,
-        reasons: [
-          `--apps names unknown apps: ${unknown.join(', ')} (known: ${[...known].sort().join(', ')})`,
-        ],
-      };
-    }
-  }
-  const selected = options.apps
-    ? entries.filter((entry) => options.apps!.includes(entry.key))
-    : entries;
-
   // The host's graph node name is its manifest `name` (core/graph.ts
   // roster rule); statuses must be keyed by it for /api/graph to match.
   let hostName = HOST_FALLBACK_NAME;
-  const hostEntry = entries.find((entry) => entry.key === HOST_APP_KEY)!;
   const hostManifestResult = await options.manifestSource.load(
-    resolveRef(configDir, hostEntry.manifest)
+    resolveRef(configDir, config.host.manifest)
   );
   if (
     hostManifestResult.status === 'ok' &&
@@ -173,71 +196,130 @@ export async function resolveDevPlan(
     hostName = hostManifestResult.manifest.name;
   }
 
-  const apps: DevAppPlan[] = [];
-  const skipped: DevSkippedApp[] = [];
-  const commandless: DevSkippedApp[] = [];
+  // Only the selected apps that run the default argv need a toolchain;
+  // resolving an unselected app's CLI could fail a run that never uses it.
+  const targets = [
+    { key: HOST_APP_KEY, ...config.host },
+    ...Object.entries(config.remotes).map(([key, remote]) => ({ key, ...remote })),
+  ]
+    .filter(
+      (app) =>
+        app.command === undefined &&
+        app.root !== undefined &&
+        isAppSelected(app.key, options.apps, options.standalone)
+    )
+    .map((app) => ({
+      root: path.resolve(configDir, app.root!),
+      ...(app.config !== undefined ? { config: app.config } : {}),
+    }));
+  // Apps sharing a root and config resolve once (`resolveToolchains` dedupes).
+  const toolchains = await resolveToolchains(targets, {
+    fs: options.fs,
+    reactNativeCli: options.reactNativeCli,
+  });
 
-  for (const entry of selected) {
-    const name =
-      entry.role === 'host' ? hostName : entry.key;
-    if (entry.command === undefined) {
-      const skip = {
-        key: entry.key,
-        name,
-        reason:
-          'no "command" in repack-federation.json — skipped (declare one to run it)',
-      };
-      skipped.push(skip);
-      commandless.push(skip);
-      continue;
+  const built = buildDevPlan({
+    config,
+    configDir,
+    hostName,
+    toolchains,
+    ...(options.apps !== undefined ? { apps: options.apps } : {}),
+    ...(options.hostPort !== undefined ? { hostPort: options.hostPort } : {}),
+    ...(options.platform !== undefined ? { platform: options.platform } : {}),
+    ...(options.standalone !== undefined
+      ? { standalone: options.standalone }
+      : {}),
+    ...(options.ports !== undefined ? { ports: options.ports } : {}),
+  });
+  if (!built.ok) return built;
+
+  let launch: LaunchPlan | undefined;
+  if (options.launch !== undefined) {
+    if (options.platform === undefined) {
+      return { ok: false, reasons: ['--launch needs a single --platform'] };
     }
-
-    let port: number;
-    let portSource: DevAppPlan['portSource'];
-    if (entry.port !== undefined) {
-      if (
-        !Number.isInteger(entry.port) ||
-        entry.port < 1 ||
-        entry.port > 65_535
-      ) {
-        return {
-          ok: false,
-          reasons: [`${entry.key}.port must be a TCP port number (1-65535)`],
-        };
-      }
-      if (await options.processRunner.isPortBusy(entry.port)) {
-        return {
-          ok: false,
-          reasons: [
-            `port ${entry.port} declared by ${entry.key} is already busy`,
-          ],
-        };
-      }
-      port = entry.port;
-      portSource = 'declared';
-    } else {
-      port = await options.processRunner.findFreePort();
-      portSource = 'auto';
-    }
-
-    const manifestPath = isUrlSource(entry.manifest)
-      ? undefined
-      : resolveRef(configDir, entry.manifest);
-    apps.push({
-      key: entry.key,
-      name,
-      role: entry.role,
-      command: entry.command,
-      port,
-      portSource,
-      ...(entry.root !== undefined
-        ? { root: path.resolve(configDir, entry.root) }
+    const launchPlan = buildLaunchPlan({
+      entries: built.entries,
+      platform: options.platform,
+      ...(options.launch.device !== undefined
+        ? { device: options.launch.device }
         : {}),
-      ...(manifestPath !== undefined ? { manifestPath } : {}),
+      resolveCli: (root) => options.reactNativeCli.resolve(root),
     });
+    if (!launchPlan.ok) return { ok: false, reasons: [launchPlan.reason] };
+    launch = launchPlan.launch;
+  }
+  return {
+    ok: true,
+    configDir,
+    entries: built.entries,
+    skipped: built.skipped,
+    standaloneRemotes: Object.entries(config.remotes)
+      .filter(([, remote]) => remote.standalone === true)
+      .map(([key]) => key),
+    ...(launch !== undefined ? { launch } : {}),
+  };
+}
+
+/**
+ * Load the plan and allocate ports for the live path. Declared ports are
+ * probed BEFORE spawning through the same `allocatePorts` the `--dry-run`
+ * uses: every busy one is collected (or reassigned with `autoPorts`); apps
+ * without a port get an OS-assigned free one. Never throws.
+ */
+export async function resolveDevPlan(
+  options: DevPlanOptions
+): Promise<DevPlanResult> {
+  const loaded = await loadDevPlan(options);
+  if (!loaded.ok) return loaded;
+
+  const allocation = await allocatePorts(loaded.entries, options.processRunner, {
+    autoPorts: options.autoPorts ?? false,
+    resolveAuto: true,
+  });
+  if (!allocation.ok) {
+    return {
+      ok: false,
+      reasons: [...allocation.conflicts, PORT_CONFLICT_HINT],
+      portConflict: true,
+    };
   }
 
-  return { ok: true, configDir, apps, skipped, commandless };
+  // Entries carry the allocated ports (the plan event and argv read them).
+  const entries = applyAssignments(loaded.entries, allocation.assignments);
+  const assignmentByKey = new Map(allocation.assignments.map((a) => [a.key, a]));
+  const apps: DevAppPlan[] = entries.map((entry) => {
+    const assignment = assignmentByKey.get(entry.key)!;
+    return {
+      key: entry.key,
+      name: entry.name,
+      role: entry.role,
+      launch: entry.launch,
+      cwd: entry.cwd,
+      // resolveAuto: true → every assignment carries a concrete port.
+      port: assignment.port!,
+      portSource: assignment.source,
+      ...(entry.reassignedFrom !== undefined
+        ? { reassignedFrom: entry.reassignedFrom }
+        : {}),
+      ...(entry.platform !== undefined ? { platform: entry.platform } : {}),
+      ...(entry.standalone === true ? { standalone: true as const } : {}),
+      ...(entry.root !== undefined ? { root: entry.root } : {}),
+      ...(entry.manifestPath !== undefined
+        ? { manifestPath: entry.manifestPath }
+        : {}),
+    };
+  });
+
+  return {
+    ok: true,
+    configDir: loaded.configDir,
+    entries,
+    apps,
+    skipped: loaded.skipped,
+    reassignments: describeReassignments(allocation.assignments),
+    ...(loaded.launch !== undefined ? { launch: loaded.launch } : {}),
+  };
 }
 
 /** Everything the supervisor emits, as data (the CLI renders/serializes). */
@@ -252,6 +334,23 @@ export interface SupervisorEvents {
     port: number,
     pid?: number
   ): void;
+  /**
+   * Lifecycle of a one-shot child (the `--launch` run). `exited` carries the
+   * raw result; a spawn failure arrives as `code: null, signal:
+   * 'spawn-error'`. Not called for the kill `shutdown()` itself causes.
+   */
+  onOneShot?(name: string, event: OneShotEvent): void;
+}
+
+export type OneShotEvent =
+  | { status: 'started'; pid: number | null }
+  | { status: 'exited'; code: number | null; signal: string | null };
+
+/** What `spawnOneShot` runs (the launch plan's spawn shape). */
+export interface OneShotSpec {
+  file: string;
+  args: string[];
+  cwd: string;
 }
 
 export interface DevSupervisorOptions extends SupervisorEvents {
@@ -290,6 +389,9 @@ export function createDevSupervisor(options: DevSupervisorOptions) {
     handle: null,
   }));
 
+  const oneShots = new Set<ProcessHandle>();
+  const firstReady = new Map<string, Array<() => void>>();
+
   let shuttingDown = false;
   let poller: ReturnType<typeof setInterval> | null = null;
   let shutdownPromise: Promise<void> | null = null;
@@ -303,29 +405,53 @@ export function createDevSupervisor(options: DevSupervisorOptions) {
     } else {
       options.onStatus(app.plan.name, status, app.plan.port);
     }
+    if (status === 'ready') {
+      // Taken out of the map before running, so each callback fires once.
+      const callbacks = firstReady.get(app.plan.key) ?? [];
+      firstReady.delete(app.plan.key);
+      for (const callback of callbacks) {
+        try {
+          callback();
+        } catch {
+          // A hook must never break the poll loop that drives readiness.
+        }
+      }
+    }
   }
 
-  function envFor(plan: DevAppPlan): Record<string, string> {
-    const env: Record<string, string> = {
+  function envFor(plan: DevAppPlan): Record<string, string | undefined> {
+    // `undefined` removes the key: a value the user's shell happens to export
+    // must not pass for the runner's answer to "no manifest/platform/standalone".
+    return {
       ATLAS_APP_NAME: plan.name,
       ATLAS_APP_PORT: String(plan.port),
       ATLAS_APP_ROOT: plan.root ?? '',
+      ATLAS_APP_MANIFEST: plan.manifestPath,
+      ATLAS_APP_PLATFORM: plan.platform,
+      ATLAS_APP_STANDALONE: plan.standalone === true ? '1' : undefined,
     };
-    if (plan.manifestPath !== undefined) {
-      env.ATLAS_APP_MANIFEST = plan.manifestPath;
-    }
-    return env;
   }
 
   async function startApp(app: ManagedApp): Promise<void> {
     if (shuttingDown) return;
-    const handle = options.processRunner.start({
-      file: app.plan.command,
-      args: [],
-      cwd: options.plan.configDir,
-      env: envFor(app.plan),
-      shell: true,
-    });
+    const { launch } = app.plan;
+    const handle = options.processRunner.start(
+      launch.kind === 'command'
+        ? {
+            file: launch.command,
+            args: [],
+            cwd: app.plan.cwd,
+            env: envFor(app.plan),
+            shell: true,
+          }
+        : {
+            file: launch.file,
+            args: startArgs(launch, app.plan.port),
+            cwd: app.plan.cwd,
+            env: envFor(app.plan),
+            shell: false,
+          }
+    );
     app.handle = handle;
     setStatus(app, 'starting');
 
@@ -373,6 +499,53 @@ export function createDevSupervisor(options: DevSupervisorOptions) {
       }
     },
 
+    /**
+     * Run `callback` once, the first time the app with config key `appKey`
+     * turns `ready`. Register before `start()`; a key that never becomes
+     * ready (or is not in the plan) never fires.
+     */
+    onFirstReady(appKey: string, callback: () => void): void {
+      const list = firstReady.get(appKey) ?? [];
+      list.push(callback);
+      firstReady.set(appKey, list);
+    },
+
+    /**
+     * Attach a supervised one-shot child (the app launch): no readiness
+     * probe, no status row, logs through `onLog` under `name`, killed with
+     * the apps on `shutdown()`. Never throws and never affects
+     * `hasErrors()`; its outcome is reported through `onOneShot` only.
+     */
+    spawnOneShot(name: string, spec: OneShotSpec): void {
+      if (shuttingDown) return;
+      let handle: ProcessHandle;
+      try {
+        handle = options.processRunner.start({
+          file: spec.file,
+          args: spec.args,
+          cwd: spec.cwd,
+          shell: false,
+        });
+      } catch {
+        options.onOneShot?.(name, {
+          status: 'exited',
+          code: null,
+          signal: 'spawn-error',
+        });
+        return;
+      }
+      oneShots.add(handle);
+      options.onOneShot?.(name, { status: 'started', pid: handle.pid });
+      handle.subscribeToStdout((line) => options.onLog(name, 'stdout', line));
+      handle.subscribeToStderr((line) => options.onLog(name, 'stderr', line));
+      void handle.waitForExit().then(({ code, signal }) => {
+        oneShots.delete(handle);
+        // Ordered shutdown killed it: the session's doing, not news.
+        if (shuttingDown) return;
+        options.onOneShot?.(name, { status: 'exited', code, signal });
+      });
+    },
+
     /** Live status map keyed by graph node name (for the Studio source). */
     statuses(): Record<string, AppRuntimeStatus> {
       const map: Record<string, AppRuntimeStatus> = {};
@@ -401,9 +574,12 @@ export function createDevSupervisor(options: DevSupervisorOptions) {
         poller = null;
       }
       shutdownPromise = (async () => {
-        const handles = managed
-          .map((app) => app.handle)
-          .filter((handle): handle is ProcessHandle => handle !== null);
+        const handles = [
+          ...managed
+            .map((app) => app.handle)
+            .filter((handle): handle is ProcessHandle => handle !== null),
+          ...oneShots,
+        ];
         await Promise.all(handles.map((handle) => handle.killTree(killGraceMs)));
         // `error` is a fact about the session that shutdown must not erase
         // (it also feeds hasErrors() → exit code 1).
@@ -424,6 +600,8 @@ export const DEV_ENV_VARS = [
   'ATLAS_APP_PORT',
   'ATLAS_APP_ROOT',
   'ATLAS_APP_MANIFEST',
+  'ATLAS_APP_PLATFORM',
+  'ATLAS_APP_STANDALONE',
 ] as const;
 
 /** Re-export so consumers can type plans without importing core twice. */

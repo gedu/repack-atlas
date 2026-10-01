@@ -109,8 +109,11 @@ export interface SpawnSpec {
   file: string;
   args?: string[];
   cwd?: string;
-  /** Extra environment merged over `process.env`. */
-  env?: Record<string, string>;
+  /**
+   * Extra environment merged over `process.env`. A key set to `undefined`
+   * is REMOVED from the child's environment (a stray inherited value).
+   */
+  env?: Record<string, string | undefined>;
   /**
    * Run through a shell (`sh -c` / platform equivalent). Needed for
    * `npx`/PATH-wrapped user commands; avoid otherwise.
@@ -182,4 +185,74 @@ export type IntrospectionResult =
  */
 export interface ConfigIntrospector {
   read(appRoot: string): Promise<IntrospectionResult>;
+}
+
+// --- ReactNativeCliResolver ----------------------------------------------------
+//
+// `repack-atlas dev` runs each app with the `react-native` CLI installed in
+// that app's OWN root (no PATH lookup, no cross-app fallback). Resolution goes
+// through the user project's module graph, so it sits behind a port
+// (AGENTS.md rules 3 and 4). Typed result, never throws.
+
+export type ReactNativeCliResult =
+  | {
+      status: 'ok';
+      /** Absolute path of the CLI script (`bin.react-native`). */
+      cli: string;
+    }
+  | {
+      status: 'failed';
+      /** Human-readable cause, naming the app root. */
+      message: string;
+    };
+
+export interface ReactNativeCliResolver {
+  /** Resolve `react-native`'s CLI script as the app at `appRoot` would. */
+  resolve(appRoot: string): ReactNativeCliResult;
+}
+
+// --- PromptPort --------------------------------------------------------------------
+//
+// The interactive `dev` wizard asks questions through this port so the flow
+// never knows whether a prompt library or plain readline answers them. Library
+// agnostic on purpose: a cancelled prompt (Ctrl-C, closed stdin) is a typed
+// result, never a library sentinel or a thrown error.
+
+export interface PromptOption {
+  value: string;
+  label: string;
+}
+
+export type PromptResult<T> =
+  | { status: 'ok'; value: T }
+  | { status: 'cancelled' };
+
+export interface PromptPort {
+  /** Zero or more of `options`; `initialValues` are pre-selected. */
+  multiselect(question: {
+    message: string;
+    options: PromptOption[];
+    initialValues?: string[];
+  }): Promise<PromptResult<string[]>>;
+  /** Exactly one of `options` (its `value`). */
+  select(question: {
+    message: string;
+    options: PromptOption[];
+    initialValue?: string;
+  }): Promise<PromptResult<string>>;
+  confirm(question: {
+    message: string;
+    initialValue?: boolean;
+  }): Promise<PromptResult<boolean>>;
+  /** Free text; `validate` returns an error message or `undefined` when fine. */
+  text(question: {
+    message: string;
+    validate?(value: string): string | undefined;
+  }): Promise<PromptResult<string>>;
+  /** An informational line between questions. */
+  note(message: string): void;
+  /** Announce that the user walked away (printed once by the caller). */
+  cancel(message: string): void;
+  /** Release the input stream. Idempotent. */
+  close(): void;
 }

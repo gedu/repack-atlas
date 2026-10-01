@@ -16,8 +16,9 @@ without a simulator:
   what, who consumes it, shared versions, native modules.
 - *Is it correct?* — a doctor that finds shared-version drift, singleton/eager
   mismatches, circular remotes, and native modules the host does not declare.
-- *Can I run it?* — an interactive dev runner that starts the whole workspace,
-  and a read-only **Federation Studio** page served by the runner.
+- *Can I run it?* A dev runner that starts the whole workspace (a wizard on a
+  terminal, plain flags everywhere else), can launch the app on a device, and
+  serves a read-only **Federation Studio** page.
 
 It started as three stacked PRs inside core Re.Pack —
 [#1463](https://github.com/callstack/repack/pull/1463) (manifest + inspect + doctor,
@@ -67,7 +68,8 @@ plus a `reactNative` extension block. Everything in Atlas consumes that manifest
 2. **G2 — Correctness**: `repack-atlas doctor` as a CI gate with stable exit codes and
    `--json` (report export; the answer to MF Devtools' "Report export").
 3. **G3 — DX**: `repack-atlas init` (single-source shared config, plan/apply), `repack-atlas dev`
-   interactive runner with equal non-interactive flags.
+   with an interactive wizard (remotes, platform, ports, launch) and equal
+   non-interactive flags (§7.1).
 4. **G4 — AI-ready repo**: one instructions source (`AGENTS.md`), agentskills.io
    skills in `.agents/skills/`, adapters for Claude Code / Codex / Apex / Cursor /
    VS Code, sync script enforced in CI (§10). This is a first-class product goal,
@@ -169,7 +171,7 @@ decision recorded in `docs/decisions/`.
   CLI (repack-  ─────►│ adapters/                                  │
   atlas …)            │                                            │
   Studio server ─────►│  repack-adapter · cli · studio-server ·     │
-  runner keys   ─────►│  dev-runner · (mcp-server, later)           │
+  runner keys   ─────►│  dev-runner · prompts · (mcp-server, later) │
                        │        │ ports (interfaces only)           │
                        │        ▼                                   │
                        │ core/  (bundler-agnostic domain)           │
@@ -262,7 +264,7 @@ subcommand tree). In the demo phase the same commands ship as an `repack-atlas` 
 | `repack-atlas init` | Generate/repair `repack-federation.json` + single-source shared config from installed versions. Plan first, apply explicitly. | `--dry-run --json` |
 | `repack-atlas inspect <path\|url>` | Pretty-print a federation manifest (file, build output, or URL). | `--json` |
 | `repack-atlas doctor` | Compare host + remote manifests: drift, singleton/eager mismatch, `REMOTE_CYCLE`, `NOTHING_COMPARED`, missing natives, heuristic-honesty downgrades. | `--json`, exit codes below |
-| `repack-atlas dev` | Interactive workspace runner (pick remotes, platforms, ports), equal non-interactive flags (`--ios --remotes wallet,trading --ci`); serves Studio. | `--json` events, incl. `{event:'studio', url}` |
+| `repack-atlas dev` | Workspace runner: a wizard on a terminal (remotes, platform, launch, ports, standalone), equal non-interactive flags (`--platform ios --apps wallet,trading --no-interactive`), `--dry-run`, optional app launch on the device; serves Studio. Details in §7.1.1. | `--json` events: `plan`, `app`, `launch`, `studio`, `exit` |
 
 Doctor exit codes (locked in the fork's design doc, kept here): `0` clean
 (warnings allowed) · `1` drift — any error finding (`MISSING_REMOTE_MANIFEST`
@@ -273,6 +275,105 @@ every remote manifest exists but is unreadable (missing manifests keep `1`, or `
 treats both as failure. Heuristic honesty is preserved: `dynamicImportDetected`
 or `confidence: heuristic` downgrades missing-native findings to advisories —
 Atlas reports what it cannot check instead of guessing.
+
+### 7.1.1 `repack-atlas dev`
+
+The runner supervises one dev server per app, probes their ports for readiness,
+serves Studio, and shuts everything down in order. It follows the interactive
+federation dev runner of Re.Pack PR #1467 closely (wizard wording and gate,
+default argv, port rules, launch), and the deviations are listed below.
+
+**Flags**
+
+| Flag | Effect |
+|---|---|
+| `--workspace [dir]` | Find `repack-federation.json` walking up from `dir` (default: cwd). |
+| `--apps <list>` | Comma-separated config keys to run (`host`, `remotes.<name>`). Skips the wizard. |
+| `--platform ios\|android` | Platform for the session; anything else exits 2. |
+| `--port <n>` | Host port. Precedence: `--port` > host `port` in the config > 8081. |
+| `--auto-ports` | Move a busy declared or default port to a free one (reported on stderr) instead of failing. |
+| `--standalone <remote>` | Run that remote standalone. It must declare `"standalone": true` (else exit 2) and joins the session even when `--apps` omits it. |
+| `--launch` / `--no-launch` | Put the app on the device once the target is ready. `--launch` needs `--platform` and cannot combine with `--no-launch` (both exit 2). |
+| `--device <id>` | Passed to `run-<platform>`; ignored with a warning without `--launch`. |
+| `--no-interactive` | Never prompt: host plus every remote, as the flags say. |
+| `--ci` | No key handling even on a TTY; implies `--no-interactive`. |
+| `--dry-run` | Print the plan and exit: nothing spawns, no Studio. Ports are probed. |
+| `--json` | One JSON event per line (below). |
+| `--no-studio`, `--studio-port <n>` | Skip Studio, or pick its port (`0` = ephemeral; default: first free from 8099). |
+
+**Wizard.** It runs only when there is no `--apps`, no `--no-interactive`, `--ci`
+or `--json`, and both stdin and stdout are TTYs. Steps: remotes (all
+preselected; skipped when there are none), platform (`ios`, `android` or all;
+"all" is not offered with `--launch`), launch (single platform only, never
+re-asked when a flag decided it), a port for every app in the session, and
+standalone for selected remotes that declare it. The answers become the same
+plan inputs as the flags, so there is one execution path. Cancelling (Ctrl-C,
+or EOF in the readline fallback) exits 0 with nothing spawned. `--dry-run` does
+not suppress the wizard. Prompts come from `@clack/prompts`, loaded by dynamic
+import behind a core-owned `PromptPort`; when it cannot load, a `node:readline`
+adapter takes over. It is the only runtime dependency (AGENTS.md rule 11).
+
+**What runs.** Each app with a `root` starts through an argv Atlas builds:
+`node <the app's react-native CLI> start --bundler <rspack|webpack> [--config
+<path>] --port <n> --no-interactive [--platform <p>] [--standalone]`, with the
+app root as cwd and no shell. The CLI is resolved from each app's own root, so
+`react-native` must be installed there. The bundler comes from the `config` file
+name, else from the `rspack.config.*` / `webpack.config.*` found in the app
+root (rspack when both or none exist). An explicit `command` (host or remote)
+replaces that argv: it runs verbatim through a shell with the config directory
+as cwd, and receives platform and standalone only as `ATLAS_APP_PLATFORM` and
+`ATLAS_APP_STANDALONE=1`. Both kinds also get `ATLAS_APP_NAME`, `ATLAS_APP_PORT`,
+`ATLAS_APP_ROOT` and, for absolute file manifests, `ATLAS_APP_MANIFEST`. `init`
+does not write `command`. `config` (config-directory-relative path) names the
+bundler config of an app.
+
+**Ports and failures.** The host defaults to 8081, so a busy 8081 exits 1 unless
+`--auto-ports` is set. Declared ports are probed before anything spawns, every
+conflict is reported together (duplicates across apps count), and nothing is
+half-started. Readiness is the app's port answering on `127.0.0.1`. A launch
+failure is reported (stderr line plus a `launch` event) and never fails the
+session.
+
+**Plan before the wizard.** The wizard needs the plan to show defaults, so a
+first-pass plan runs over every app. A toolchain failure in any app (for example
+no `react-native` in one app root) exits 2 before the first question; the same
+applies without the wizard, because one app missing the CLI fails the whole run.
+
+**Exit codes.** `0` clean (also a wizard cancel and a stopped session) · `1` a
+port conflict or an app that errored · `2` could not answer (bad or conflicting
+flags, unknown app or remote, missing `react-native` CLI, no config).
+
+**`--json` events.** One object per line, other stdout lines are `[name]`-prefixed
+child logs, so keep lines starting with `{`.
+
+| Event | When | Fields |
+|---|---|---|
+| `plan` | Once, before anything spawns | `apps[]` (`app`, `role`, `port`, `command`, `cwd`; `platform`, `standalone`, `reassignedFrom` when set), `launch` with `--launch` |
+| `studio` | Once, when Studio is up | `url` |
+| `app` | Per status transition | `app`, `status`, `port` |
+| `launch` | With `--launch` | `status` (`started` or `exited`), `code` |
+| `exit` | Last | `code` |
+
+With `--dry-run` only `plan` and `exit` are emitted, and `port` is `null` for an
+app that will take a free port.
+
+**Parity with Re.Pack #1467 and deviations.** Same: wizard wording, gate, default
+argv shape and bundler detection, `--auto-ports`, host port 8081, one-shot
+`run-<platform> --no-packager` launch. Different, on purpose:
+
+- `--ci` stays as an alias that implies `--no-interactive`.
+- A `command` override exists; upstream always builds the argv.
+- Duplicate declared ports are a conflict (exit 1); a busy-port conflict is exit
+  1 in dry-run and live runs alike.
+- A standalone remote with neither `command` nor `root`, a launch target without
+  `root`, and `--launch` with `--no-launch` exit 2.
+- A launch failure is a `dev:` stderr line and a `launch` event, not an
+  in-stream `[launch]` line.
+- The wizard asks "automatic free port?" for apps without a declared port, drops
+  `--platform` when "all" is picked, and skips the remotes question when there
+  are none.
+- Not built yet: `/status` HTTP readiness (a TCP probe is used), the `d`
+  debugger key, `adb reverse`, the status-block console.
 
 ### 7.2 Studio (served by the runner)
 
@@ -413,7 +514,7 @@ Copy the prowler pattern, simplified ([prowler/skills/setup.sh](https://github.c
 | `atlas-bridge-vendoring` ★ | Add/update/remove vendored code safely: VENDORED.md protocol, lint fence, peerDependency resolution. | "touching src/repack-bridge/ or vendored/" |
 | `atlas-doctor-finding` ★ | Add a new doctor finding end-to-end: code, fixture variant, `--json` shape, exit code, docs, test. | "adding or changing a doctor check/finding" |
 | `atlas-studio` | Change Studio safely: read-only rule, untrusted-render rule, visual tokens, page.ts structure, Playwright update. | "touching studio/, page HTML, or graph rendering" |
-| `atlas-runner` | Dev-runner changes: supervisor lifecycle, keymap, ports, SSE, `--json` events. | "touching the dev runner or its flags/keys" |
+| `atlas-runner` | Dev-runner changes: plan purity, ports, per-app argv, launch, wizard seams, tests with a stub RN CLI, `--json` events. | "touching the dev runner, wizard or its flags/keys" |
 | `atlas-fixtures` | Create/repair fixture workspaces and broken variants; keep the "runs in seconds" budget. | "fixtures/ changed or a finding lacks a fixture" |
 | `agent-skills-sync` ★ | After creating/modifying any skill, run the sync script and the checks (prowler's `skill-sync` equivalent). | "after creating or modifying a skill; skill missing from AGENTS.md table" |
 | `work-unit-commits` | Plan commits as reviewable work units (tests+docs with behaviour). | "splitting implementation into commits/PR slices" |
@@ -499,7 +600,7 @@ pattern); no `pull_request_target` with write tokens.
   English.
 - Conventional Commits; no AI attribution trailers (AI_POLICY).
 - Determinism everywhere user-visible: every command has non-interactive flags
-  mirroring interactive flows, human output by default, `--json` for machines,
+  mirroring interactive flows (the `dev` wizard's answers are the flags), human output by default, `--json` for machines,
   messages that name the package and the conflicting versions.
 - Honest heuristics: anything static-analysis-derived declares its confidence
   (`static` vs `heuristic`); the product never claims exhaustive guarantees it
