@@ -275,3 +275,41 @@ alt-screen); #6 multi-terminal ❌ (only Ghostty smoke so far); #7 pure logic �
 ### Remaining
 - G5 wizard-in-TUI: next cycle, after the user's multi-terminal smoke
   (iTerm2/Terminal.app/tmux/VS Code) and banner/notice visual check.
+
+## Fourth round (user, 2026-10-02) — banner redraw + G5
+- [x] B1 — Banner redraw: user supplied braille hot-air balloon art (REPACK
+      lettering in the body) as the LITERAL reference. First version kept the
+      ≤12-row budget compacted; user instead supplied a compacted 24-row
+      variant of their own art and asked for it verbatim. Landed @ `de1f186`:
+      banner.ts ART = the user's 24x38 asset byte-for-byte (top crown + the
+      five basket/rope rows green, balloon body pink 38;5;213), row-budget
+      test locked to exactly 26 rows (art + wordmark + tagline). Observed:
+      build/typecheck/lint exit 0; banner suite 8/8 (charset, centering,
+      no-ESC-in-plain, SGR-strip equality all still pass); `pnpm test`
+      677/677. Real-terminal visual = user smoke.
+- [x] G5 — wizard-in-TUI: Landed @ `03dd574` + `84156db`. Architecture:
+      dev-wizard.ts already spoke only to PromptPort, so the flow never
+      changed — new pure controller `wizard-model.ts` (state machine, purity
+      fence like model.ts) + `wizard.tsx` (ink view + createTuiPromptPort,
+      normal screen, NO alt-screen; one session for the whole wizard;
+      Ctrl-C/Esc sticky-cancel; close() leaves raw mode off + stdin paused
+      for the dashboard's takeover). dev.ts routes with ONE hoisted
+      `tuiCondition` (wizard port and dashboard can never disagree);
+      dynamic import only (rule 11b holds — seam fence extended to list
+      wizard.js); render-layer failure degrades to clack/readline. Observed:
+      build/typecheck/lint/agent:check/check:commits exit 0; `pnpm test`
+      677 -> 733 (+56: pure machine, WizardApp ink render, port hygiene on
+      fake streams, seam routing both directions). Caveat (honest): real
+      keystroke smoke on iTerm2/Ghostty/tmux is user-owned — ink-testing
+      covers the frame, not a pty.
+      Note: SDD-dispatched writers were refused (preflight gate); delegated
+      via general workers instead. First general worker died twice mid-run
+      without committing source; parent verified + committed the work unit
+      (03dd574). Second died after committing tests early (84156db); fresh
+      audit worker verified 733/733 and found no bugs.
+
+### Next step
+- User terminal smoke: `node dist/cli.js dev` in the showcase/fixtures —
+  balloon banner + ink wizard + dashboard, on Ghostty AND one of
+  iTerm2/tmux (the #6 multi-terminal gap from the rules audit is still
+  open — no G-item covers it yet).
