@@ -17,6 +17,7 @@
 // reaches) — exactly like tests/runner/dev-runner.test.ts drives sessions.
 
 import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
 import { readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { mkdtempSync } from 'node:fs';
 import net from 'node:net';
@@ -61,7 +62,7 @@ describe('dev TUI seam: rule 11 static-import fence', () => {
   const dynamicImportFrom = (spec: string): RegExp =>
     new RegExp(`await import\\('${escape(spec)}'\\)`);
 
-  for (const spec of ['ink', 'react', './dev-tui/app.js']) {
+  for (const spec of ['ink', 'react', './dev-tui/app.js', './dev-tui/wizard.js']) {
     it(`dev.ts has no static import of '${spec}'`, () => {
       assert.doesNotMatch(
         devSource,
@@ -261,5 +262,252 @@ describe('dev TUI gate: plain path on a machine session', () => {
     assert.ok(!stdout.includes('\u001b'), `ESC byte leaked into stdout:\n${stdout}`);
     assert.ok(!err.includes('\u001b'), `ESC byte leaked into stderr:\n${err}`);
     assert.doesNotMatch(err, /TUI unavailable/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// G5 "wizard-in-TUI": which PromptPort the wizard block gets.
+//
+// The two branches differ on ONE fact: `process.stdin.isTTY` (the dashboard's
+// condition term the wizard gate does not share). Everything else the wizard
+// needs (env.stdoutIsTTY/env.stdinIsTTY) is true in both, so:
+//   - process.stdin.isTTY true  + human env  → the ink port (dynamic import)
+//   - process.stdin.isTTY false + human env  → env.createPrompts, byte-identical
+// Machine flags (--json/--ci/--no-interactive) never reach either branch, which
+// the gate test above already locks; here they only prove the ink port is not
+// built behind their back.
+// ---------------------------------------------------------------------------
+
+/** Minimal fake streams for the ink wizard port (ink-testing-library shape). */
+class FakeWizardStdout extends EventEmitter {
+  columns = 100;
+  rows = 24;
+  isTTY = false;
+  readonly chunks: string[] = [];
+  readonly setEncoding = (): void => undefined;
+  write = (chunk: string): boolean => {
+    this.chunks.push(chunk);
+    return true;
+  };
+  get text(): string {
+    return this.chunks.join('');
+  }
+}
+
+class FakeWizardStdin extends EventEmitter {
+  isTTY = true;
+  rawMode = false;
+  paused = false;
+  private pending: string | null = null;
+  readonly setEncoding = (): void => undefined;
+  setRawMode = (enabled: boolean): void => {
+    this.rawMode = enabled;
+  };
+  resume = (): void => {
+    this.paused = false;
+  };
+  pause = (): void => {
+    this.paused = true;
+  };
+  ref = (): void => undefined;
+  unref = (): void => undefined;
+  send = (data: string): void => {
+    this.pending = data;
+    this.emit('readable');
+  };
+  read = (): string | null => {
+    const data = this.pending;
+    this.pending = null;
+    return data;
+  };
+}
+
+const tick = (ms = 25): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, ms));
+
+/** Poll a condition the wizard's session establishes (the plan load ahead of
+ * the first question spawns CLI probes, so a fixed sleep is a race). */
+async function until(
+  label: string,
+  condition: () => boolean,
+  timeoutMs = 10_000
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!condition()) {
+    if (Date.now() > deadline) throw new Error(`timed out waiting for ${label}`);
+    await tick();
+  }
+}
+
+/** `process.stdin.isTTY` is inherited from tty.ReadStream, so an override is an
+ * OWN property and the restore is a DELETE — a saved descriptor would be
+ * undefined and the stub would leak into the next test. */
+function stubStdinIsTTY(value: boolean): () => void {
+  Object.defineProperty(process.stdin, 'isTTY', {
+    value,
+    configurable: true,
+    writable: true,
+  });
+  return () => {
+    delete (process.stdin as { isTTY?: boolean }).isTTY;
+  };
+}
+
+describe('G5 wizard prompt routing', () => {
+  it('routes the wizard to the ink port when the TUI condition is live', async () => {
+    // The one fact that flips the branch: the dashboard's stdin term.
+    const restoreStdinTTY = stubStdinIsTTY(true);
+    const stdin = new FakeWizardStdin();
+    const stdout = new FakeWizardStdout();
+    try {
+      const prompts = fakePrompts([]);
+      let created = 0;
+      const env: DevEnv = {
+        stdoutIsTTY: true,
+        stdinIsTTY: true,
+        createPrompts: async () => {
+          created += 1;
+          return prompts;
+        },
+        promptStreams: {
+          stdin: stdin as unknown as NodeJS.ReadStream,
+          stdout: stdout as unknown as NodeJS.WriteStream,
+        },
+      };
+      let err = '';
+      const running = runDevCommand(
+        ['--workspace', FIXTURE_WORKSPACE, '--dry-run'],
+        { writeOut: () => undefined, writeErr: (text) => void (err += `${text}\n`) },
+        env
+      );
+      // The ink session takes raw mode for the first question, then Ctrl-C
+      // walks away (the wizard's clean exit-0 cancel).
+      await until('the ink wizard to own raw mode', () => stdin.rawMode);
+      assert.match(
+        stdout.text,
+        /Which remotes to run\?/,
+        'the question renders through the ink session'
+      );
+      stdin.send('\u0003'); // ETX = Ctrl-C in raw mode
+      const code = await running;
+
+      assert.equal(code, 0, err);
+      assert.equal(created, 0, 'the clack/readline port must NOT be created');
+      assert.equal(prompts.asked.length, 0);
+      assert.equal(stdin.rawMode, false, 'close() must hand raw mode back');
+      assert.equal(stdin.paused, true, 'stdin must end paused for the dashboard');
+      assert.match(stdout.text, /\[\?25h/, 'the cursor must be shown again');
+      assert.doesNotMatch(err, /wizard TUI prompts unavailable/);
+    } finally {
+      restoreStdinTTY();
+    }
+  });
+
+  it('keeps env.createPrompts when the wizard runs without a dashboard (no TTY stdin)', async () => {
+    // Same human env, `process.stdin.isTTY` false (the real case: piped stdin,
+    // TTY stdout). The wizard still asks — through the plain port, exactly as
+    // before G5.
+    // Belt over the restore above: this case's premise IS a non-TTY stdin.
+    delete (process.stdin as { isTTY?: boolean }).isTTY;
+    assert.equal(
+      Boolean(process.stdin.isTTY),
+      false,
+      'precondition: the test runner has no TTY stdin'
+    );
+    const hostPort = await freePort();
+    const prompts = fakePrompts([
+      ['mini_store'],
+      'android',
+      false,
+      true, // host port kept
+      true, // mini_store port kept
+    ]);
+    let created = 0;
+    const stdin = new FakeWizardStdin();
+    const stdout = new FakeWizardStdout();
+    const env: DevEnv = {
+      stdoutIsTTY: true,
+      stdinIsTTY: true,
+      createPrompts: async () => {
+        created += 1;
+        return prompts;
+      },
+      // Injected anyway: the TUI branch must not be taken, so these streams
+      // stay untouched.
+      promptStreams: {
+        stdin: stdin as unknown as NodeJS.ReadStream,
+        stdout: stdout as unknown as NodeJS.WriteStream,
+      },
+    };
+    let out = '';
+    const code = await runDevCommand(
+      ['--workspace', FIXTURE_WORKSPACE, '--dry-run', '--port', String(hostPort)],
+      {
+        writeOut: (text) => void (out += `${text}\n`),
+        writeErr: () => undefined,
+      },
+      env
+    );
+    assert.equal(code, 0);
+    assert.equal(created, 1, 'the plain port is the one the wizard used');
+    assert.equal(prompts.closed, 1);
+    assert.equal(stdin.rawMode, false, 'the ink session never mounted');
+    assert.equal(stdout.chunks.length, 0);
+    assert.match(out, /^mini_store\s+remote/m);
+  });
+
+  it('builds no ink port on machine paths (--json/--ci/--no-interactive)', async () => {
+    const hostPort = String(await freePort());
+    for (const flag of ['--json', '--ci', '--no-interactive']) {
+      const stdin = new FakeWizardStdin();
+      const stdout = new FakeWizardStdout();
+      const prompts = fakePrompts([]);
+      let created = 0;
+      const env: DevEnv = {
+        stdoutIsTTY: true,
+        stdinIsTTY: true,
+        createPrompts: async () => {
+          created += 1;
+          return prompts;
+        },
+        promptStreams: {
+          stdin: stdin as unknown as NodeJS.ReadStream,
+          stdout: stdout as unknown as NodeJS.WriteStream,
+        },
+      };
+      const code = await runDevCommand(
+        [
+          '--workspace',
+          FIXTURE_WORKSPACE,
+          '--dry-run',
+          '--port',
+          hostPort,
+          flag,
+        ],
+        { writeOut: () => undefined, writeErr: () => undefined },
+        env
+      );
+      assert.equal(code, 0, flag);
+      assert.equal(created, 0, `${flag}: no prompt port at all`);
+      assert.equal(stdin.rawMode, false, `${flag}: ink never touched stdin`);
+      assert.equal(stdout.chunks.length, 0, `${flag}: ink never wrote a frame`);
+    }
+  });
+
+  // Render-layer honesty (same rule as the dashboard mount): if the ink module
+  // cannot load, the wizard still asks the same questions through the plain
+  // port — it never dies with the renderer.
+  it('degrades to env.createPrompts when the wizard module fails to load', async () => {
+    const source = readFileSync(
+      path.join(repoRoot, 'src', 'cli', 'dev.ts'),
+      'utf8'
+    );
+    const fallback =
+      /catch\s*\([^)]*\)\s*\{[\s\S]{0,400}?using plain prompts[\s\S]{0,200}?return env\.createPrompts\(\);/;
+    assert.match(
+      source,
+      fallback,
+      'the ink-port branch must catch and fall back to env.createPrompts'
+    );
   });
 });
