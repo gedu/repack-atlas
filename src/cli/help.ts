@@ -119,10 +119,15 @@ pipes) it never prompts: the session is host + every remote, as the flags say.
 
 An app with a "root" starts through the argv Atlas builds, like upstream
 Re.Pack's federation dev runner: node <the app's own react-native CLI>
-start --bundler <rspack|webpack> [--config <path>] --port <n>
+start [--bundler <rspack|webpack>] [--config <path>] --port <n>
 --no-interactive, run without a shell and with the app root as cwd. The CLI
-is resolved from each app's own root (missing = exit 2 naming the app). The
-bundler comes from the entry's "config" file name (a path relative to the
+is resolved from each app's own root (missing = exit 2 naming the app). Only
+options the app's installed "start" command declares are passed (read from
+its react-native.config.js): published Re.Pack 5.x has no --bundler (its
+config picks the bundler) and no --standalone, while Re.Pack builds with the
+federation dev runner (callstack/repack PR #1467) have both. If the options
+cannot be read, --bundler is omitted and --standalone is refused (exit 2).
+The detected bundler, passed or not, comes from the entry's "config" file name (a path relative to the
 config directory, passed as an absolute --config), else from the
 rspack.config.* / webpack.config.* in the app root (rspack wins; webpack only
 when it alone exists; none = rspack). An explicit "command" (host.command or
@@ -141,7 +146,8 @@ ATLAS_APP_PORT). Host port: --port > host "port" in the config > 8081.
 Options
   --workspace [dir]    Discover repack-federation.json walking up from dir
                        (default: cwd)
-  --apps <list>        Comma-separated config keys to run (host, remotes.<name>)
+  --apps <list>        Comma-separated app names to run: host, or a key under
+                       "remotes" (e.g. host,wallet)
   --port <n>           Host port (1-65535); overrides the config host "port"
                        and the 8081 default. Remotes keep their declared
                        port, else a free one.
@@ -209,7 +215,8 @@ Exit codes
      and --dry-run)
   2  could not answer (bad argv incl. invalid --port / --platform /
      --studio-port, no/invalid config, unknown --apps name, unknown
-     --standalone remote or one without "standalone": true, an app whose
+     --standalone remote, one without "standalone": true or one whose
+     installed start has no --standalone option, an app whose
      react-native CLI cannot be resolved, --launch without --platform or
      with --no-launch, a launch target that is not in the session, has no
      "root" or no react-native CLI, no free Studio port, Studio could not

@@ -180,8 +180,17 @@ describe('dev wizard gate', () => {
       ['--workspace', WORKSPACE, '--port', host, '--platform', 'ios', '--launch', '--dry-run'],
       [['mini_auth'], 'ios', true, true]
     );
-    // The wizard answers are accepted as is: the run only stops later, at the
-    // launch target's react-native CLI, which the fixture app does not install.
+    // The platform question must not offer "all" under --launch (there is no
+    // `run-all`), so the answers stay a valid plan.
+    const platformQuestion = run.prompts.offered.find((question) =>
+      question.message.includes('platform')
+    );
+    assert.ok(platformQuestion, 'the platform question was asked');
+    assert.deepEqual(platformQuestion.values, ['ios', 'android']);
+    // The answers are accepted as is: the run only stops later (exit 2, could
+    // not answer), at the launch target's react-native CLI, which the fixture
+    // app does not install.
+    assert.equal(run.code, 2, run.err);
     assert.doesNotMatch(run.err, /--launch needs a single platform/);
     assert.match(run.err, /cannot resolve the "react-native" package/);
     assert.equal(run.prompts.remaining(), 0);

@@ -116,6 +116,26 @@ describe('readline prompts (piped stdin)', () => {
     prompts.close();
   });
 
+  it('a re-ask loop ends at EOF as a cancel instead of spinning', async () => {
+    // An empty multiselect with no preselection re-asks; the closed stdin
+    // must turn the next read into a cancel, not another empty answer.
+    const io = piped('\n');
+    const prompts = createReadlinePrompts({ input: io.stdin, output: io.stdout });
+    const options = [{ value: 'alpha', label: 'alpha' }];
+    assert.deepEqual(await prompts.multiselect({ message: 'Remotes?', options }), {
+      status: 'cancelled',
+    });
+    assert.equal(io.output().match(/Select at least one option/g)?.length, 1);
+    // Same for an invalid select answer followed by EOF.
+    const bad = piped('nope\n');
+    const second = createReadlinePrompts({ input: bad.stdin, output: bad.stdout });
+    assert.deepEqual(await second.select({ message: 'Pick?', options }), {
+      status: 'cancelled',
+    });
+    prompts.close();
+    second.close();
+  });
+
   it('prints notes and cancel announcements', () => {
     const io = piped('');
     const prompts = createReadlinePrompts({ input: io.stdin, output: io.stdout });

@@ -10,6 +10,8 @@ export type ScriptedAnswer = string | string[] | boolean | typeof CANCEL;
 export interface FakePrompts extends PromptPort {
   /** `kind: message` per question, in the order asked. */
   asked: string[];
+  /** Option values offered per `select`/`multiselect`, in the order asked. */
+  offered: Array<{ message: string; values: string[] }>;
   notes: string[];
   cancels: string[];
   closed: number;
@@ -22,13 +24,20 @@ export function fakePrompts(script: ScriptedAnswer[]): FakePrompts {
   const queue = [...script];
   const fake: FakePrompts = {
     asked: [],
+    offered: [],
     notes: [],
     cancels: [],
     closed: 0,
     validations: [],
     remaining: () => queue.length,
-    multiselect: (q) => answer(`multiselect: ${q.message}`),
-    select: (q) => answer(`select: ${q.message}`),
+    multiselect: (q) => {
+      fake.offered.push({ message: q.message, values: q.options.map((o) => o.value) });
+      return answer(`multiselect: ${q.message}`);
+    },
+    select: (q) => {
+      fake.offered.push({ message: q.message, values: q.options.map((o) => o.value) });
+      return answer(`select: ${q.message}`);
+    },
     confirm: (q) => answer(`confirm: ${q.message}`),
     text: async (q) => {
       const result = await answer<string>(`text: ${q.message}`);

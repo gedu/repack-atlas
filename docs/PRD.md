@@ -288,7 +288,7 @@ default argv, port rules, launch), and the deviations are listed below.
 | Flag | Effect |
 |---|---|
 | `--workspace [dir]` | Find `repack-federation.json` walking up from `dir` (default: cwd). |
-| `--apps <list>` | Comma-separated config keys to run (`host`, `remotes.<name>`). Skips the wizard. |
+| `--apps <list>` | Comma-separated app names to run: `host` or a key under `remotes` (for example `host,wallet`, not `remotes.wallet`). Skips the wizard. |
 | `--platform ios\|android` | Platform for the session; anything else exits 2. |
 | `--port <n>` | Host port. Precedence: `--port` > host `port` in the config > 8081. |
 | `--auto-ports` | Move a busy declared or default port to a free one (reported on stderr) instead of failing. |
@@ -314,12 +314,22 @@ import behind a core-owned `PromptPort`; when it cannot load, a `node:readline`
 adapter takes over. It is the only runtime dependency (AGENTS.md rule 11).
 
 **What runs.** Each app with a `root` starts through an argv Atlas builds:
-`node <the app's react-native CLI> start --bundler <rspack|webpack> [--config
+`node <the app's react-native CLI> start [--bundler <rspack|webpack>] [--config
 <path>] --port <n> --no-interactive [--platform <p>] [--standalone]`, with the
 app root as cwd and no shell. The CLI is resolved from each app's own root, so
 `react-native` must be installed there. The bundler comes from the `config` file
 name, else from the `rspack.config.*` / `webpack.config.*` found in the app
-root (rspack when both or none exist). An explicit `command` (host or remote)
+root (rspack when both or none exist). Options are **feature-detected per app**:
+Atlas loads the app's `react-native.config.{js,cjs,mjs}` in a child `node` with
+the app root as cwd (so `@callstack/repack` resolves from the user project),
+reads the options of its registered `start` command, and passes only the ones it
+declares. Published Re.Pack 5.x declares neither `--bundler` (the config's
+`commands: require('@callstack/repack/commands/rspack')` picks the bundler) nor
+`--standalone`; builds with callstack/repack PR #1467 declare both. When the set
+cannot be read (no config, no `start` command, load error) Atlas omits
+`--bundler` and refuses `--standalone` (exit 2 naming the app and why). The
+detected bundler stays visible as the additive `bundler` field of the `plan`
+event even when no flag carries it. An explicit `command` (host or remote)
 replaces that argv: it runs verbatim through a shell with the config directory
 as cwd, and receives platform and standalone only as `ATLAS_APP_PLATFORM` and
 `ATLAS_APP_STANDALONE=1`. Both kinds also get `ATLAS_APP_NAME`, `ATLAS_APP_PORT`,
@@ -348,7 +358,7 @@ child logs, so keep lines starting with `{`.
 
 | Event | When | Fields |
 |---|---|---|
-| `plan` | Once, before anything spawns | `apps[]` (`app`, `role`, `port`, `command`, `cwd`; `platform`, `standalone`, `reassignedFrom` when set), `launch` with `--launch` |
+| `plan` | Once, before anything spawns | `apps[]` (`app`, `role`, `port`, `command`, `cwd`; `platform`, `standalone`, `reassignedFrom`, `bundler` when set), `launch` with `--launch` |
 | `studio` | Once, when Studio is up | `url` |
 | `app` | Per status transition | `app`, `status`, `port` |
 | `launch` | With `--launch` | `status` (`started` or `exited`), `code` |

@@ -23,12 +23,27 @@ behavior lives in the plan, the supervisor only executes it.
 |---|---|---|
 | Which apps run, ports, argv, platform, standalone | `src/runner/plan.ts` (`buildDevPlan`) | Pure: no fs, no spawn, no clock. Same input, same plan. |
 | Port declared/default/busy handling | `src/runner/ports.ts` | Probe before spawning; report every conflict together (exit 1). |
-| `react-native start` argv, bundler detection | `src/runner/start-argv.ts` | Built per app from its own root. A config `command` is a verbatim override and gets platform/standalone only as `ATLAS_APP_*` env. |
+| `react-native start` argv, bundler detection | `src/runner/start-argv.ts` | Built per app from its own root. A config `command` is a verbatim override and gets platform/standalone only as `ATLAS_APP_*` env. Options are passed only when the app's installed `start` declares them (see below). |
+| Which `start` options exist | `ReactNativeCliResolver.startOptions` (core port) + `src/adapters/react-native-cli.ts`, carried by `toolchain.ts` | I/O stays in the adapter; `start-argv.ts` and `plan.ts` only see the declared set. |
 | Launch one-shot (`run-<platform> --no-packager`) | `src/runner/launch-plan.ts`, supervisor `onFirstReady` | Exactly once, on the target's first ready; a failure never fails the session. |
 | Spawn, readiness, shutdown | `src/runner/supervisor.ts` | Needs the whole plan first; no half-started sessions. |
 | Flags, gates, exit codes, events | `src/cli/dev.ts`, `src/cli/help.ts` (`DEV_HELP`) | Usage errors exit 2 before anything is read or spawned. |
 | Questions | `src/cli/dev-wizard.ts` | Input source only: answers become the same plan inputs as flags. No second gate. |
 | Prompt backends | `src/adapters/prompts-*.ts` behind `PromptPort` (core) | `@clack/prompts` is the only runtime dependency; dynamic import, readline fallback. |
+
+## Re.Pack 5.x vs PR #1467 builds
+
+Published Re.Pack 5.x `start` has no `--bundler` and no `--standalone` (the app's
+`react-native.config.js` picks the bundler); builds with callstack/repack PR
+#1467 have both. Never hardcode either flag: the adapter loads the app's
+`react-native.config.{js,cjs,mjs}` in a child `node` (cwd = app root, rule 4) and
+returns the declared long flags.
+
+- Declared set known: pass only declared options (`--port` always).
+- Set unknown (no config, no `start`, load error): omit `--bundler`, keep the
+  long-standing flags, and refuse `--standalone` with exit 2 naming the app.
+- `--standalone` on a start that lacks it: plan error, exit 2, nothing spawned.
+- The detected bundler is still reported (`bundler` on the `plan` event apps).
 
 ## Hard rules
 
@@ -41,8 +56,8 @@ behavior lives in the plan, the supervisor only executes it.
 ## Testing
 
 - Plan and port logic: unit tests on `buildDevPlan` and `ports.ts`, no processes.
-- Wizard: `tests/cli/fake-prompts.ts` scripts answers; assert the questions asked, not only the result.
-- Spawned runs: `tests/runner/dev-runner.test.ts` uses `fixtures/workspace/tools/stub-bundler.mjs` and a stub `react-native` CLI (`makeApp`) that records argv and cwd. Never require a simulator or a real RN install.
+- Wizard: `tests/cli/fake-prompts.ts` scripts answers; assert the questions asked (`asked`) and the options offered (`offered`), not only the result.
+- Spawned runs: `tests/runner/dev-runner.test.ts` uses `fixtures/workspace/tools/stub-bundler.mjs` and a stub `react-native` CLI (`makeApp`) that records argv and cwd. `makeApp` writes a `react-native.config.js` declaring the start options of the chosen shape (`repack: 'repack5' | 'pr1467'`, default `pr1467`) and the stub REJECTS undeclared options with `error: unknown option`, so a flag the installed Re.Pack lacks fails the test. Never require a simulator or a real RN install.
 - Use free ports (`freePort()`); the fixture remotes keep 8082/8083, so wait for them to be free between tests.
 
 ## Verify
