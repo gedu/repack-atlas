@@ -4,14 +4,17 @@
 // print it (human TTY paths only) and supplies the version; this module only
 // renders a string.
 //
-// The glyph is an atlas globe: a braille-dotted sphere (the same dotted
-// dithery-circle visual language as the user's reference flower art, drawn
-// here from scratch as a meridian-crossed globe — never a copy of that
-// artwork) with continent arcs, a great-circle route to a `*` destination,
-// and a bold wordmark plus dim tagline. Colors lean on Re.Pack's console
-// family: green pole caps and accents, a pink/magenta body (~#d16ce8, the
-// reference art's flower on a dark background like Re.Pack's #201F24 docs),
-// white bold for the title.
+// The glyph is the user-supplied reference artwork — a braille hot-air
+// balloon carrying the REPACK lettering, drawn dot-by-dot in braille and
+// box-drawing — reproduced verbatim (it is an Atlas-owned asset supplied by
+// the maintainer, not copied from any upstream project). Colors follow the
+// sanctioned palette: the balloon body and lettering in pink 38;5;213, the
+// burner/basket/rope rows at the bottom in Re.Pack green, a bold wordmark
+// plus dim tagline under the art.
+//
+// Row budget: the artwork is 24 rows; with the wordmark and tagline the
+// full banner is 26 rows. The test suite locks that budget (and the
+// charset + centering contracts); a redraw must keep it honest.
 //
 // Charset contract (locked by tests): printable ASCII + braille
 // (U+2800-U+28FF) only — Ghostty-safe. Box-drawing is allowed by the rule
@@ -44,21 +47,35 @@ function paint(codes: string, text: string): string {
   return `${ESC}${codes}${text}${ESC}${SGR.reset}`;
 }
 
-/** The globe, 10 rows x ≤26 cols. Braille dots build the sphere; the two
- * vertical braille strokes are the central meridian, the short arcs are
- * continents and the equator, the sparse strokes are the great-circle
- * route, `*` is the destination. */
+/** The reference artwork, 24 rows x 38 cols: a braille hot-air balloon
+ * carrying the REPACK lettering, verbatim from the user-supplied asset. The
+ * top crown and the basket/rope rows at the bottom are green; the balloon
+ * body with the lettering is pink. */
 const ART: readonly { text: string; color: keyof typeof SGR }[] = [
-  { text: '    ⣠⠤⠒⠉⠉⠒⠢⣄        ', color: 'green' },
-  { text: '  ⢀⡴⠋    ⡇ ⢸   ⠙⠦⣄    ', color: 'pink' },
-  { text: ' ⢀⡏      ⡇ ⢸     ⠈⢢   ', color: 'pink' },
-  { text: '⢠⠃   ⢀⡴⠒⢸⠤⠤⠤⠤⠒⠂  ⠈⡢  ', color: 'pink' },
-  { text: '⢸   ⢀⠎   ⢸    ⢀⡠⠔  ⢸  ', color: 'pink' },
-  { text: '⢸  ⡔⠁    ⢸  ⢀⠜⠁⠁    ⢸  ', color: 'pink' },
-  { text: '⠈⡢   ⠉⠢⣀⣠⠇ ⠈⠢  ⢀⣠⠞⠁ ⡇  ', color: 'pink' },
-  { text: '  ⠙⠦⣄    ⠉⠁⠂ ⠉⠉⠉    ⢀⠞   ', color: 'pink' },
-  { text: '    ⠈⠢⣄      ⠒⠂   ⢀⠔⠁   ', color: 'pink' },
-  { text: '       ⠉⠉⠒⠤⠤⠤⠉⠉⠁       *', color: 'green' },
+  { text: '⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣀⣀⣤⣤⣤⣤⣤⣤⣤⣀⣀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀', color: 'green' },
+  { text: '⠀⠀⠀⠀⠀⠀⠀⠀⢀⣠⡴⠾⠿⢭⣥⣄⣀⠀⠀⠀⠀⠀⣜⠋⠛⠳⢦⣄⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀', color: 'pink' },
+  { text: '⠀⠀⠀⠀⠀⠀⣠⡴⣟⠋⠀⠀⠀⠀⠀⠈⠉⠛⠷⣤⡀⢰⠂⠀⠀⠀⠀⠈⢝⣷⣤⠀⠀⠀⠀⠀⠀⠀', color: 'pink' },
+  { text: '⠀⠀⠀⠀⣠⡾⠋⢀⠉⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⠻⣶⣠⡤⣀⠀⠀⠀⠀⠀⢹⡷⣄⠀⠀⠀⠀⠀', color: 'pink' },
+  { text: '⠀⠀⠀⣴⢯⡇⠀⣀⣀⠦⠒⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⢷⡄⠉⠚⠴⡄⡀⠀⠘⡇⠙⢷⡀⠀⠀⠀', color: 'pink' },
+  { text: '⠀⢀⣾⠃⢘⢗⠞⠈⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠛⠀⠀⠀⠈⠪⡢⡀⠀⢀⡈⢿⣄⠀⠀', color: 'pink' },
+  { text: '⠀⣼⢃⡴⠋⠩⣆⠀⠀⠀⡿⠛⠛⠛⠛⠶⢶⣄⠀⣾⠛⢷⣄⠀⠀⣾⠛⢿⡆⠈⠪⣄⠉⠑⢻⡏⢷⡀', color: 'pink' },
+  { text: '⢶⣟⠋⠀⠀⠀⠐⠵⠀⠀⡇⠀⣿⠛⠛⢶⡀⢹⡆⣿⠀⣄⠙⣷⡀⣿⠀⢸⡇⠀⠀⠹⣆⠀⢺⣅⢸⡧', color: 'pink' },
+  { text: '⣾⢛⡀⠀⠀⠀⠀⠀⠀⠀⡇⠀⠿⠶⠶⠟⢁⣼⠇⣿⠀⣿⣧⡈⠻⣿⠀⢸⡇⠀⠀⠀⢋⡀⢠⡏⠀⣿', color: 'pink' },
+  { text: '⣿⡜⣥⠀⠀⠀⠀⠀⠀⠀⡇⠀⣶⠶⣦⠈⢿⡅⠀⣿⠀⣿⠈⢻⣄⠙⠂⢸⡇⠀⠀⠀⠘⢃⡿⢡⠀⣿', color: 'pink' },
+  { text: '⣿⠁⠰⣂⠀⠀⢀⠦⠀⠀⣧⣤⣿⠀⠘⣷⣬⣿⡆⣿⣤⣿⠀⠀⠙⢷⣤⣼⡇⠀⠀⠀⢀⣾⡱⢘⢰⡏', color: 'pink' },
+  { text: '⢹⡇⠀⠐⡧⣀⠾⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣀⣤⣤⣤⣤⣄⠀⢀⡴⠟⡍⠰⢘⡾⠂', color: 'pink' },
+  { text: '⠋⣷⠀⠀⠈⣯⣅⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⣼⠏⠀⠈⠀⠀⢹⣷⣿⠁⠀⠀⢀⣾⠁⠀', color: 'pink' },
+  { text: '⠀⠸⣧⠀⡸⠇⠈⢊⢆⢄⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣾⣁⡶⠛⠋⠛⢷⣄⢹⣿⠀⠀⣰⠟⢹⠈⠀', color: 'pink' },
+  { text: '⠀⠀⢙⣧⡻⠀⠀⠈⠀⠈⠸⡇⠶⠀⠀⠀⠀⠀⢀⣀⣀⣈⣿⡧⣤⠀⣤⠂⣿⠛⠑⢠⡿⡏⠰⠈⠀⠀', color: 'pink' },
+  { text: '⠀⠀⠀⠈⢷⣄⠀⠀⠀⢠⡳⠀⠀⠀⠀⠀⢀⣴⠟⠉⠉⣽⠛⣧⡶⠶⣤⣴⣿⠀⠘⣾⡅⠀⠀⠀⠀⠀', color: 'pink' },
+  { text: '⠀⠀⠀⠀⠀⣿⠳⣴⣎⠊⠆⠀⠀⠀⠀⣀⣼⢃⠀⠁⠀⠹⣦⢸⠈⠀⡌⠁⣽⢀⢀⡿⠁⠀⠀⠀⠀⠀', color: 'pink' },
+  { text: '⠀⠀⠀⠀⠀⡙⢦⣌⡙⠻⢦⣄⠀⣠⡿⠋⠘⠘⢠⡀⠀⠀⢙⢷⣤⣠⡶⡞⢡⢰⣾⠃⠃⠀⠀⠀⠀⠀', color: 'pink' },
+  { text: '⠀⠀⠀⠀⠀⠀⠀⢈⠻⣆⡇⠉⢳⠏⠇⠃⠀⢀⣼⡇⡄⠄⠀⠀⠀⣠⡧⡄⢛⣼⠃⠀⠀⠀⠀⠀⠀⠀', color: 'pink' },
+  { text: '⠀⠀⠀⠀⠀⠀⠀⠸⠀⠹⣆⡀⠰⠈⠂⣠⡴⢿⣉⠻⣧⣙⣁⣠⣴⠿⠤⣷⢛⠁⠀⠀⠀⠀⠀⠀⠀⠀', color: 'green' },
+  { text: '⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⡝⠷⢦⣴⠾⠫⣶⢺⣜⠷⠴⠛⠙⢩⡄⠻⣾⠇⠘⠀⠀⠀⠀⠀⠀⠀⠀⠀', color: 'green' },
+  { text: '⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠘⠀⠃⢃⡿⢤⠉⠥⣇⣣⣌⣼⢃⣼⠏⠃⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀', color: 'green' },
+  { text: '⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢼⣧⣈⠀⠀⠈⠋⢹⣟⣴⠏⡆⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀', color: 'green' },
+  { text: '⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢠⠉⠛⠛⠛⠛⠛⠉⠀⠂⠂⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀', color: 'green' },
 ];
 
 /** Rendered art width (every row padded to it, so centering is stable). */

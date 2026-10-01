@@ -56,9 +56,12 @@ describe('startup banner', () => {
     assert.ok(!noVersion.includes('undefined'));
   });
 
-  it('fits the row budget (art plus title plus tagline <= 12 lines)', () => {
+  it('fits the row budget (24-row balloon art plus title plus tagline)', () => {
     const lines = renderStartupBanner({ version: '1.0.0', columns: 80, color: false }).split('\n');
-    assert.ok(lines.length <= 12, `banner is ${lines.length} rows`);
+    // The user-supplied balloon artwork is 24 rows verbatim; the banner adds
+    // exactly the wordmark and the tagline. A redraw that changes this
+    // budget must be a deliberate, user-blessed decision, not drift.
+    assert.equal(lines.length, 26, `banner is ${lines.length} rows`);
   });
 
   it('uses only Ghostty-safe characters', () => {
