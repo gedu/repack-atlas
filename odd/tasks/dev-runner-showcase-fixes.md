@@ -95,6 +95,17 @@ delivery (#36).
   Still unverified: `--launch --platform ios` (simulator), `init` output on
   the showcase.
 
+- Native review of `6fb6484..a4f692a` (code + docs): high, granted, 4 lenses,
+  approved, acknowledged. gga (PR mode): PASSED with 5 notes.
+- Review + gga warnings fixed in `8184cca` (`fix(dev): quote Windows shim args
+  and fail on undeclared start flags`): cmd.exe quoting for `.cmd` shims
+  (unit-tested only; no Windows run), undeclared `--config`/`--platform` →
+  exit 2, shim used only when it runs the resolved react-native, inspect
+  timeout keeps a printed report, stale comments/help. Checks: 552/552;
+  parent spot check start-argv + RN CLI adapter + plan (68/68); showcase
+  dry-run argv unchanged. Native review for this commit: declined by the
+  owner (candidate-scoped); independent check via gga.
+
 ## Next step
 
-Native review of the fix commits, gga, PR to main, merge.
+PR to main, CI, merge.
