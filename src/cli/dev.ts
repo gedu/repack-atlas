@@ -190,6 +190,88 @@ function openInBrowser(
 const ALT_SCREEN_ENTER = '\u001b[?1049h\u001b[?25l';
 const ALT_SCREEN_LEAVE = '\u001b[?25h\u001b[?1049l';
 
+/**
+ * G3 (crash path only): the mouse-tracking OFF decseq, duplicated from
+ * `MOUSE_TRACKING_OFF` in `dev-tui/app.tsx`. dev.ts may NOT statically import
+ * the ink render layer (the rule-11 fence in dev-tui-seam.test.ts), and the
+ * crash handler must be synchronous, so a dynamic import is not an option
+ * either. Keep the bytes in sync with app.tsx. On a normal unmount app.tsx's
+ * own effect cleanup writes these; this is the belt-and-braces for the crash
+ * path, where React effects never run. Writing it twice is harmless.
+ */
+const MOUSE_TRACKING_OFF = '\u001b[?1000l\u001b[?1006l';
+
+/**
+ * G3: while the TUI holds the screen, a crash must hand the terminal back
+ * before the process dies. React effect cleanups do NOT run when an
+ * uncaughtException / unhandledRejection kills the loop, so the emergency
+ * path repeats everything the normal teardown does — unmount + cursor show +
+ * alt-screen leave (the `teardown` closure `mountDevTui` returns), mouse
+ * tracking off, stdin out of raw mode and paused — and THEN writes the error
+ * to stderr through the plain io (after the alt-screen leave, so it lands on
+ * the normal screen) and exits 1.
+ *
+ * `unhandledRejection` is fatal on the same path deliberately: Node's default
+ * is a warning, and a warning nobody reads while the loop is half-dead and
+ * the screen is still the alt screen is the worse outcome — an async crash
+ * inside the TUI loop must not leave the terminal in that state.
+ *
+ * Returns a disarm function; call it from the normal finally so a clean
+ * shutdown keeps its own exit code. Honest limits: SIGKILL or a fully
+ * stalled event loop still leaves the terminal on the alt screen — inherent
+ * to any alt-screen app (`reset`/`clear` recovers) — and `process.exit(1)`
+ * skips the ordered supervisor shutdown, so children may outlive the crash;
+ * a broken process is in no state to sequence their teardown anyway.
+ */
+function guardTerminalForCrash(
+  teardown: () => void,
+  io: DevIo
+): () => void {
+  const onFatal = (label: string, error: unknown): void => {
+    // Remove the sibling handler first: teardown itself must never trip it.
+    process.removeListener('uncaughtException', onUncaughtException);
+    process.removeListener('unhandledRejection', onUnhandledRejection);
+    // Every step is best-effort: a broken stdin or stdout must not stop the
+    // remaining restores (or the exit).
+    try {
+      process.stdout.write(MOUSE_TRACKING_OFF);
+    } catch {
+      /* stdout is gone; nothing left to write to */
+    }
+    try {
+      teardown();
+    } catch {
+      /* the teardown already writes the leave sequence in its own finally */
+    }
+    try {
+      if (process.stdin.isTTY === true && process.stdin.isRaw === true) {
+        process.stdin.setRawMode(false);
+      }
+      process.stdin.pause();
+    } catch {
+      /* stdin is gone too */
+    }
+    const reason =
+      error instanceof Error ? (error.stack ?? error.message) : String(error);
+    try {
+      io.writeErr(`dev: ${label}: ${reason}`);
+    } catch {
+      /* stderr unavailable: the exit code is all that's left */
+    }
+    process.exit(1);
+  };
+  const onUncaughtException = (error: Error): void =>
+    onFatal('uncaught exception', error);
+  const onUnhandledRejection = (reason: unknown): void =>
+    onFatal('unhandled rejection', reason);
+  process.once('uncaughtException', onUncaughtException);
+  process.once('unhandledRejection', onUnhandledRejection);
+  return () => {
+    process.removeListener('uncaughtException', onUncaughtException);
+    process.removeListener('unhandledRejection', onUnhandledRejection);
+  };
+}
+
 /** Swallows human output; used to keep `reportLaunch`'s emit path in the TUI. */
 const NULL_IO: DevIo = { writeOut() {}, writeErr() {} };
 
@@ -809,6 +891,10 @@ export async function runDevCommand(
   else if (tuiWillMount) process.stdin.pause();
 
   let teardownTui: (() => void) | null = null;
+  // G3: armed once ink actually rendered, disarmed in the finally below.
+  // While armed, a crash restores the terminal before exiting (see
+  // guardTerminalForCrash).
+  let disarmCrashGuard: (() => void) | null = null;
   try {
     if (!json) {
       const summary = plan.apps
@@ -848,6 +934,9 @@ export async function runDevCommand(
         (key, line) => supervisor.writeAppInput(key, line)
       );
       tuiActive = teardownTui !== null;
+      if (teardownTui !== null) {
+        disarmCrashGuard = guardTerminalForCrash(teardownTui, io);
+      }
       if (!tuiActive && interactive) {
         // TUI broke: degrade to today's plain interactive rendering —
         // warning already written by mountDevTui — so re-attach the plain
@@ -867,6 +956,9 @@ export async function runDevCommand(
     // still firing after teardown (shutdown statuses) write to the model —
     // harmless — and keep emitting --json; nothing prints to the screen.
     try {
+      // G3: disarm FIRST — this is the clean path; the session's own exit
+      // code must survive, and the guard's exit(1) would override it.
+      disarmCrashGuard?.();
       teardownTui?.();
     } finally {
       if (plainKeysAttached) {

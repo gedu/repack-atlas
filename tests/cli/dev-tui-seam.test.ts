@@ -86,6 +86,34 @@ describe('dev TUI seam: rule 11 static-import fence', () => {
     );
   });
 
+  // G3 (weak but honest): crash-restore under a pty is disproportionate to
+  // test here, so this only locks that BOTH fatal handler names are
+  // registered with process.once AND removed again (registration without
+  // removal would make clean exits unwinnable; removal without registration
+  // would mean the guard silently vanished). The behavioral proof is the
+  // manual terminal smoke: crash the TUI, the shell screen comes back.
+  it('dev.ts registers and removes both crash handlers (G3)', () => {
+    for (const name of ['uncaughtException', 'unhandledRejection']) {
+      assert.match(
+        devSource,
+        new RegExp(`process\\.once\\('${name}'`),
+        `the mounted-TUI crash guard must register 'process.once(${name})'`
+      );
+      assert.ok(
+        (devSource.match(new RegExp(`removeListener\\('${name}'`, 'g')) ?? [])
+          .length >= 2,
+        `'${name}' must be removed both in the fatal path and on disarm`
+      );
+    }
+    // The emergency teardown must include the mouse-tracking OFF decseq —
+    // React effect cleanups never run on a crash, so the seam writes it.
+    assert.match(
+      devSource,
+      /const MOUSE_TRACKING_OFF = '\\u001b\[\?1000l\\u001b\[\?1006l'/,
+      'the crash path must disable mouse reporting (same bytes as app.tsx)'
+    );
+  });
+
   it('model.ts stays pure: no ink/react import, static or dynamic', () => {
     const modelSource = readFileSync(
       path.join(repoRoot, 'src', 'cli', 'dev-tui', 'model.ts'),
