@@ -16,6 +16,7 @@ import {
   animateLiveDots,
   DevTuiApp,
   isMouseOnlyInput,
+  newLinesNotice,
   parseWheelEvents,
   splitLeadingSymbol,
   splitTimestamp,
@@ -297,7 +298,7 @@ describe('dev tui app', () => {
     app.cleanup();
   });
 
-  it('shows an unread-activity badge on non-selected rows and clears it on view (F10)', async () => {
+  it('shows an unread-activity badge on non-selected rows and clears it on view (F10, G2)', async () => {
     const model = createDevTuiModel({
       apps: [
         { key: 'host', name: 'host', role: 'host', port: 8081 },
@@ -308,20 +309,88 @@ describe('dev tui app', () => {
       <DevTuiApp model={model} onQuit={() => undefined} frame={0} />
     );
     await wait(150);
-    // Logs for the NON-selected row carry a badge (glyph + count).
+    // G2: the badge is the animated glyph ALONE — no count. Two lines
+    // arriving for the NON-selected row still render just `·`.
     model.log('alpha', 'stdout', 'building');
     model.log('alpha', 'stdout', 'still building');
     await wait(150);
-    assert.match(app.lastFrame() ?? '', /alpha 8082 ·2/);
+    // (The row is space-padded to the sidebar width and followed by the
+    // panel on the same terminal line, so match the badge in place.)
+    assert.match(app.lastFrame() ?? '', /alpha 8082 ·/);
+    assert.doesNotMatch(app.lastFrame() ?? '', /·2/, 'the count is gone (G2)');
     // Selecting the row clears the badge (markViewed via the selection effect).
     app.stdin.write('\u001B[B'); // down -> alpha
     await wait(150);
-    assert.doesNotMatch(app.lastFrame() ?? '', /·2/);
-    // Logs on the selected row never badge (`·1` would be the badge; the
-    // footer's `·` separators are not one).
+    assert.doesNotMatch(app.lastFrame() ?? '', /alpha 8082 ·/);
+    // Logs on the selected row never badge (the footer's `·` separators are
+    // not a badge, and the row being watched is never badged).
     model.log('alpha', 'stdout', 'watched');
     await wait(150);
-    assert.doesNotMatch(app.lastFrame() ?? '', /·1/);
+    const frame = app.lastFrame() ?? '';
+    assert.doesNotMatch(frame, /alpha 8082 ·/);
+    app.unmount();
+    app.cleanup();
+  });
+
+  it('shows `↓ N new lines below` while scrolled above the bottom (G1)', async () => {
+    const model = createDevTuiModel({
+      apps: [{ key: 'host', name: 'host', role: 'host', port: 8081 }],
+    });
+    for (let i = 1; i <= 40; i += 1) {
+      model.log('host', 'stdout', `line ${i}`);
+    }
+    const app = render(<DevTuiApp model={model} onQuit={() => undefined} />);
+    await wait(150);
+    // At the bottom there is no notice: nothing waits below the page.
+    assert.doesNotMatch(app.lastFrame() ?? '', /new lines? below/);
+    // PgUp pauses autoscroll; no new lines yet, so still no notice (N must
+    // be > 0, not merely "scrolled up").
+    app.stdin.write('\u001B[5~'); // PgUp
+    await wait(150);
+    assert.doesNotMatch(app.lastFrame() ?? '', /new lines? below/);
+    // Lines arriving during the pause are counted.
+    model.log('host', 'stdout', 'line 41');
+    model.log('host', 'stdout', 'line 42');
+    await wait(150);
+    assert.match(app.lastFrame() ?? '', /↓ 2 new lines? below/);
+    model.log('host', 'stdout', 'line 43');
+    await wait(150);
+    assert.match(app.lastFrame() ?? '', /↓ 3 new lines? below/);
+    // Return to bottom (End) and the notice is gone: the counter resets.
+    app.stdin.write('\u001B[F'); // End
+    await wait(150);
+    assert.doesNotMatch(app.lastFrame() ?? '', /new lines? below/);
+    app.unmount();
+    app.cleanup();
+  });
+
+  it('resets the new-lines notice when switching apps (G1)', async () => {
+    const model = createDevTuiModel({
+      apps: [
+        { key: 'host', name: 'host', role: 'host', port: 8081 },
+        { key: 'alpha', name: 'alpha', role: 'remote', port: 8082 },
+      ],
+    });
+    for (let i = 1; i <= 40; i += 1) {
+      model.log('host', 'stdout', `line ${i}`);
+    }
+    const app = render(<DevTuiApp model={model} onQuit={() => undefined} />);
+    await wait(150);
+    app.stdin.write('\u001B[5~'); // PgUp on host
+    await wait(150);
+    model.log('host', 'stdout', 'line 41');
+    await wait(150);
+    assert.match(app.lastFrame() ?? '', /↓ 1 new line below/);
+    // Switching apps resets the new app's offset to bottom (per-app
+    // autoscroll), so the host's paused count must not follow the selection.
+    app.stdin.write('\u001B[B'); // down -> alpha
+    await wait(150);
+    assert.doesNotMatch(app.lastFrame() ?? '', /new lines? below/);
+    // Back on host the pause is still in effect...
+    app.stdin.write('\u001B[A'); // up -> host
+    await wait(150);
+    // ...but selecting resets that app's offset too, so no stale notice.
+    assert.doesNotMatch(app.lastFrame() ?? '', /new lines? below/);
     app.unmount();
     app.cleanup();
   });
@@ -559,15 +628,24 @@ describe('dev tui view helpers', () => {
     });
   });
 
-  it('activityBadge is a ≤4-char animated marker, capped 99+ (F10)', () => {
+  it('activityBadge is a one-glyph animated marker with no count (F10, G2)', () => {
     assert.equal(activityBadge(0, 0), '');
-    assert.equal(activityBadge(2, 0), '·2');
+    // G2: the count is gone — the bounce alone carries the signal, so the
+    // badge is exactly one char whatever the unread count.
+    assert.equal(activityBadge(2, 0), '·');
     // The bounce cycles through the four glyphs with the frame counter.
-    const glyphs = [0, 1, 2, 3].map((f) => activityBadge(1, f)[0]);
+    const glyphs = [0, 1, 2, 3].map((f) => activityBadge(1, f));
     assert.deepEqual(glyphs, ['·', '▁', '▃', '▁']);
-    assert.equal(activityBadge(99, 0), '·99');
-    assert.equal(activityBadge(100, 0), '·99+');
-    assert.ok(activityBadge(5, 1).length <= 4);
+    assert.equal(activityBadge(99, 0), '·');
+    assert.equal(activityBadge(100, 0), '·');
+    assert.ok(activityBadge(5, 1).length === 1);
+  });
+
+  it('newLinesNotice words the G1 count and stays silent at zero (G1)', () => {
+    assert.equal(newLinesNotice(0), '');
+    assert.equal(newLinesNotice(-3), '');
+    assert.equal(newLinesNotice(1), '↓ 1 new line below');
+    assert.equal(newLinesNotice(27), '↓ 27 new lines below');
   });
 
   it('stripSpinner drops braille glyphs (F4)', () => {

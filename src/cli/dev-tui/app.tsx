@@ -238,15 +238,27 @@ export function stripSpinner(text: string): string {
 const ACTIVITY_GLYPHS = ['·', '▁', '▃', '▁'];
 
 /**
- * F10: the sidebar activity marker for a row with unread lines — a bouncing
- * glyph plus the count (capped `99+`), ≤4 chars before the count. Empty
- * string = no badge. Cleared by the model when the row is selected.
+ * F10/G2: the sidebar activity marker for a row with unread lines — the
+ * bouncing glyph ALONE. G2 drops the count: the animation already says
+ * "output arrived over there", and a number nobody reads while it scrolls
+ * only costs sidebar width. Empty string = no badge. Cleared by the model
+ * when the row is selected.
  */
 export function activityBadge(unread: number, frame: number): string {
   if (unread <= 0) return '';
   const glyph = ACTIVITY_GLYPHS[Math.abs(frame) % ACTIVITY_GLYPHS.length];
-  const count = unread > 99 ? '99+' : String(unread);
-  return `${glyph ?? '▁'}${count}`;
+  return glyph ?? '▁';
+}
+
+/**
+ * G1: wording of the panel's "new lines below" notice — `N` lines arrived for
+ * the selected app after autoscroll paused. Pure and exported for tests; the
+ * COUNT itself is view state, because only the view knows the scroll offset
+ * (the model exposes `lines`/`hiddenCount`, which the view sums).
+ */
+export function newLinesNotice(delta: number): string {
+  if (delta <= 0) return '';
+  return `↓ ${delta} new ${delta === 1 ? 'line' : 'lines'} below`;
 }
 
 // SGR mouse report: ESC [ < button ; col ; row M (press) | m (release).
@@ -349,6 +361,12 @@ export function DevTuiApp({
   // autoscroll on select, per the task spec).
   const [scrolls, setScrolls] = useState<{ [key: string]: number }>({});
 
+  // G1: per-app snapshot of the total line count taken the moment that app
+  // stopped being at the bottom (see the notice math in the render body).
+  // A REF, not state: it is derived bookkeeping for the current render, and
+  // making it state would schedule an extra render on every pause.
+  const pausedAtRef = useRef<{ [key: string]: number }>({});
+
   // F12: `i` opens a one-line input at the panel bottom. The draft lives in
   // a REF mirrored into state: ink dispatches every byte of one chunk from
   // the SAME (pre-update) render closure, so a fast `i`+char burst would
@@ -375,6 +393,41 @@ export function DevTuiApp({
     if (selectedKey !== undefined) model.markViewed(selectedKey);
   }, [model, selectedKey]);
 
+  const { pinned, body } = partitionPinned(snap.lines);
+  const storedOffset =
+    selectedKey === undefined ? 0 : (scrolls[selectedKey] ?? 0);
+
+  // G1: the `↓ N new lines below` notice. The COUNT is view state — only the
+  // view knows the scroll offset, the model just holds the lines — so it
+  // lives in a ref: per app, the total line count observed at the moment that
+  // app stopped being at the bottom. `N` = how many lines arrived since
+  // (total includes ring-dropped lines, so the count keeps growing while the
+  // buffer sits at its cap). It resets on return to bottom, and because
+  // selecting an app resets its offset, switching apps is correct by
+  // construction. Written during render but idempotent: re-running a render
+  // with the same inputs writes the same values.
+  //
+  // `paused` keys on the STORED offset, not the clamped one, deliberately:
+  // the notice reserves a page row, the page height feeds the clamp, and
+  // keying the flag on the clamped offset would be circular. It is also
+  // equivalent — a stored offset above zero always survives the clamp (the
+  // clamp max is reached from a scroll action itself).
+  const totalSeen = snap.lines.length + snap.hiddenLines;
+  const paused = storedOffset > 0;
+  if (selectedKey !== undefined) {
+    if (!paused) {
+      delete pausedAtRef.current[selectedKey];
+    } else if (pausedAtRef.current[selectedKey] === undefined) {
+      pausedAtRef.current[selectedKey] = totalSeen;
+    }
+  }
+  const pausedAt =
+    selectedKey === undefined ? undefined : pausedAtRef.current[selectedKey];
+  const newLinesNote =
+    paused && pausedAt !== undefined
+      ? newLinesNotice(totalSeen - pausedAt)
+      : '';
+
   // F4: the active progress bar pins to the panel's last row; the rest flows
   // around it. `partitionPinned` kills the pin on a terminal build line (F8)
   // and once the bar is no longer recent.
@@ -382,12 +435,13 @@ export function DevTuiApp({
   const hiddenNoteHeight = snap.hiddenLines > 0 ? 1 : 0;
   const pageHeight = Math.max(
     1,
-    rows - 1 - hiddenNoteHeight - (inputDraft !== null ? 1 : 0)
+    rows -
+      1 -
+      hiddenNoteHeight -
+      (newLinesNote === '' ? 0 : 1) -
+      (inputDraft !== null ? 1 : 0)
   );
-  const { pinned, body } = partitionPinned(snap.lines);
   const bodyPage = Math.max(1, pageHeight - (pinned === undefined ? 0 : 1));
-  const storedOffset =
-    selectedKey === undefined ? 0 : (scrolls[selectedKey] ?? 0);
   // F6: clamp the stored offset to what the body can actually scroll — the
   // window function already clamps, but key arithmetic (PgUp, wheel) must
   // never grow a runaway offset that the clamp would silently hide.
@@ -665,6 +719,12 @@ export function DevTuiApp({
         {shown.length === 0 && pinned === undefined ? (
           <Text dimColor>no output yet</Text>
         ) : null}
+        {/* G1: autoscroll is paused (offset > 0) and lines arrived since —
+            say how many wait below the page. Its row is already reserved in
+            pageHeight, so the body never overflows when the notice appears. */}
+        {newLinesNote === '' ? null : (
+          <Text dimColor>{newLinesNote}</Text>
+        )}
         {pinned === undefined ? null : (
           <Box flexDirection="column" flexGrow={1} justifyContent="flex-end">
             <LogLine line={pinned} frame={frame} />
