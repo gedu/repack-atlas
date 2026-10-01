@@ -5,6 +5,7 @@ import { describe, it } from 'node:test';
 import type {
   ProjectFs,
   ReactNativeCliResolver,
+  ReactNativeCliResult,
 } from '../../src/core/index.js';
 import { resolveToolchains } from '../../src/runner/toolchain.js';
 
@@ -54,5 +55,32 @@ describe('resolveToolchains bundler detection', () => {
     const a = toolchains['/ws/a']!;
     assert.ok(a.ok);
     assert.equal(a.bundlerNote, undefined);
+  });
+});
+
+const okCli = (root: string): ReactNativeCliResult => ({
+  status: 'ok',
+  cli: `${root}/node_modules/react-native/cli.js`,
+});
+
+describe('resolveToolchains (injected resolver edge cases)', () => {
+  it('a resolver that throws fails that app only, not the plan', async () => {
+    const toolchains = await resolveToolchains(
+      [{ root: '/ws/a' }, { root: '/ws/b' }],
+      {
+        ...listing(async () => []),
+        reactNativeCli: {
+          resolve(root) {
+            if (root === '/ws/a') throw new Error('boom');
+            return okCli(root);
+          },
+          startOptions: () => ({ status: 'unknown', message: 'n/a' }),
+        },
+      }
+    );
+    const a = toolchains['/ws/a']!;
+    assert.ok(!a.ok);
+    assert.match(a.reason, /lookup failed: Error: boom/);
+    assert.ok(toolchains['/ws/b']!.ok);
   });
 });

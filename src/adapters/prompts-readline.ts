@@ -102,11 +102,14 @@ export function createReadlinePrompts(
       guard(async () => {
         const initial = question.initialValues ?? [];
         const names = question.options.map((option) => option.value).join(', ');
-        // `none` selects nothing, unless an option is literally named `none`:
-        // then the option wins and the keyword is not offered.
+        // `none` selects nothing, unless an option's VALUE is `none` (values
+        // are what a user is shown to type): then that option wins and the
+        // keyword is not offered. A label alone never suppresses it.
         const noneHint =
           question.emptyHint !== undefined &&
-          matchOption(question.options, NONE_KEYWORD) === undefined
+          !question.options.some(
+            (option) => option.value.toLowerCase() === NONE_KEYWORD
+          )
             ? question.emptyHint
             : undefined;
         for (;;) {

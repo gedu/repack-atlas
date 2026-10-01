@@ -263,8 +263,8 @@ export interface PromptPort {
     initialValues?: string[];
     /** When set, an empty selection is allowed and means this; adapters must
      * offer a way to choose it. Exception: the readline adapter's `none`
-     * keyword yields to an option literally named `none`, so there the empty
-     * selection is unreachable. */
+     * keyword yields to an option whose `value` is `none` (a label alone does
+     * not), so there the empty selection is unreachable. */
     emptyHint?: string;
   }): Promise<PromptResult<string[]>>;
   /** Exactly one of `options` (its `value`). */
