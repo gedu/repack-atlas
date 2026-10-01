@@ -574,8 +574,9 @@ export function createDevSupervisor(options: DevSupervisorOptions) {
       handle.subscribeToStderr((line) => options.onLog(name, 'stderr', line));
       void handle
         .waitForExit()
-        // The port promises never to reject; if one does, the child's fate is
-        // unknown, which is reported as an exit without code or signal.
+        // The port promises never to reject. If one does anyway, the exit is
+        // reported with neither code nor signal (the CLI words it "was killed
+        // (unknown signal)"); the child itself may still be running.
         .catch(() => ({ code: null, signal: null }))
         .then(({ code, signal }) => {
           oneShots.delete(handle);

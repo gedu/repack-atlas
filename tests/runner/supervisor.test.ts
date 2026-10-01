@@ -106,6 +106,33 @@ describe('spawnOneShot', () => {
     ]);
   });
 
+  it('a rejecting waitForExit is reported as an exit with no code or signal', async () => {
+    const child = fakeChild();
+    const rejecting: ProcessHandle = {
+      ...child.handle,
+      waitForExit: () => Promise.reject(new Error('port broke its contract')),
+    };
+    const rejections: unknown[] = [];
+    const onRejection = (reason: unknown) => rejections.push(reason);
+    process.on('unhandledRejection', onRejection);
+    try {
+      const events: OneShotEvent[] = [];
+      const supervisor = supervisorWith(runnerFor(() => rejecting), (_n, e) =>
+        events.push(e)
+      );
+      supervisor.spawnOneShot('launch', SPEC);
+      await tick();
+      await tick();
+      assert.deepEqual(events, [
+        { status: 'started', pid: 4242 },
+        { status: 'exited', code: null, signal: null },
+      ]);
+      assert.deepEqual(rejections, []);
+    } finally {
+      process.off('unhandledRejection', onRejection);
+    }
+  });
+
   it('a throwing hook on start does not crash and the child stays supervised', async () => {
     const child = fakeChild();
     const seen: OneShotEvent[] = [];

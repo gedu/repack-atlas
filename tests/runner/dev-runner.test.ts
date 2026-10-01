@@ -1301,6 +1301,38 @@ describe('dev default argv (root without command)', () => {
     assert.match(parseEvents(result.stdout)[0]!.apps![0]!.command, /--bundler webpack /);
   });
 
+  it('a missing app root with a resolvable CLI warns that the bundler was not detected', async () => {
+    // The CLI resolves from a parent directory, so only the root is missing.
+    const dir = workspaceWith(
+      { host: { manifest: './h.json', root: './ghost' }, remotes: {} },
+      (d) => makeApp(d, '.')
+    );
+    const result = await runToCompletion(
+      ['--dry-run', '--json', '--port', String(await freePort())],
+      dir
+    );
+    assert.equal(result.code, 0, result.stderr);
+    assert.match(
+      result.stderr,
+      /dev: warning {2}host: the app root could not be read, so its bundler was not detected; falling back to rspack/
+    );
+    // The warning never reaches the --json stream.
+    assert.doesNotMatch(result.stdout, /warning/);
+  });
+
+  it('a missing app root with no CLI at all exits 2 naming the app', async () => {
+    const dir = workspaceWith(
+      { host: { manifest: './h.json', root: './ghost' }, remotes: {} },
+      () => {}
+    );
+    const result = await runToCompletion(
+      ['--dry-run', '--port', String(await freePort())],
+      dir
+    );
+    assert.equal(result.code, 2, result.stderr);
+    assert.match(result.stderr, /dev: host: /);
+  });
+
   it('dry-run --json with a built argv is byte-identical across runs', async () => {
     const dir = workspaceWith(
       {
@@ -1829,6 +1861,40 @@ describe('dev --launch', () => {
     s.child.kill('SIGINT');
     assert.equal((await s.exited).code, 0);
     assert.equal(s.events.at(-1)!.code, 0);
+  });
+
+  it('a launch that cannot be spawned emits the spawn-error exit event and keeps the session', async () => {
+    const hostPort = await freePort();
+    const dir = workspaceWith(
+      {
+        host: {
+          manifest: './h.json',
+          root: './apps/host',
+          command:
+            "node -e \"require('net').createServer().listen(Number(process.env.ATLAS_APP_PORT),'127.0.0.1')\"",
+        },
+        remotes: {},
+      },
+      (d) => {
+        makeApp(d, 'apps/host', { shim: true });
+        // A shim that is not executable: spawning it fails (EACCES).
+        chmodSync(path.join(d, 'apps', 'host', 'node_modules', '.bin', 'react-native'), 0o644);
+      }
+    );
+    const s = await session(
+      ['--ci', '--json', '--no-studio', '--port', String(hostPort), '--platform', 'ios', '--launch'],
+      dir
+    );
+    const failed = await s.waitForEvent((e) => e.event === 'launch' && e.status === 'exited');
+    assert.equal(failed.code, null);
+    assert.equal((failed as DevEvent & { signal?: string }).signal, 'spawn-error');
+    await waitFor(
+      () => s.lines.some((l) => l.includes('dev: launch could not be spawned; the session keeps serving')),
+      'the human failure line'
+    );
+    assert.ok(!s.events.some((e) => e.event === 'app' && e.status === 'error'));
+    s.child.kill('SIGINT');
+    assert.equal((await s.exited).code, 0);
   });
 
   it('shutdown kills a launch that is still running', async () => {
