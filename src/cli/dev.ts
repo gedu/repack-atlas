@@ -10,8 +10,10 @@
 // JSON object — `{event:'plan', apps}` once before anything spawns (`--dry-run`
 // emits only this and `exit`; `--launch` adds a `launch` field), `{event:'studio',
 // url}` once, `{event:'app', app, status, port}` per status transition,
-// `{event:'launch', status:'started'|'exited', code?}` for the `--launch`
-// one-shot (a failure is reported, never the session's exit code),
+// `{event:'launch', status:'started', pid?}` / `{event:'launch',
+// status:'exited', code, signal?}` for the `--launch` one-shot (a spawn that
+// never started reports `code: null, signal: 'spawn-error'`; a failure is
+// reported, never the session's exit code),
 // `{event:'exit', code}` last. Child log
 // lines stay plain `[name]`-prefixed lines on stdout (same convention as
 // upstream `federation-dev`): parse stdout line by line and keep only

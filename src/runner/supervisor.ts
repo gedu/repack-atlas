@@ -574,12 +574,18 @@ export function createDevSupervisor(options: DevSupervisorOptions) {
       handle.subscribeToStderr((line) => options.onLog(name, 'stderr', line));
       void handle
         .waitForExit()
-        // The port promises never to reject. If one does anyway, the exit is
-        // reported with neither code nor signal (the CLI words it "was killed
-        // (unknown signal)"); the child itself may still be running.
-        .catch(() => ({ code: null, signal: null }))
+        .then(
+          (exit) => {
+            oneShots.delete(handle);
+            return exit;
+          },
+          // The port promises never to reject. If one does anyway, the exit
+          // is reported with neither code nor signal (the CLI words it "was
+          // killed (unknown signal)"). The child may still be running, so its
+          // handle stays in `oneShots` and `shutdown()` still kills it.
+          () => ({ code: null, signal: null })
+        )
         .then(({ code, signal }) => {
-          oneShots.delete(handle);
           // Ordered shutdown killed it: the session's doing, not news.
           if (shuttingDown) return;
           notify(

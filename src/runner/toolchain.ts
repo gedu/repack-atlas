@@ -10,6 +10,7 @@ import type {
   ReactNativeCliResolver,
 } from '../core/index.js';
 import {
+  bundlerFromConfigName,
   detectBundler,
   RSPACK_CONFIG_FILES,
   WEBPACK_CONFIG_FILES,
@@ -56,9 +57,6 @@ async function listConfigFiles(fs: ProjectFs, root: string): Promise<string[]> {
   );
 }
 
-/** Whether the `config` field's file name alone decides the bundler. */
-const configNamesBundler = (config: string | undefined): boolean =>
-  config !== undefined && /^(rspack|webpack)/.test(path.basename(config));
 
 export interface ToolchainTarget {
   /** Absolute app root. */
@@ -121,7 +119,7 @@ export async function resolveToolchains(
       bundler,
       cli: cli.cli,
       ...(cli.shim !== undefined ? { shim: cli.shim } : {}),
-      ...(unreadableRoot && !configNamesBundler(target.config)
+      ...(unreadableRoot && bundlerFromConfigName(target.config) === undefined
         ? {
             bundlerNote:
               "the app root could not be read, so its bundler was not detected; falling back to rspack, Re.Pack's default",

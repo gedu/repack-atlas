@@ -45,15 +45,26 @@ export interface DetectBundlerInput {
  * default). A `config` named neither way falls through to the file check.
  */
 export function detectBundler(input: DetectBundlerInput): Bundler {
-  if (input.config !== undefined) {
-    const base = path.basename(input.config);
-    if (base.startsWith('rspack')) return 'rspack';
-    if (base.startsWith('webpack')) return 'webpack';
-  }
+  const named = bundlerFromConfigName(input.config);
+  if (named !== undefined) return named;
   const present = new Set(input.files);
   if (RSPACK_CONFIG_FILES.some((file) => present.has(file))) return 'rspack';
   if (WEBPACK_CONFIG_FILES.some((file) => present.has(file))) return 'webpack';
   return 'rspack';
+}
+
+/**
+ * The bundler a `config` field's file name alone decides (`rspack*` or
+ * `webpack*`), or `undefined` when the name decides nothing.
+ */
+export function bundlerFromConfigName(
+  config: string | undefined
+): Bundler | undefined {
+  if (config === undefined) return undefined;
+  const base = path.basename(config);
+  if (base.startsWith('rspack')) return 'rspack';
+  if (base.startsWith('webpack')) return 'webpack';
+  return undefined;
 }
 
 /** Executable shape of a resolved react-native CLI (shim preferred). */

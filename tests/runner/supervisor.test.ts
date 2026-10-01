@@ -128,6 +128,9 @@ describe('spawnOneShot', () => {
         { status: 'exited', code: null, signal: null },
       ]);
       assert.deepEqual(rejections, []);
+      // The child may still be running: it stays tracked and shutdown kills it.
+      await supervisor.shutdown();
+      assert.equal(child.killed(), true);
     } finally {
       process.off('unhandledRejection', onRejection);
     }
