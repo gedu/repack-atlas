@@ -69,3 +69,20 @@ Single PR to main (owner pattern: PR, gga, merge).
 ## Next step
 
 Open the PR to main (owner pattern: PR, gga, merge).
+
+## Follow-up (gga on the advisory branch)
+
+- gga FAILED A4 the first time: the real `ProjectFs.readdir` returns `[]`
+  and never throws, so the throw-based warning never fired. Fixed in
+  `4d9b515` through `fs.stat(root)` with a contract-honest fake. Residual,
+  accepted: a root that exists but cannot be listed (chmod 000) still looks
+  empty through the port and falls back to rspack silently.
+- gga's second pass (PASSED) left three cheap advisories, fixed in `b802f23`:
+  a rejected `waitForExit` no longer drops the one-shot from `oneShots`
+  (shutdown still kills it; test asserts it); one shared
+  `bundlerFromConfigName` rule for `detectBundler` and the toolchain note;
+  the `dev.ts` `--json` header documents `pid?`, `signal` and `spawn-error`.
+  Skipped: the plan-test fixture wording (cosmetic).
+- Checks: 576/576, lint, typecheck, agent:check, check:vendored green;
+  showcase dry-run `--json` byte-identical to main.
+
