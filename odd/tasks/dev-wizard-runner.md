@@ -50,7 +50,7 @@ part of the plan and must exist.
       `init` stops emitting `command`.
 - [x] T4 `--platform ios|android`, `--standalone <remote>` (gated on
       `standalone: true`), env contract for `command` apps.
-- [ ] T5 Launch: `--launch/--no-launch/--device`, one-shot
+- [x] T5 Launch: `--launch/--no-launch/--device`, one-shot
       `run-<platform> --no-packager` on the target's first ready, `[launch]`
       prefix, exactly once, killed on shutdown.
 - [ ] T6 Wizard: `PromptPort`, clack via dynamic import, readline fallback;
@@ -150,6 +150,23 @@ branch merges to main once at the end.
   free-port race in tests (`:1364-1367`); fixture remote ports 8082/8083
   must be free in tests.
 
+- T5 done on `feat/dev-wizard-runner-t5`, commit `f9053ae`
+  (`feat(dev): launch the app on the device once the target is ready`), 1107
+  authored lines (new `src/runner/launch-plan.ts`, supervisor `onFirstReady`
+  / `spawnOneShot`, `{event:'launch'}`, tests). Route: delegated direct.
+  Deviations from upstream: `--launch` + `--no-launch` exits 2; a target with
+  no `root` exits 2; failure is a `dev:` stderr line + JSON event instead of
+  an in-stream `[launch]` line. Stray `ATLAS_APP_*` env removed when unset.
+  Checks: full chain green, 481/481; parent spot check launch-plan +
+  process-runner + dev-runner (82/82). Native review: high, granted, 4
+  lenses, approved, acknowledged. Range review main..`710deb4` also approved.
+- Carried into T6/T7: `declaredPort` overloaded (`plan.ts:39-40`); spawn
+  error sentinel (`supervisor.ts:520-527`); one-shot exit chain unguarded
+  (`supervisor.ts:532-537`); toolchain silent fallback (`toolchain.ts:66-71`);
+  duplicate platform gate (`supervisor.ts:232-234`); duplicated plan emit
+  (`dev.ts:424-430`); `dev.ts:250-256`; misplaced toolchain test
+  (`launch-plan.test.ts:158-179`).
+
 ## Next step
 
-T5 (launch), stacked on `feat/dev-wizard-runner-t4`.
+T6 (wizard), stacked on `feat/dev-wizard-runner-t5`.
