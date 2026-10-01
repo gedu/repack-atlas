@@ -55,7 +55,7 @@ part of the plan and must exist.
       prefix, exactly once, killed on shutdown.
 - [x] T6 Wizard: `PromptPort`, clack via dynamic import, readline fallback;
       steps remotes → platform → launch → ports → standalone; gate and cancel.
-- [ ] T7 Docs: PRD §7.1 and related lines, README dev section, demo runbook
+- [x] T7 Docs: PRD §7.1 and related lines, README dev section, demo runbook
       (wizard instead of `pnpm --filter`), DEV_HELP, AGENTS.md dependency rule,
       `atlas-runner` skill referenced at PRD:416 + `pnpm agent:sync`.
 
@@ -185,6 +185,24 @@ branch merges to main once at the end.
   (`dev-wizard.test.ts:174-188`). The first-pass plan exits 2 on a toolchain
   failure of any app before the wizard shows (document it).
 
+- T7 done on `feat/dev-wizard-runner-t7`: `4b3663a` (`fix(dev): reject empty
+  readline selections and hide 'all' under --launch`) and `35cb4dc` (`docs:
+  document the interactive dev runner`; PRD §7.1 + §7.1.1, README dev
+  section, demo runbook, new `atlas-runner` skill). 456 authored lines.
+  Checks: full chain green, 518/518, 5 skills in sync; parent spot check
+  wizard + prompts (29/29). Native review: medium, granted, 1 lens, approved,
+  acknowledged. Demo runbook marks the wizard, `--dry-run`, `--launch` and
+  Atlas-built argv as "not yet re-verified on the showcase".
+- Open follow-ups: host-only session reachable in clack (`required: false`)
+  but not in readline (empty line = preselected all) — owner decision;
+  T7 review advisories on `dev-wizard-gate.test.ts:177-187` (dropped exit
+  code assert, weak "not offered" proof) and readline re-ask
+  (`prompts-readline.ts:108-122`); carried T5 code advisories
+  (`declaredPort`, spawn error sentinel, one-shot exit chain, toolchain
+  silent fallback); re-verify the runbook against the real showcase.
+- Engram mirror: pending (session conflict on save).
+
 ## Next step
 
-T7 (wizard fixes + docs), stacked on `feat/dev-wizard-runner-t6`.
+Owner: open the tracker draft PR (`feat/dev-wizard-runner` → main) and the
+chained slice PRs t1..t7, and re-verify the demo on super-app-showcase.
