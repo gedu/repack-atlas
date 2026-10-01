@@ -107,6 +107,12 @@ time with work-unit commits; long-session backstop applies.
 ## Next step
 T5: full checks done by T4 writer (618/618). Remaining: user real-terminal
 smoke (`node dist/cli.js dev` in fixtures/workspace or the showcase).
+- T5 checks @ `b76c2f9`: parent spot-check re-ran `pnpm test` → 618/618 pass.
+  `review assess --base-ref 791ec00 --committed-only` → medium,
+  slice_budget_reached (2284 lines, 13 paths). Native review START refused
+  deterministically (provider defect, upstream issue #4749 occurrence filed
+  2026-10-01); verification stands as writer self-verification + parent spot
+  check. Boundary not advanced (no receipt).
 - [ ] T5 — Full checks (`pnpm install/build/typecheck/lint/test`), paste
       output, fix fallout, docs touch in `docs/` only if `--help` text changes
       (help gains a line noting the interactive dashboard). Commit
