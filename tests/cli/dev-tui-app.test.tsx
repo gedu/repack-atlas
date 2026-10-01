@@ -12,12 +12,15 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { cleanup, render } from 'ink-testing-library';
 import {
+  activityBadge,
   animateLiveDots,
   DevTuiApp,
   isMouseOnlyInput,
   parseWheelEvents,
   splitLeadingSymbol,
+  splitTimestamp,
   stripSpinner,
+  symbolColor,
   truncate,
 } from '../../src/cli/dev-tui/app.js';
 import { createDevTuiModel } from '../../src/cli/dev-tui/model.js';
@@ -208,16 +211,30 @@ describe('dev tui app', () => {
         lines.findIndex((l) => /93%/.test(l)),
       'body lines render above the pinned bar'
     );
-    // Once Compiled lands and the bar stops being recent, it unpins and the
-    // bar flows as normal history between the lines around it.
+    // F8: once a terminal line lands, the pin DIES even while the bar is
+    // still recent, and the bar settles as ONE completed 100% frame in the
+    // body flow — never a pinned 98/93% bar parked under `Compiled`.
     model.log('host', 'stdout', '✔ Compiled in 4.2s');
+    await wait(150);
+    const after = (app.lastFrame() ?? '').split('\n');
+    const barRow = after.findIndex((l) => /100%/.test(l));
+    const compiledRow = after.findIndex((l) => /Compiled/.test(l));
+    assert.ok(barRow >= 0, 'the bar renders completed at 100%');
+    assert.ok(compiledRow > barRow, 'the completed bar flows as history');
+    assert.equal(
+      after.filter((l) => /93%/.test(l)).length,
+      0,
+      'the stale 93% frame is replaced in place, never shown alongside'
+    );
+    // Later lines keep flowing normally.
     model.log('host', 'stdout', 'info: asset main.js 1.2 MiB');
     model.log('host', 'stdout', 'warning: entrypoint size limit');
     await wait(150);
-    const after = (app.lastFrame() ?? '').split('\n');
-    const barRow = after.findIndex((l) => /93%/.test(l));
-    const compiledRow = after.findIndex((l) => /Compiled/.test(l));
-    assert.ok(barRow >= 0 && compiledRow > barRow, 'bar flows as history');
+    const later = (app.lastFrame() ?? '').split('\n');
+    assert.ok(
+      later.some((l) => /asset main\.js/.test(l)),
+      'later lines still render'
+    );
     app.unmount();
     app.cleanup();
   });
@@ -254,6 +271,84 @@ describe('dev tui app', () => {
     assert.doesNotMatch(frame, /! ⚠/);
     // Error symbol stays in the line.
     assert.match(frame, /× something failed/);
+    app.unmount();
+    app.cleanup();
+  });
+
+  it('renders ascii fallback symbols as level glyphs (F9)', () => {
+    const model = createDevTuiModel({
+      apps: [{ key: 'host', name: 'host', role: 'host', port: 8081 }],
+    });
+    model.log('host', 'stdout', 'i dependency resolved');
+    model.log('host', 'stdout', '! watch warning');
+    model.log('host', 'stdout', 'x compilation failed');
+    model.log('host', 'stdout', '✓ Compiled in 4s');
+    model.log('host', 'stdout', '-> https://example.com/mf.json');
+    const app = render(<DevTuiApp model={model} onQuit={() => undefined} />);
+    const frame = app.lastFrame() ?? '';
+    assert.match(frame, /i dependency resolved/);
+    assert.match(frame, /! watch warning/);
+    assert.match(frame, /x compilation failed/);
+    assert.match(frame, /✓ Compiled in 4s/);
+    assert.match(frame, /-> https:\/\/example\.com\/mf\.json/);
+    // The `! ` symbol reads as the warn glyph, so no double stderr marker.
+    assert.doesNotMatch(frame, /! !/);
+    app.unmount();
+    app.cleanup();
+  });
+
+  it('shows an unread-activity badge on non-selected rows and clears it on view (F10)', async () => {
+    const model = createDevTuiModel({
+      apps: [
+        { key: 'host', name: 'host', role: 'host', port: 8081 },
+        { key: 'alpha', name: 'alpha', role: 'remote', port: 8082 },
+      ],
+    });
+    const app = render(
+      <DevTuiApp model={model} onQuit={() => undefined} frame={0} />
+    );
+    await wait(150);
+    // Logs for the NON-selected row carry a badge (glyph + count).
+    model.log('alpha', 'stdout', 'building');
+    model.log('alpha', 'stdout', 'still building');
+    await wait(150);
+    assert.match(app.lastFrame() ?? '', /alpha 8082 ·2/);
+    // Selecting the row clears the badge (markViewed via the selection effect).
+    app.stdin.write('\u001B[B'); // down -> alpha
+    await wait(150);
+    assert.doesNotMatch(app.lastFrame() ?? '', /·2/);
+    // Logs on the selected row never badge (`·1` would be the badge; the
+    // footer's `·` separators are not one).
+    model.log('alpha', 'stdout', 'watched');
+    await wait(150);
+    assert.doesNotMatch(app.lastFrame() ?? '', /·1/);
+    app.unmount();
+    app.cleanup();
+  });
+
+  it('toggles mouse reporting with m and gates wheel routing (F11)', async () => {
+    const model = seededModel();
+    for (let i = 1; i <= 40; i += 1) {
+      model.log('host', 'stdout', `line ${i}`);
+    }
+    const app = render(<DevTuiApp model={model} onQuit={() => undefined} />);
+    await wait(150);
+    assert.match(app.lastFrame() ?? '', /m mouse on/);
+    // Wheel off: a sidebar wheel report must NOT move the selection.
+    app.stdin.write('m');
+    await wait(150);
+    assert.match(app.lastFrame() ?? '', /m mouse off/);
+    assert.match(app.lastFrame() ?? '', /drag copy/);
+    app.stdin.write('\u001b[<65;5;2M\u001b[<65;5;2m');
+    await wait(150);
+    assert.equal(model.selectedIndex(), 0, 'stale wheel bytes are inert');
+    // Toggle back on and the same report routes again.
+    app.stdin.write('m');
+    await wait(150);
+    assert.match(app.lastFrame() ?? '', /m mouse on/);
+    app.stdin.write('\u001b[<65;5;2M\u001b[<65;5;2m');
+    await wait(150);
+    assert.equal(model.selectedIndex(), 1);
     app.unmount();
     app.cleanup();
   });
@@ -299,6 +394,82 @@ describe('dev tui view helpers', () => {
       symbol: undefined,
       rest: 'info: plain',
     });
+  });
+
+  it('splitLeadingSymbol detects the ascii fallback set (F9)', () => {
+    assert.deepEqual(splitLeadingSymbol('i dependency resolved'), {
+      indent: '',
+      symbol: 'i',
+      rest: 'dependency resolved',
+    });
+    assert.deepEqual(splitLeadingSymbol('! watch warning'), {
+      indent: '',
+      symbol: '!',
+      rest: 'watch warning',
+    });
+    assert.deepEqual(splitLeadingSymbol('x compilation failed'), {
+      indent: '',
+      symbol: 'x',
+      rest: 'compilation failed',
+    });
+    assert.deepEqual(splitLeadingSymbol('✓ Compiled'), {
+      indent: '',
+      symbol: '✓',
+      rest: 'Compiled',
+    });
+    assert.deepEqual(splitLeadingSymbol('-> https://x/mf.json'), {
+      indent: '',
+      symbol: '->',
+      rest: 'https://x/mf.json',
+    });
+    // The space requirement is what keeps `iO`-style words out:
+    assert.deepEqual(splitLeadingSymbol('iO-saurus'), {
+      indent: '',
+      symbol: undefined,
+      rest: 'iO-saurus',
+    });
+    assert.deepEqual(splitLeadingSymbol('index.js 1.2 MiB'), {
+      indent: '',
+      symbol: undefined,
+      rest: 'index.js 1.2 MiB',
+    });
+    // Colors follow Re.Pack's fallback map.
+    assert.equal(symbolColor('i'), 'blue');
+    assert.equal(symbolColor('!'), 'yellow');
+    assert.equal(symbolColor('x'), 'red');
+    assert.equal(symbolColor('✓'), 'green');
+    assert.equal(symbolColor('->'), 'cyan');
+  });
+
+  it('splitTimestamp splits ONLY a leading bracketed timestamp (F9)', () => {
+    assert.deepEqual(splitTimestamp('[14:37:11.074Z][DevServer] ready'), {
+      stamp: '[14:37:11.074Z]',
+      rest: '[DevServer] ready',
+    });
+    assert.deepEqual(splitTimestamp('[14:37:11Z] plain'), {
+      stamp: '[14:37:11Z]',
+      rest: ' plain',
+    });
+    // A time mid-message stays part of the message.
+    assert.deepEqual(splitTimestamp('built at [14:37:11Z] today'), {
+      stamp: undefined,
+      rest: 'built at [14:37:11Z] today',
+    });
+    assert.deepEqual(splitTimestamp('no time here'), {
+      stamp: undefined,
+      rest: 'no time here',
+    });
+  });
+
+  it('activityBadge is a ≤4-char animated marker, capped 99+ (F10)', () => {
+    assert.equal(activityBadge(0, 0), '');
+    assert.equal(activityBadge(2, 0), '·2');
+    // The bounce cycles through the four glyphs with the frame counter.
+    const glyphs = [0, 1, 2, 3].map((f) => activityBadge(1, f)[0]);
+    assert.deepEqual(glyphs, ['·', '▁', '▃', '▁']);
+    assert.equal(activityBadge(99, 0), '·99');
+    assert.equal(activityBadge(100, 0), '·99+');
+    assert.ok(activityBadge(5, 1).length <= 4);
   });
 
   it('stripSpinner drops braille glyphs (F4)', () => {

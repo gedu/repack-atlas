@@ -10,7 +10,9 @@ import { describe, it } from 'node:test';
 import {
   createDevTuiModel,
   collapseCandidate,
+  completeProgressFrame,
   classifyLine,
+  isTerminalBuildLine,
   logWindow,
   partitionPinned,
   renderProgressFrame,
@@ -184,6 +186,22 @@ describe('spinner-frame collapsing', () => {
     assert.equal(lines[0]?.text, '- Building the app......');
     assert.equal(lines[0]?.live, true);
     assert.equal(lines[0]?.kind, 'progress');
+  });
+
+  it('collapses trailing-dot floods beyond the old 6-dot cap (F7)', () => {
+    // The smoke saw `Building the app........` (8 dots) survive next to the
+    // 5-dot frame: the normalizer used to ignore dot runs longer than 6.
+    const m = model({ launch: true });
+    for (const dots of [5, 8, 12, 30, 1]) {
+      m.log('launch', 'stdout', `- Building the app${'.'.repeat(dots)}`);
+    }
+    const lines = m.lines('launch');
+    assert.equal(lines.length, 1);
+    assert.equal(lines[0]?.text, `- Building the app${'.'.repeat(1)}`);
+    assert.equal(lines[0]?.live, true);
+    // Pure-helper side: any dots-only variation shares one collapse key.
+    assert.equal(collapseCandidate('- Building the app........'), '- Building the app');
+    assert.equal(collapseCandidate('- Building the app........................'), '- Building the app');
   });
 
   it('collapses braille + percentage progress across changing values', () => {
@@ -386,6 +404,61 @@ describe('render rows and status map', () => {
   });
 });
 
+describe('unread activity (F10)', () => {
+  it('bumps unread only for rows that are not selected', () => {
+    const m = model({ launch: true });
+    // Selection starts on `host`: its logs are watched live.
+    m.log('host', 'stdout', 'seen');
+    m.log('alpha', 'stdout', 'one');
+    m.log('alpha', 'stdout', 'two');
+    const rows = new Map(m.visibleRows().map((row) => [row.key, row.unread]));
+    assert.equal(rows.get('host'), 0);
+    assert.equal(rows.get('alpha'), 2);
+    assert.equal(rows.get('beta'), 0);
+  });
+
+  it('marks viewed by key or name, and selection-then-arrival stays clean', () => {
+    const m = model({ launch: true });
+    m.log('alpha', 'stdout', 'one');
+    m.markViewed('alpha');
+    assert.equal(
+      m.visibleRows().find((row) => row.key === 'alpha')?.unread,
+      0
+    );
+    // By graph name too (the app may call it with either).
+    m.log('alpha', 'stdout', 'two');
+    m.markViewed('alpha');
+    m.selectKey('alpha');
+    assert.equal(m.selectedKey(), 'alpha');
+    // Now selected: logs stop counting as unread without any markViewed.
+    m.log('alpha', 'stdout', 'three');
+    assert.equal(
+      m.visibleRows().find((row) => row.key === 'alpha')?.unread,
+      0
+    );
+  });
+
+  it('unread keeps counting while the selection moves away', () => {
+    const m = model({ launch: true });
+    m.selectKey('alpha');
+    m.log('alpha', 'stdout', 'watched');
+    m.selectKey('host');
+    // The watched line was seen; a fresh one is unread.
+    m.log('alpha', 'stdout', 'missed');
+    assert.equal(
+      m.visibleRows().find((row) => row.key === 'alpha')?.unread,
+      1
+    );
+  });
+
+  it('selectedKey exposes the row the viewer is on', () => {
+    const m = model({ launch: true });
+    assert.equal(m.selectedKey(), 'host');
+    m.selectKey('beta');
+    assert.equal(m.selectedKey(), 'beta');
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Pure render selectors (F4): windowing, pinned progress bar, bar graphics
 // ---------------------------------------------------------------------------
@@ -395,11 +468,13 @@ function line(text: string): DevTuiLine {
 }
 
 describe('logWindow', () => {
-  it('anchors at the bottom and clamps the offset', () => {
+  it('anchors at the bottom and clamps at the top of the buffer (F6)', () => {
     assert.deepEqual(logWindow(10, 0, 5), { start: 5, end: 10 });
     assert.deepEqual(logWindow(10, 3, 5), { start: 2, end: 7 });
-    // Offset beyond the buffer still keeps at least one line.
-    assert.deepEqual(logWindow(3, 100, 5), { start: 0, end: 1 });
+    // F6: an offset deeper than the buffer can scroll shows the FIRST
+    // pageHeight lines — never a short/blank tail.
+    assert.deepEqual(logWindow(3, 100, 5), { start: 0, end: 3 });
+    assert.deepEqual(logWindow(10, 100, 5), { start: 0, end: 5 });
     assert.deepEqual(logWindow(0, 5, 5), { start: 0, end: 0 });
   });
 });
@@ -474,6 +549,78 @@ describe('partitionPinned', () => {
     ]);
     assert.equal(pinned, undefined);
     assert.equal(body.length, 2);
+  });
+
+  it('a terminal build line kills the pin and completes the bar in place (F8)', () => {
+    // The trading case: the child jumps 98% -> `Compiled`, so the bar is
+    // still the last progress-shaped line AND recent. The pin must die and
+    // the bar must settle as ONE completed 100% frame at its own position —
+    // never a pinned 98% bar parked under `✔ Compiled`, never duplicated.
+    const lines = [
+      line('info: start'),
+      line('transforming [=================-] 98%'),
+      line('✔ Compiled in 4.2s'),
+    ];
+    const { pinned, body } = partitionPinned(lines);
+    assert.equal(pinned, undefined);
+    assert.deepEqual(
+      body.map((l) => l.text),
+      ['info: start', 'transforming [██████████████████] 100%', '✔ Compiled in 4.2s']
+    );
+    assert.equal(
+      body[1]?.live,
+      undefined,
+      'the settled final frame stops animating'
+    );
+  });
+
+  it('an error terminal completes the bar too (F8)', () => {
+    // kind error: the build ENDED (honestly); the bar's last frame shows
+    // where it stopped, completed as the final redrawn outcome.
+    const lines = [
+      line('transforming [====-----] 40%'),
+      line('× ...[timeout] compilation failed'),
+    ];
+    const { pinned, body } = partitionPinned(lines);
+    assert.equal(pinned, undefined);
+    assert.equal(body[0]?.text, 'transforming [█████████] 100%');
+  });
+
+  it('a plain later line does NOT complete the bar (only terminals do, F8)', () => {
+    // `info: asset main.js` within recency: the build may keep going; the
+    // bar stays pinned exactly as before (F4 unchanged for non-terminals).
+    const lines = [
+      line('transforming [====-----] 40%'),
+      line('info: asset main.js 1.2 MiB'),
+    ];
+    const { pinned, body } = partitionPinned(lines);
+    assert.equal(pinned?.text, 'transforming [====-----] 40%');
+    assert.equal(body.length, 1);
+  });
+});
+
+describe('isTerminalBuildLine (F8)', () => {
+  it('success kind, error kind and compiled/success wording are terminal', () => {
+    assert.equal(isTerminalBuildLine(line('✔ Compiled in 4.2s')), true);
+    assert.equal(isTerminalBuildLine(line('success: bundle done')), true);
+    assert.equal(isTerminalBuildLine(line('error: something broke')), true);
+    assert.equal(isTerminalBuildLine(line('Build completed successfully')), true);
+    assert.equal(isTerminalBuildLine(line('info: asset main.js')), false);
+    assert.equal(isTerminalBuildLine(line('transforming [===] 40%')), false);
+  });
+});
+
+describe('completeProgressFrame (F8)', () => {
+  it('fills the bar and rewrites the percent to 100', () => {
+    assert.equal(
+      completeProgressFrame('transforming [=================-] 98%'),
+      'transforming [██████████████████] 100%'
+    );
+  });
+
+  it('is a no-op without a bracketed bar', () => {
+    assert.equal(completeProgressFrame('✔ Compiled'), '✔ Compiled');
+    assert.equal(completeProgressFrame('⠋ building'), '⠋ building');
   });
 });
 

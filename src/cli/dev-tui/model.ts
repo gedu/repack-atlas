@@ -99,17 +99,21 @@ export function classifyLine(text: string): LineKind {
 
 /**
  * Window `[start, end)` of the lines to render for a scroll offset counted
- * FROM THE BOTTOM (0 = autoscroll at the bottom). The offset is clamped so
- * at least one line stays visible when the buffer is shorter than asked.
+ * FROM THE BOTTOM (0 = autoscroll at the bottom). F6: the offset is clamped
+ * to `max(0, total - pageHeight)` — the deepest offset that still FILLS the
+ * page — so scrolling past the top shows the first `pageHeight` lines instead
+ * of a blank panel. The caller sizes `pageHeight` to the body rows only: the
+ * pinned bar (F4) renders from `partitionPinned`, not from this window.
  */
 export function logWindow(
   total: number,
   offset: number,
   pageHeight: number
 ): { start: number; end: number } {
-  const clamped = Math.min(Math.max(0, offset), Math.max(0, total - 1));
+  const page = Math.max(1, pageHeight);
+  const clamped = Math.min(Math.max(0, offset), Math.max(0, total - page));
   const end = total - clamped;
-  const start = Math.max(0, end - Math.max(1, pageHeight));
+  const start = Math.max(0, end - page);
   return { start, end };
 }
 
@@ -136,12 +140,52 @@ export interface DevTuiPinnedPartition {
 }
 
 /**
+ * F8: a line that ENDED the build the bar was animating. Success-family
+ * (kind `success`, or the child's own `compiled`/`success` wording) or an
+ * explicit error terminal. The bar's pin dies on arrival of one (the child
+ * moved on — a 98% bar parked under `✔ Compiled` is a lie by omission), and
+ * the bar's final frame renders completed in the body flow.
+ */
+export function isTerminalBuildLine(line: DevTuiLine): boolean {
+  return (
+    line.kind === 'success' ||
+    line.kind === 'error' ||
+    /compiled|success/i.test(line.text)
+  );
+}
+
+/**
+ * F8: render a progress bar as its build's COMPLETED final frame — fill to
+ * full, printed percent rewritten to 100. This re-draws the outcome the
+ * child already reported with its terminal line (Re.Pack's child jumps
+ * 98% → `Compiled` and never prints a 100 frame); with no bracketed bar
+ * there is nothing to complete and the text returns verbatim.
+ */
+export function completeProgressFrame(text: string): string {
+  const bar = BAR_RUN_IN_TEXT.exec(text);
+  const inner = bar?.[1];
+  if (bar === null || bar === undefined || bar.index === undefined || inner === undefined) {
+    return text;
+  }
+  const full = '█'.repeat(inner.length);
+  let out = `${text.slice(0, bar.index)}[${full}]${text.slice(bar.index + bar[0].length)}`;
+  const percent = LAST_PERCENT.exec(out);
+  if (percent !== null && percent.index !== undefined) {
+    out = `${out.slice(0, percent.index)}100%${out.slice(percent.index + percent[0].length)}`;
+  }
+  return out;
+}
+
+/**
  * F4 pin rule: `pinned` = the LAST progress-shaped line, but only while it
- * still sits within the last `recency` lines of the buffer — i.e. the
- * animation is active (frames collapse IN PLACE, so a live bar is always at
- * or near the end). Once `Compiled` and later lines push the bar past that
- * window it unpins and flows as normal history: a stale 93% frame never
- * stays parked at the bottom.
+ * is still the build's live frame:
+ * - F8: a terminal build line ANYWHERE after it kills the pin immediately,
+ *   and the bar settles into the body as its completed final frame
+ *   (`completeProgressFrame`) at its original position — never duplicated.
+ * - F4 recency: once later lines push the bar past the last `recency`
+ *   lines it unpins as plain history (a stale bar is not an active
+ *   animation — frames collapse IN PLACE, so a live bar sits at/near the
+ *   buffer end).
  */
 export function partitionPinned(
   lines: readonly DevTuiLine[],
@@ -150,6 +194,19 @@ export function partitionPinned(
   for (let i = lines.length - 1; i >= 0; i -= 1) {
     const line = lines[i];
     if (line === undefined || !isProgressShaped(line)) continue;
+    if (lines.slice(i + 1).some(isTerminalBuildLine)) {
+      // The build ended: the bar is no longer live — drop the flag so the
+      // renderer stops animating it.
+      const { live: _settled, ...rest } = line;
+      const completed: DevTuiLine = {
+        ...rest,
+        text: completeProgressFrame(line.text),
+      };
+      return {
+        pinned: undefined,
+        body: lines.map((candidate, j) => (j === i ? completed : candidate)),
+      };
+    }
     if (i < lines.length - Math.max(1, recency)) break; // stale: history
     return { pinned: line, body: lines.filter((_, j) => j !== i) };
   }
@@ -200,10 +257,11 @@ const BAR_RUN = /[=\-█▓▒░#]{2,}/g;
 /**
  * Normalization shared by candidate detection and live matching: strip
  * timestamps and spinner glyphs, squash progress-bar runs to `#` and any
- * percentage to `%`, drop up to 6 trailing dots, collapse whitespace.
- * Also reports whether the ORIGINAL text looks like animation (a braille
- * glyph, a percentage, a bracketed bar, or trailing dots) — plain identical
- * lines must NOT collapse, only frames do.
+ * percentage to `%`, drop ANY trailing dot run (F7: no length cap — a
+ * 60-frame flood of `Building........` dots must collapse too), collapse
+ * whitespace. Also reports whether the ORIGINAL text looks like animation
+ * (a braille glyph, a percentage, a bracketed bar, or trailing dots) —
+ * plain identical lines must NOT collapse, only frames do.
  */
 function normalizeKey(raw: string): { key: string; animated: boolean } {
   const trimmed = raw.trim();
@@ -213,7 +271,7 @@ function normalizeKey(raw: string): { key: string; animated: boolean } {
     .replace(BAR_RUN, '#')
     .replace(PERCENT_RUN, '%');
   const dots = /\.+$/.exec(k);
-  if (dots !== null && dots[0].length <= 6) {
+  if (dots !== null) {
     k = k.slice(0, k.length - dots[0].length);
   }
   k = k.replace(/\s+/g, ' ').trim();
@@ -221,7 +279,7 @@ function normalizeKey(raw: string): { key: string; animated: boolean } {
     BRAILLE.test(trimmed) ||
     PERCENT.test(trimmed) ||
     PROGRESS_BAR.test(trimmed) ||
-    /\.{1,6}$/.test(trimmed);
+    /\.$/.test(trimmed);
   return { key: k, animated };
 }
 
@@ -266,6 +324,9 @@ export interface DevTuiRenderRow extends DevTuiRow {
   color: DevTuiColor;
   /** e.g. `8082 (was 8081)` when the port was reassigned. */
   portLabel?: string;
+  /** F10: log lines that arrived while this row was NOT selected. Cleared by
+   * `markViewed` (the app calls it when the selection lands on the row). */
+  unread: number;
 }
 
 /** One kept log line. `live: true` marks the collapsing line being updated. */
@@ -319,6 +380,8 @@ export interface DevTuiModel {
   visibleRows(): DevTuiRenderRow[];
   selectedIndex(): number;
   selectedRow(): DevTuiRow | undefined;
+  /** Config key of the selected row (`undefined` with an empty roster). */
+  selectedKey(): string | undefined;
   selectedLines(): DevTuiLine[];
   selectedHiddenCount(): number;
   /** Key or name lookup; false (and no move) when unknown. */
@@ -329,6 +392,9 @@ export interface DevTuiModel {
   selectNext(): void;
   /** Clamp (no wrap). */
   selectPrev(): void;
+  /** F10: clear the row's unread count (the UI calls it when selection
+   * lands on it; the row answers to key OR name). */
+  markViewed(keyOrName: string): void;
   /** Log copies for `app` (key or name); empty when unknown. */
   lines(app: string): DevTuiLine[];
   hiddenCount(app: string): number;
@@ -349,6 +415,8 @@ interface RowState {
   row: DevTuiRow;
   lines: LineRecord[];
   hidden: number;
+  /** F10: lines logged while this row was not the selection. */
+  unread: number;
 }
 
 function toPublicLine(record: LineRecord): DevTuiLine {
@@ -361,12 +429,14 @@ function toPublicLine(record: LineRecord): DevTuiLine {
   };
 }
 
-function toRenderRow(row: DevTuiRow): DevTuiRenderRow {
+function toRenderRow(state: RowState): DevTuiRenderRow {
+  const row = state.row;
   const presentation = statusPresentation(row.status);
   return {
     ...row,
     glyph: presentation.glyph,
     color: presentation.color,
+    unread: state.unread,
     ...(row.port !== undefined
       ? {
           portLabel:
@@ -408,6 +478,7 @@ export function createDevTuiModel(
     },
     lines: [],
     hidden: 0,
+    unread: 0,
   }));
   if (options.launchName !== undefined) {
     states.push({
@@ -419,6 +490,7 @@ export function createDevTuiModel(
       },
       lines: [],
       hidden: 0,
+      unread: 0,
     });
   }
 
@@ -438,6 +510,11 @@ export function createDevTuiModel(
 
   function indexOfState(state: RowState): number {
     return states.findIndex((candidate) => candidate === state);
+  }
+
+  /** The row the selection currently sits on (`undefined` when empty). */
+  function selectedState(): RowState | undefined {
+    return stateAt(selection);
   }
 
   function appendLine(
@@ -488,6 +565,9 @@ export function createDevTuiModel(
       const state = index.get(app);
       if (state === undefined) return false;
       appendLine(state, stream, line, at);
+      // F10: activity the viewer has not seen yet. Logs for the SELECTED
+      // row are being watched live, so they never count as unread.
+      if (state !== selectedState()) state.unread += 1;
       return true;
     },
     status(app, status, port, pid) {
@@ -513,14 +593,17 @@ export function createDevTuiModel(
       return states.map((state) => ({ ...state.row }));
     },
     visibleRows() {
-      return states.map((state) => toRenderRow(state.row));
+      return states.map((state) => toRenderRow(state));
     },
     selectedIndex() {
       return selection;
     },
     selectedRow() {
-      const state = stateAt(selection);
+      const state = selectedState();
       return state === undefined ? undefined : { ...state.row };
+    },
+    selectedKey() {
+      return selectedState()?.row.key;
     },
     selectedLines() {
       const state = stateAt(selection);
@@ -547,6 +630,10 @@ export function createDevTuiModel(
     selectPrev() {
       if (states.length > 0) selection = clamp(selection - 1);
     },
+    markViewed(keyOrName) {
+      const state = index.get(keyOrName);
+      if (state !== undefined) state.unread = 0;
+    },
     lines(app) {
       return index.get(app)?.lines.map(toPublicLine) ?? [];
     },
@@ -556,7 +643,7 @@ export function createDevTuiModel(
     snapshot() {
       const row = selection >= 0 ? states[selection] : undefined;
       return {
-        rows: states.map((state) => toRenderRow(state.row)),
+        rows: states.map((state) => toRenderRow(state)),
         selectedIndex: selection,
         ...(row !== undefined ? { selectedKey: row.row.key } : {}),
         lines: row !== undefined ? row.lines.map(toPublicLine) : [],

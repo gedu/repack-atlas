@@ -46,9 +46,15 @@ export const DEV_TUI_FRAME_MS = 100;
 
 const DEFAULT_COLUMNS = 80;
 const DEFAULT_ROWS = 24;
-const HELP_LINES = 3;
+const HELP_LINES = 4;
 const HELP_KEYS = '↑↓ select · PgUp scroll';
-const HELP_WHEEL = 'wheel · shift+drag copy';
+/** F11 footer lines (the sidebar is 23 cols, so the pair splits across two).
+ * What `m` does right now, and what copying costs in the current mouse
+ * state. While off, the terminal owns the wheel and native drag works
+ * without Shift; the full-row highlight a native selection paints is the
+ * terminal's rendering artifact, not something this app draws. */
+const HELP_MOUSE_ON = ['m mouse on · wheel', 'shift+drag copy'] as const;
+const HELP_MOUSE_OFF = ['m mouse off · native', 'drag copy'] as const;
 /** Log lines a wheel notch scrolls (F1). */
 const WHEEL_SCROLL_LINES = 3;
 
@@ -108,12 +114,21 @@ const AUTO_GLYPH: Record<LineKind, string | undefined> = {
   progress: undefined,
 };
 
-/** Symbols Re.Pack's own reporter prints; a leading one is recolored rather
- * than duplicated. */
-const LEADING_SYMBOL = /^(\s*)([ℹ⚠✖✔✓√×✗])([\s\S]*)$/;
+/**
+ * Symbols Re.Pack's own reporter prints; a leading one is recolored rather
+ * than duplicated. F9 adds the FALLBACK ascii set (`i` info, `!` warn, `x`
+ * error, `✓` success, `->` link/arrow) that piped children emit when the
+ * terminal has no unicode support. The ascii tokens REQUIRE a following
+ * space, so `iO`-style words never match; `! ` doubles as the stderr marker
+ * the renderer already draws — detected as a symbol there, it suppresses the
+ * marker instead of doubling it.
+ */
+const LEADING_SYMBOL = /^(\s*)([ℹ⚠✖✔✓√×✗]|->|[i!x])(?= )([\s\S]*)$/;
 
 /** Re.Pack colors the level SYMBOL by level, whatever the heuristic kind
- * says — `✔ ...` reads green even when classification called it info. */
+ * says — `✔ ...` reads green even when classification called it info.
+ * The ascii fallbacks (F9) carry the same colors as their unicode twins;
+ * `->` is cyan, the palette's link/pointer accent. */
 const SYMBOL_COLOR: Record<string, DevTuiColor> = {
   'ℹ': 'blue',
   '⚠': 'yellow',
@@ -123,6 +138,10 @@ const SYMBOL_COLOR: Record<string, DevTuiColor> = {
   '✔': 'green',
   '✓': 'green',
   '√': 'green',
+  i: 'blue',
+  '!': 'yellow',
+  x: 'red',
+  '->': 'cyan',
 };
 
 export function symbolColor(symbol: string): DevTuiColor | undefined {
@@ -135,8 +154,11 @@ export interface LeadingSymbol {
   rest: string;
 }
 
-/** Split a leading level symbol (if any) so the renderer can color just the
- * glyph and leave the message plain (F5: colored symbol, plain message). */
+/**
+ * Split a leading level symbol (if any) so the renderer can color just the
+ * glyph and leave the message plain (F5: colored symbol, plain message).
+ * F9 extends the match to the ascii fallback set (space-separated).
+ */
 export function splitLeadingSymbol(text: string): LeadingSymbol {
   const match = LEADING_SYMBOL.exec(text);
   if (match === null) {
@@ -147,8 +169,32 @@ export function splitLeadingSymbol(text: string): LeadingSymbol {
     symbol: match[2],
     // Trim the separator space; the renderer re-inserts exactly one so a
     // symbol never swallows or doubles the gap before the message.
+    // (`(?= )` is a lookahead — the rest group is the THIRD capture.)
     rest: (match[3] ?? '').replace(/^\s/, ''),
   };
+}
+
+// F9 polish: Re.Pack prefixes leveled lines with a `[hh:mm:ss.SSSZ]` span
+// the console reporter dims. Match it ONLY at the line start (after the
+// optional level symbol was split off) — a time mentioned mid-message stays
+// part of the message.
+const LEADING_TIMESTAMP = /^(\[\d{1,2}:\d{2}:\d{2}(?:[.,]\d{1,3})?Z?\])([\s\S]*)$/;
+
+export interface LeadingTimestamp {
+  /** The bracketed `[hh:mm:ss(.SSS)Z]` span, `undefined` when absent. */
+  stamp: string | undefined;
+  /** The remainder, verbatim (keeps its own spacing after the stamp). */
+  rest: string;
+}
+
+/** Split a leading Re.Pack timestamp so the renderer dims ONLY the span
+ * (F9 polish: dim `[14:37:11.074Z]`, message keeps the default foreground). */
+export function splitTimestamp(text: string): LeadingTimestamp {
+  const match = LEADING_TIMESTAMP.exec(text);
+  if (match === null) {
+    return { stamp: undefined, rest: text };
+  }
+  return { stamp: match[1], rest: match[2] ?? '' };
 }
 
 /** F3 dot cycle: grow 1→6, shrink 5→2 — ten 100ms frames, then repeat. */
@@ -173,6 +219,22 @@ export function animateLiveDots(text: string, frame: number): string {
 export function stripSpinner(text: string): string {
   const stripped = text.replace(/[\s\u2800-\u28FF]*[\u2800-\u28FF][\s\u2800-\u28FF]*/g, ' ');
   return stripped === text ? text : stripped.trimStart();
+}
+
+/** F10 bounce cycle for the unread badge (four 100ms frames: rest, low,
+ * high, low). Subtle by construction: one dim glyph, not a marquee. */
+const ACTIVITY_GLYPHS = ['·', '▁', '▃', '▁'];
+
+/**
+ * F10: the sidebar activity marker for a row with unread lines — a bouncing
+ * glyph plus the count (capped `99+`), ≤4 chars before the count. Empty
+ * string = no badge. Cleared by the model when the row is selected.
+ */
+export function activityBadge(unread: number, frame: number): string {
+  if (unread <= 0) return '';
+  const glyph = ACTIVITY_GLYPHS[Math.abs(frame) % ACTIVITY_GLYPHS.length];
+  const count = unread > 99 ? '99+' : String(unread);
+  return `${glyph ?? '▁'}${count}`;
 }
 
 // SGR mouse report: ESC [ < button ; col ; row M (press) | m (release).
@@ -253,16 +315,21 @@ export function DevTuiApp({
   }, []);
 
   // F1: claim the wheel by asking the terminal for mouse reports (DECSET
-  // 1000 + SGR 1006) for exactly as long as this component is mounted. Real
-  // TTY only — writing the codes into a non-TTY stream (tests, pipes) would
-  // leak escape bytes into captured output.
+  // 1000 + SGR 1006) for exactly as long as this component is mounted AND
+  // the human has not toggled them off with `m` (F11). Real TTY only —
+  // writing the codes into a non-TTY stream (tests, pipes) would leak escape
+  // bytes into captured output. Toggling re-runs the effect: turning off
+  // writes the OFF decseq (native drag-copy works without Shift again);
+  // unmounting with tracking on writes it exactly once.
+  const [mouseOn, setMouseOn] = useState(true);
   useEffect(() => {
     if (stdout.isTTY !== true) return;
+    if (!mouseOn) return;
     stdout.write(MOUSE_TRACKING_ON);
     return () => {
       stdout.write(MOUSE_TRACKING_OFF);
     };
-  }, [stdout]);
+  }, [stdout, mouseOn]);
 
   // Scroll offset per app key, counted from the bottom. Absent entry = 0 =
   // autoscroll. Selection moves FORGET the new app's offset (per-app
@@ -273,20 +340,36 @@ export function DevTuiApp({
   const selectedKey = snap.selectedKey;
   const selectedRow = snap.rows.find((row) => row.key === selectedKey);
 
+  // F10: the viewer is looking at the selected row, so its unread counter is
+  // stale the moment the selection lands on it. Keyed on `selectedKey`, this
+  // fires for EVERY selection path (keys, wheel, tab, seam) without each one
+  // having to remember to call `markViewed`.
+  useEffect(() => {
+    if (selectedKey !== undefined) model.markViewed(selectedKey);
+  }, [model, selectedKey]);
+
   // F4: the active progress bar pins to the panel's last row; the rest flows
-  // around it. `partitionPinned` unpins once the bar is no longer recent.
+  // around it. `partitionPinned` kills the pin on a terminal build line (F8)
+  // and once the bar is no longer recent.
   const hiddenNoteHeight = snap.hiddenLines > 0 ? 1 : 0;
   const pageHeight = Math.max(1, rows - 1 - hiddenNoteHeight);
   const { pinned, body } = partitionPinned(snap.lines);
   const bodyPage = Math.max(1, pageHeight - (pinned === undefined ? 0 : 1));
   const storedOffset =
     selectedKey === undefined ? 0 : (scrolls[selectedKey] ?? 0);
-  const window = logWindow(body.length, storedOffset, bodyPage);
+  // F6: clamp the stored offset to what the body can actually scroll — the
+  // window function already clamps, but key arithmetic (PgUp, wheel) must
+  // never grow a runaway offset that the clamp would silently hide.
+  const maxOffset = Math.max(0, body.length - bodyPage);
+  const offset = Math.min(storedOffset, maxOffset);
+  const window = logWindow(body.length, offset, bodyPage);
   const shown = body.slice(window.start, window.end);
 
   const setScroll = (key: string | undefined, offset: number): void => {
     if (key === undefined) return;
-    const next = Math.max(0, offset);
+    // F6: clamp against the body's real scroll depth (same max the render
+    // window clamps with), so stored offsets can never run past the top.
+    const next = Math.min(Math.max(0, offset), maxOffset);
     setScrolls((prev) => {
       if (next === 0) {
         if (prev[key] === undefined) return prev;
@@ -323,14 +406,16 @@ export function DevTuiApp({
     // column decides the pane: sidebar rows move the selection by one, the
     // log panel scrolls by WHEEL_SCROLL_LINES. Other mouse traffic (clicks,
     // drags, releases) is swallowed, never interpreted as a key.
-    const wheels = parseWheelEvents(input);
+    // F11: with tracking toggled off the terminal sends no reports — and a
+    // stale one from a racing terminal must never move anything, so the
+    // routing is state-gated here as well.
+    const wheels = mouseOn ? parseWheelEvents(input) : [];
     if (wheels.length > 0) {
       for (const wheel of wheels) {
         if (wheel.col > SIDEBAR_WIDTH) {
           setScroll(
             selectedKey,
-            storedOffset +
-              (wheel.dir === 'up' ? WHEEL_SCROLL_LINES : -WHEEL_SCROLL_LINES)
+            offset + (wheel.dir === 'up' ? WHEEL_SCROLL_LINES : -WHEEL_SCROLL_LINES)
           );
         } else {
           moveSelection((target) =>
@@ -354,11 +439,11 @@ export function DevTuiApp({
       return;
     }
     if (key.pageUp) {
-      setScroll(selectedKey, storedOffset + halfPage);
+      setScroll(selectedKey, offset + halfPage);
       return;
     }
     if (key.pageDown) {
-      setScroll(selectedKey, storedOffset - halfPage);
+      setScroll(selectedKey, offset - halfPage);
       return;
     }
     if (key.end) {
@@ -385,10 +470,17 @@ export function DevTuiApp({
         moveSelection((target) => target.selectPrev());
         return;
       case 'g':
-        setScroll(selectedKey, Math.max(0, body.length - bodyPage));
+        setScroll(selectedKey, maxOffset);
         return;
       case 'G':
         setScroll(selectedKey, 0);
+        return;
+      case 'm':
+        // F11: flip mouse reporting. While off the terminal owns the wheel
+        // and native drag-copy works without Shift (the footer says so).
+        // Full-row highlight during a native selection is the terminal's
+        // rendering, not something this app draws.
+        setMouseOn((on) => !on);
         return;
       case 'v':
       case 'o':
@@ -426,9 +518,16 @@ export function DevTuiApp({
         {listRows.map((row, index) => {
           const selected = index === snap.selectedIndex;
           const port = row.portLabel ?? '';
+          // F10: never badge the row being watched — the counter itself
+          // clears via markViewed (above); clamping here covers the one
+          // render between selection and the effect.
+          const badge = selected ? '' : activityBadge(row.unread, frame);
           const nameWidth = Math.max(
             4,
-            sidebarContentWidth - 3 - (port === '' ? 0 : port.length + 1)
+            sidebarContentWidth -
+              3 -
+              (port === '' ? 0 : port.length + 1) -
+              (badge === '' ? 0 : badge.length + 1)
           );
           return (
             <Box key={row.key}>
@@ -442,6 +541,7 @@ export function DevTuiApp({
                 {truncate(row.name, nameWidth)}
               </Text>
               {port === '' ? null : <Text dimColor>{` ${port}`}</Text>}
+              {badge === '' ? null : <Text dimColor>{` ${badge}`}</Text>}
             </Box>
           );
         })}
@@ -449,9 +549,11 @@ export function DevTuiApp({
           <Text dimColor wrap="truncate">
             {truncate(HELP_KEYS, sidebarContentWidth)}
           </Text>
-          <Text dimColor wrap="truncate">
-            {truncate(HELP_WHEEL, sidebarContentWidth)}
-          </Text>
+          {(mouseOn ? HELP_MOUSE_ON : HELP_MOUSE_OFF).map((helpLine) => (
+            <Text key={helpLine} dimColor wrap="truncate">
+              {truncate(helpLine, sidebarContentWidth)}
+            </Text>
+          ))}
           <Text dimColor wrap="truncate">
             {truncate(
               onOpenStudio === undefined ? 'q quit' : 'v studio · q quit',
@@ -492,7 +594,7 @@ export function DevTuiApp({
   );
 }
 
-/** One log row (F5 palette + F3/F4 progress cosmetics). */
+/** One log row (F5 palette + F9 ascii glyphs/dim timestamps + F3/F4 progress cosmetics). */
 function LogLine({ line, frame }: { line: DevTuiLine; frame: number }) {
   let text = line.text;
   if (line.kind === 'progress') {
@@ -505,8 +607,12 @@ function LogLine({ line, frame }: { line: DevTuiLine; frame: number }) {
     }
   }
   const { indent, symbol, rest } = splitLeadingSymbol(text);
+  // F9 polish: the Re.Pack `[hh:mm:ss.SSSZ]` span renders dim, the message
+  // keeps the default foreground.
+  const { stamp, rest: message } = splitTimestamp(rest);
   // stderr marker: yellow `!` (Re.Pack's warn color) only when the child
-  // printed no level symbol of its own — `! ⚠ …` never doubles up.
+  // printed no level symbol of its own — `! ⚠ …` never doubles up (F9: a
+  // leading ascii `! ` IS such a symbol, so it reads as the warn glyph).
   const marker = line.stream === 'stderr' && symbol === undefined;
   const glyph = symbol ?? (marker ? undefined : AUTO_GLYPH[line.kind]);
   const glyphColor =
@@ -527,11 +633,12 @@ function LogLine({ line, frame }: { line: DevTuiLine; frame: number }) {
       {glyph === undefined || rest === '' || /^\s/.test(rest) ? null : (
         <Text>{' '}</Text>
       )}
+      {stamp === undefined ? null : <Text dimColor>{stamp}</Text>}
       <Text
         {...(line.live === true ? { dimColor: true } : {})}
         wrap="truncate"
       >
-        {rest}
+        {message}
       </Text>
     </Box>
   );
