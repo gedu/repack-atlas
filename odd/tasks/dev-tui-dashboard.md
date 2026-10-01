@@ -308,6 +308,15 @@ alt-screen); #6 multi-terminal ❌ (only Ghostty smoke so far); #7 pure logic �
       (03dd574). Second died after committing tests early (84156db); fresh
       audit worker verified 733/733 and found no bugs.
 
+- Native review of the whole slice (`be14f25..b5565a7`, medium, 2292 lines):
+  consented by the user, single review-reliability lens, APPROVED and
+  acknowledged (authority burned, lineage review-0399083ecba945d7). Two
+  non-blocking SUGGESTIONS for later work: (a) wizard-model ask() has no
+  guard against a second concurrent call orphaning the first promise
+  (sequential-by-port-today); (b) wizard.tsx close() doesn't try/catch
+  `instance.unmount()`, so a pathological ink teardown could skip the
+  cursor/raw-mode cleanup. Reviewed boundary advanced to `b5565a7`.
+
 ### Next step
 - User terminal smoke: `node dist/cli.js dev` in the showcase/fixtures —
   balloon banner + ink wizard + dashboard, on Ghostty AND one of
