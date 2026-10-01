@@ -28,10 +28,24 @@ Behavior and `--json` contract stay unchanged unless an advisory is a real bug.
 
 ## Tasks
 
-- [ ] T1 Runtime advisories A1–A5 (one commit: refactor/fix with tests).
-- [ ] T2 Test and prompt advisories A6–A9 (one commit).
+- [x] T1 Runtime advisories A1–A5 (one commit: refactor/fix with tests). Commit 8ed8d38.
+- [x] T2 Test and prompt advisories A6–A9 (one commit). Commit 4d0ebfd.
 
 Route: delegated direct, one writer (2+ non-trivial files).
+
+## Outcomes
+
+All nine advisories still applied on the current code; none was resolved by #38/#40.
+
+- A1 fixed in 8ed8d38: `DevPlanEntry.declaredPort` now only means "what the plan asked for" (`null` = auto); `applyAssignments` records the result in the new `allocatedPort`; `toPlanEventApps` projects `allocatedPort ?? declaredPort` into the unchanged `port` field.
+- A2 fixed in 8ed8d38: `OneShotEvent` gained a typed `spawn-failed` member; the `spawn-error` signal string is confined to the process-runner port and to the `--json` launch event, which keeps emitting it for compatibility.
+- A3 fixed in 8ed8d38: `spawnOneShot` contains a throwing `onOneShot` hook at every call and a rejecting `waitForExit`; tests in `tests/runner/supervisor.test.ts`.
+- A4 fixed in 8ed8d38: when the app root cannot be listed and the `config` field does not decide, the toolchain carries `bundlerNote`, the plan returns it as `warnings`, and the CLI prints `dev: warning  <app>: ...` on stderr.
+- A5 fixed in 8ed8d38: there was no `--platform` value check in `loadDevPlan`; the duplicate was the `--launch needs a single platform` guard. Both now use `LAUNCH_NEEDS_PLATFORM_REASON` (guard kept for non-CLI callers).
+- A6 fixed in 4d0ebfd: the test moved to `tests/runner/toolchain.test.ts`.
+- A7 fixed in 4d0ebfd (behavior change, `fix`): only an option whose `value` is `none` suppresses the readline `none` keyword; a label alone no longer does. `emptyHint` comment and the `atlas-runner` skill updated.
+- A8 fixed in 4d0ebfd: the host-only wizard test is split into three tests, one behavior each.
+- A9 fixed in 4d0ebfd: runner tests run on a temp copy of `fixtures/workspace` with free remote ports; the fixture is untouched.
 
 ## Checks
 
@@ -50,7 +64,8 @@ Single PR to main (owner pattern: PR, gga, merge).
 ## Progress
 
 - Branch `fix/review-advisories` from main `4596181`.
+- T1 and T2 done; full checks green after each commit.
 
 ## Next step
 
-T1.
+Open the PR to main (owner pattern: PR, gga, merge).
