@@ -253,11 +253,19 @@ export type PromptResult<T> =
   | { status: 'cancelled' };
 
 export interface PromptPort {
-  /** Zero or more of `options`; `initialValues` are pre-selected. */
+  /**
+   * One or more of `options`; `initialValues` are pre-selected. With
+   * `emptyHint` an empty selection is valid too.
+   */
   multiselect(question: {
     message: string;
     options: PromptOption[];
     initialValues?: string[];
+    /** When set, an empty selection is allowed and means this; adapters must
+     * offer a way to choose it. Exception: the readline adapter's `none`
+     * keyword yields to an option literally named `none`, so there the empty
+     * selection is unreachable. */
+    emptyHint?: string;
   }): Promise<PromptResult<string[]>>;
   /** Exactly one of `options` (its `value`). */
   select(question: {

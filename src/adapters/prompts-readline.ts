@@ -65,6 +65,9 @@ function createLineReader(
   };
 }
 
+/** Readline answer for "nothing" when a multiselect has an `emptyHint`. */
+const NONE_KEYWORD = 'none';
+
 const matchOption = (
   options: PromptOption[],
   answer: string
@@ -99,12 +102,22 @@ export function createReadlinePrompts(
       guard(async () => {
         const initial = question.initialValues ?? [];
         const names = question.options.map((option) => option.value).join(', ');
+        // `none` selects nothing, unless an option is literally named `none`:
+        // then the option wins and the keyword is not offered.
+        const noneHint =
+          question.emptyHint !== undefined &&
+          matchOption(question.options, NONE_KEYWORD) === undefined
+            ? question.emptyHint
+            : undefined;
         for (;;) {
           const answer = (
             await reader.question(
-              `${question.message} (comma-separated, ${initial.length > 0 ? `empty = ${initial.join(', ')}; ` : ''}options: ${names}): `
+              `${question.message} (comma-separated, ${initial.length > 0 ? `empty = ${initial.join(', ')}; ` : ''}${noneHint !== undefined ? `${NONE_KEYWORD} = ${noneHint}; ` : ''}options: ${names}): `
             )
           ).trim();
+          if (noneHint !== undefined && answer.toLowerCase() === NONE_KEYWORD) {
+            return { status: 'ok', value: [] };
+          }
           if (answer === '') {
             // An empty line takes the preselection; with none to take, re-ask.
             if (initial.length > 0) return { status: 'ok', value: initial };

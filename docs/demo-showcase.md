@@ -252,7 +252,8 @@ for p in 8081 9001 9002 9003 8099; do lsof -ti ":$p" | xargs kill -9 2>/dev/null
 node ../repack-atlas/dist/cli.js dev
 ```
 
-Walk the audience through it: remotes (all preselected), platform, launch (only
+Walk the audience through it: remotes (all preselected; the readline
+fallback reads `none` as host only), platform, launch (only
 once a single platform is picked), a port per app, standalone. Ctrl-C at any
 question exits 0 with nothing started. Then the other two entry points:
 

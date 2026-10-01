@@ -194,7 +194,8 @@ branch merges to main once at the end.
   acknowledged. Demo runbook marks the wizard, `--dry-run`, `--launch` and
   Atlas-built argv as "not yet re-verified on the showcase".
 - Open follow-ups: host-only session reachable in clack (`required: false`)
-  but not in readline (empty line = preselected all) — owner decision;
+  but not in readline (empty line = preselected all) — RESOLVED: owner
+  decision, readline accepts `none` (`emptyHint` on `PromptPort.multiselect`);
   T7 review advisories on `dev-wizard-gate.test.ts:177-187` (dropped exit
   code assert, weak "not offered" proof) and readline re-ask
   (`prompts-readline.ts:108-122`); carried T5 code advisories
