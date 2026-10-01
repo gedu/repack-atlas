@@ -134,6 +134,7 @@ Direction of dependency: adapters → ports in core. Core never imports outward.
 | `atlas-bridge-vendoring` | Trigger: touching src/repack-bridge/, src/repack-bridge/vendored/, or VENDORED.md; copying code out of Re.Pack; a bridge import fails with ERR_PACKAGE_PATH_NOT_EXPORTED. | `.agents/skills/atlas-bridge-vendoring/SKILL.md` |
 | `atlas-dev-setup` | Trigger: set up, install, build, run, test, or debug this repo locally; "it does not build"; fresh clone; CI failing on a check you cannot reproduce locally. | `.agents/skills/atlas-dev-setup/SKILL.md` |
 | `atlas-doctor-finding` | Trigger: adding or changing a doctor check or finding, a finding code such as REMOTE_CYCLE or SHARED_VERSION_DRIFT, the doctor --json output shape, or a finding that has no fixture yet. | `.agents/skills/atlas-doctor-finding/SKILL.md` |
+| `atlas-runner` | Trigger: touching repack-atlas dev, src/runner/, src/cli/dev.ts, src/cli/dev-wizard.ts, the prompt adapters, a dev flag, or a dev --json event. | `.agents/skills/atlas-runner/SKILL.md` |
 
 <!-- END auto-generated skills table -->
 
@@ -164,6 +165,8 @@ before writing code.
 | adding a new doctor finding code | `atlas-doctor-finding` |
 | changing an existing doctor rule or its severity | `atlas-doctor-finding` |
 | changing the doctor --json report shape | `atlas-doctor-finding` |
+| changing the dev runner, its flags or its --json events | `atlas-runner` |
+| changing the dev wizard or the prompt adapters | `atlas-runner` |
 
 <!-- END auto-generated auto-invoke table -->
 
