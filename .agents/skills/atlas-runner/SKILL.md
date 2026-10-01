@@ -48,7 +48,9 @@ returns the declared long flags.
 ## Running the CLI: shim first
 
 The resolver also returns the app's `node_modules/.bin/react-native` shim
-(`.cmd` plus a shell on win32). Atlas spawns the shim directly for `start` and
+(`react-native.cmd` on win32, spawned as `cmd.exe /d /s /c` with
+`windowsVerbatimArguments` and `quoteForCmd`-escaped args, never
+`shell: true`). Atlas spawns the shim directly for `start` and
 `run-<platform>`: pnpm's shim exports `NODE_PATH`, without which
 `node <cli.js>` cannot find the platform plugins (`Unrecognized platform`,
 `Cannot find module '@react-native/community-cli-plugin'`). Only without a shim
