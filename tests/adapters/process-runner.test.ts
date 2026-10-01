@@ -88,6 +88,48 @@ describe('start / streams / exit', () => {
   });
 });
 
+describe('writeStdin (F12)', () => {
+  it('bytes written reach the child stdin and flow back out', async () => {
+    // `node -e` reading stdin is the smallest honest proof the pipe is
+    // really wired: echo one line back and assert it came out of stdout.
+    const handle = runner.start({
+      file: process.execPath,
+      args: [
+        '-e',
+        'process.stdin.setEncoding("utf-8");process.stdin.on("data",(d)=>process.stdout.write("echo:"+d));',
+      ],
+    });
+    const lines: string[] = [];
+    handle.subscribeToStdout((line) => lines.push(line));
+    assert.equal(handle.writeStdin?.('hello\n'), true);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    assert.deepEqual(lines, ['echo:hello']);
+    handle.signal('SIGKILL');
+    await handle.waitForExit();
+  });
+
+  it('reports false once the child is gone, without crashing the host', async () => {
+    // EPIPE on a dead child's stdin must surface as `false`, never as an
+    // unhandled 'error' event on the stream.
+    const rejections: unknown[] = [];
+    const onError = (error: Error) => rejections.push(error);
+    process.on('error', onError);
+    try {
+      const handle = runner.start({
+        file: process.execPath,
+        args: ['-e', 'process.exit(0)'],
+      });
+      await handle.waitForExit();
+      const wrote = handle.writeStdin?.('late\n') ?? false;
+      assert.equal(wrote, false);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      assert.deepEqual(rejections, []);
+    } finally {
+      process.off('error', onError);
+    }
+  });
+});
+
 describe('killTree', () => {
   it('kills the whole process group: no orphan grandchild survives', async () => {
     // The child spawns a grandchild that ignores SIGINT; both share the

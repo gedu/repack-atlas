@@ -26,7 +26,7 @@
 // terminal's bypass modifier (Shift on most terminals) — the footer says so.
 
 import { Box, Text, useInput, useStdout } from 'ink';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   type DevTuiColor,
   type DevTuiLine,
@@ -46,8 +46,12 @@ export const DEV_TUI_FRAME_MS = 100;
 
 const DEFAULT_COLUMNS = 80;
 const DEFAULT_ROWS = 24;
-const HELP_LINES = 4;
+const HELP_LINES = 5;
 const HELP_KEYS = '↑↓ select · PgUp scroll';
+/** F12: honest and minimal — the line reaches the app's stdin; whether the
+ * child reacts is the child's business (see the seam's CAVEAT comment).
+ * ≤23 chars: the sidebar content width, so the footer never truncates. */
+const HELP_INPUT = 'i send line to stdin';
 /** F11 footer lines (the sidebar is 23 cols, so the pair splits across two).
  * What `m` does right now, and what copying costs in the current mouse
  * state. While off, the terminal owns the wheel and native drag works
@@ -72,6 +76,14 @@ export interface DevTuiAppProps {
   onOpenStudio?: () => void;
   /** Fixed F3 animation frame (tests); omit to drive it from the 100ms tick. */
   frame?: number;
+  /**
+   * F12 typed input (`i` + Enter): route one line to the app with this row
+   * key; return whether anything received it (the supervisor's
+   * `writeAppInput`). Pass only when the session has a routable child —
+   * the keymap ignores `i` while the prop is absent, and rows whose role is
+   * `oneshot` never enter input mode (a one-shot has no persistent stdin).
+   */
+  onSendInput?: (key: string, line: string) => boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -292,6 +304,7 @@ export function DevTuiApp({
   onQuit,
   onOpenStudio,
   frame: frameProp,
+  onSendInput,
 }: DevTuiAppProps) {
   const { stdout } = useStdout();
   // The seam may run before the terminal reports a usable size (and the test
@@ -336,6 +349,20 @@ export function DevTuiApp({
   // autoscroll on select, per the task spec).
   const [scrolls, setScrolls] = useState<{ [key: string]: number }>({});
 
+  // F12: `i` opens a one-line input at the panel bottom. The draft lives in
+  // a REF mirrored into state: ink dispatches every byte of one chunk from
+  // the SAME (pre-update) render closure, so a fast `i`+char burst would
+  // otherwise read a stale `null` draft and leak the char to the keymap.
+  // The ref is the truth for the handler; the state exists to re-render.
+  // The seam supplies `onSendInput` only for sessions with a routable child;
+  // without it the mode cannot open at all.
+  const [inputDraft, setInputDraft] = useState<string | null>(null);
+  const inputLineRef = useRef<string | null>(null);
+  const setInputLine = (next: string | null): void => {
+    inputLineRef.current = next;
+    setInputDraft(next);
+  };
+
   const snap = model.snapshot();
   const selectedKey = snap.selectedKey;
   const selectedRow = snap.rows.find((row) => row.key === selectedKey);
@@ -351,8 +378,12 @@ export function DevTuiApp({
   // F4: the active progress bar pins to the panel's last row; the rest flows
   // around it. `partitionPinned` kills the pin on a terminal build line (F8)
   // and once the bar is no longer recent.
+  // F12: an open input line owns the panel's last row, so the page shrinks.
   const hiddenNoteHeight = snap.hiddenLines > 0 ? 1 : 0;
-  const pageHeight = Math.max(1, rows - 1 - hiddenNoteHeight);
+  const pageHeight = Math.max(
+    1,
+    rows - 1 - hiddenNoteHeight - (inputDraft !== null ? 1 : 0)
+  );
   const { pinned, body } = partitionPinned(snap.lines);
   const bodyPage = Math.max(1, pageHeight - (pinned === undefined ? 0 : 1));
   const storedOffset =
@@ -402,6 +433,42 @@ export function DevTuiApp({
 
   useInput((input, key) => {
     refresh();
+    // F12: input mode owns every keystroke while open — the normal keymap
+    // never sees any of it (no accidental quit, scroll, or mouse toggle
+    // while typing). Esc cancels; Enter sends the draft as one line to the
+    // selected app and exits the mode; Backspace/Delete trims; printable
+    // characters append (a multi-char paste appends whole). The draft is
+    // read/written through the REF so every byte of one burst sees the
+    // previous one. A wheel notch with mouse tracking on arrives as
+    // printable SGR bytes and would land in the draft — typing and
+    // scrolling at once is the user's call.
+    const draft = inputLineRef.current;
+    if (draft !== null) {
+      if (key.escape) {
+        setInputLine(null);
+        return;
+      }
+      if (key.return) {
+        const target = draft.trim();
+        if (target !== '' && selectedKey !== undefined) {
+          onSendInput?.(selectedKey, target);
+        }
+        setInputLine(null);
+        return;
+      }
+      if (key.backspace || key.delete) {
+        setInputLine(draft.slice(0, -1));
+        return;
+      }
+      if (key.ctrl || key.meta || input === '') return;
+      // Printable only (controls would encode a keystroke, not text).
+      for (const char of input) {
+        const code = char.codePointAt(0) ?? 0;
+        if (code < 0x20 || code === 0x7f) return;
+      }
+      setInputLine(draft + input);
+      return;
+    }
     // F1: wheel first — it must never fall through to selection keys. The
     // column decides the pane: sidebar rows move the selection by one, the
     // log panel scrolls by WHEEL_SCROLL_LINES. Other mouse traffic (clicks,
@@ -482,6 +549,15 @@ export function DevTuiApp({
         // rendering, not something this app draws.
         setMouseOn((on) => !on);
         return;
+      case 'i':
+        // F12: open the input line for the selected app — only when the
+        // seam wired a route AND the row is a supervised app. The one-shot
+        // `launch` child is transient and never routable (supervisor docs),
+        // so the mode stays closed rather than silently dropping the line.
+        if (onSendInput !== undefined && selectedRow?.role !== 'oneshot') {
+          setInputLine('');
+        }
+        return;
       case 'v':
       case 'o':
         onOpenStudio?.();
@@ -554,6 +630,11 @@ export function DevTuiApp({
               {truncate(helpLine, sidebarContentWidth)}
             </Text>
           ))}
+          {onSendInput === undefined ? null : (
+            <Text dimColor wrap="truncate">
+              {truncate(HELP_INPUT, sidebarContentWidth)}
+            </Text>
+          )}
           <Text dimColor wrap="truncate">
             {truncate(
               onOpenStudio === undefined ? 'q quit' : 'v studio · q quit',
@@ -587,6 +668,18 @@ export function DevTuiApp({
         {pinned === undefined ? null : (
           <Box flexDirection="column" flexGrow={1} justifyContent="flex-end">
             <LogLine line={pinned} frame={frame} />
+          </Box>
+        )}
+        {/* F12: the one-line input at the panel bottom. Honest about what
+            Enter does: the line goes to the app's stdin — whether the child
+            reacts is the child's business (RN reads shortcuts from a TTY
+            stdin only). The draft is truncated to stay on ONE row: a wrap
+            would steal rows the page math already spent. */}
+        {inputDraft === null ? null : (
+          <Box>
+            <Text color="cyan">{'› '}</Text>
+            <Text>{truncate(inputDraft, panelContentWidth - 29)}</Text>
+            <Text dimColor>{' esc cancel · enter send line'}</Text>
           </Box>
         )}
       </Box>

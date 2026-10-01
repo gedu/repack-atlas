@@ -352,6 +352,104 @@ describe('dev tui app', () => {
     app.unmount();
     app.cleanup();
   });
+
+  it('types a line and sends it to the selected app on Enter (F12)', async () => {
+    const model = seededModel();
+    const sent: { key: string; line: string }[] = [];
+    const app = render(
+      <DevTuiApp
+        model={model}
+        onQuit={() => undefined}
+        onSendInput={(key, line) => {
+          sent.push({ key, line });
+          return true;
+        }}
+      />
+    );
+    await wait(150);
+    // Footer advertises the honest capability while a route exists.
+    assert.match(app.lastFrame() ?? '', /i send line to stdin/);
+    // `i` opens the prompt at the panel bottom.
+    app.stdin.write('i');
+    await wait(150);
+    assert.match(app.lastFrame() ?? '', /› /);
+    // Printable chars append; Backspace trims; the draft renders.
+    app.stdin.write('rs');
+    await wait(150);
+    app.stdin.write('\u007F'); // DEL = backspace in raw mode
+    await wait(150);
+    assert.match(app.lastFrame() ?? '', /› r\b/);
+    // Enter sends the exact line with the selected row's key, then closes.
+    // (Each real key is its own keypress chunk — ink parses a burst like
+    // `s\r` as ONE keypress, so Enter goes on its own write, as terminals
+    // always deliver it.)
+    app.stdin.write('s');
+    await wait(150);
+    app.stdin.write('\r');
+    await wait(150);
+    assert.deepEqual(sent, [{ key: 'host', line: 'rs' }]);
+    assert.doesNotMatch(app.lastFrame() ?? '', /› /);
+    // Esc cancels without sending.
+    app.stdin.write('i');
+    await wait(150);
+    app.stdin.write('abc');
+    await wait(150);
+    app.stdin.write('\u001B');
+    await wait(150);
+    assert.equal(sent.length, 1, 'Escape discarded the draft');
+    // An empty Enter sends nothing.
+    app.stdin.write('i');
+    await wait(150);
+    app.stdin.write('\r');
+    await wait(150);
+    assert.equal(sent.length, 1);
+    // Without the prop the mode cannot open at all (machine-safe default).
+    const plain = render(<DevTuiApp model={model} onQuit={() => undefined} />);
+    await wait(150);
+    plain.stdin.write('i');
+    await wait(150);
+    assert.doesNotMatch(plain.lastFrame() ?? '', /› /);
+    app.unmount();
+    plain.unmount();
+    app.cleanup();
+    plain.cleanup();
+  });
+
+  it('input mode never opens on the one-shot row and swallows the keymap (F12)', async () => {
+    const model = seededModel(); // includes the `launch` oneshot row
+    const sent: { key: string; line: string }[] = [];
+    const quits = { n: 0 };
+    const app = render(
+      <DevTuiApp
+        model={model}
+        onQuit={() => (quits.n += 1)}
+        onSendInput={(key, line) => {
+          sent.push({ key, line });
+          return true;
+        }}
+      />
+    );
+    await wait(150);
+    model.selectLast(); // -> `launch` (oneshot)
+    await wait(150);
+    app.stdin.write('i');
+    await wait(150);
+    assert.doesNotMatch(app.lastFrame() ?? '', /› /, 'oneshot is not routable');
+    // While open on a ROUTABLE row, `q` must not quit (input mode owns keys).
+    model.selectFirst();
+    await wait(150);
+    app.stdin.write('iq');
+    await wait(150);
+    assert.equal(quits.n, 0, 'q typed in the draft is text, not quit');
+    assert.deepEqual(sent, []);
+    app.stdin.write('\u001B'); // Esc out
+    await wait(150);
+    app.stdin.write('q');
+    await wait(150);
+    assert.equal(quits.n, 1, 'q works again after Esc');
+    app.unmount();
+    app.cleanup();
+  });
 });
 
 describe('dev tui view helpers', () => {

@@ -603,6 +603,39 @@ export function createDevSupervisor(options: DevSupervisorOptions) {
       return map;
     },
 
+    /**
+     * F12: type one input line into the live child of one supervised app,
+     * resolved by plan config key OR graph name (the same two handles the
+     * status rows answer to). `line` is sent verbatim plus `\n` — the TUI
+     * only ever sends complete lines. `false` when nothing received it: no
+     * live child (never started, already exited, shutting down) or a handle
+     * whose stdin is not writable.
+     *
+     * One-shot children are deliberately NOT routable: they are transient
+     * (the `--launch` run exits when the app opens) and their handle is
+     * tracked namelessly in `oneShots`; the CLI seam excludes the one-shot
+     * row from the input path.
+     *
+     * CAVEAT (honest, mirrored in the TUI help): children spawn with piped
+     * stdin, so the bytes DO reach the child process — but the react-native
+     * CLI reads its interactive shortcuts (`r` reload etc.) only from a TTY
+     * stdin. Watchers (esbuild/rspack) ignore stdin lines entirely; whether
+     * anything reacts depends on the child actually reading stdin. This port
+     * guarantees delivery to the pipe, not an effect.
+     */
+    writeAppInput(appKeyOrName: string, line: string): boolean {
+      if (shuttingDown) return false;
+      const app = managed.find(
+        (candidate) =>
+          candidate.plan.key === appKeyOrName ||
+          candidate.plan.name === appKeyOrName
+      );
+      const handle = app?.handle;
+      if (handle === null || handle === undefined) return false;
+      if (handle.writeStdin === undefined) return false;
+      return handle.writeStdin(`${line}\n`);
+    },
+
     /** True when any app died unexpectedly (maps the session to exit 1). */
     hasErrors(): boolean {
       return managed.some((app) => app.status === 'error');

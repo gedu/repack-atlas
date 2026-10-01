@@ -106,13 +106,22 @@ export function createNodeProcessRunner(): ProcessRunner {
         // so `kill(-pid)` reaches every descendant, not just the child.
         // Windows ignores this and killTree degrades to a direct kill.
         detached: process.platform !== 'win32',
-        stdio: ['ignore', 'pipe', 'pipe'],
+        // stdin is PIPED, not ignored: the dev TUI's typed input (F12)
+        // writes to `child.stdin` through `writeStdin`. Children that never
+        // read stdin are unaffected; a child that does now waits on the
+        // pipe instead of getting an instant EOF — the TUI's send-line is
+        // the only writer.
+        stdio: ['pipe', 'pipe', 'pipe'],
       });
 
       child.stdout?.setEncoding('utf-8');
       child.stdout?.on('data', (chunk: string) => stdoutSplit(chunk));
       child.stderr?.setEncoding('utf-8');
       child.stderr?.on('data', (chunk: string) => stderrSplit(chunk));
+      // With stdin piped (F12), writing after the child died surfaces as an
+      // EPIPE 'error' on the stream. Node throws on an unhandled one, so the
+      // listener must exist; `writeStdin` reports the failure as `false`.
+      child.stdin?.on('error', () => {});
 
       let settled = false;
       const exited: Promise<{ code: number | null; signal: string | null }> =
@@ -174,6 +183,19 @@ export function createNodeProcessRunner(): ProcessRunner {
         subscribeToStderr(listener) {
           stderrListeners.add(listener);
           return () => stderrListeners.delete(listener);
+        },
+        writeStdin(data) {
+          // F12 typed input: bytes go to the child's piped stdin verbatim
+          // (the caller appends the newline). False when stdin is gone —
+          // closed, errored, or the child already exited.
+          const stdin = child.stdin;
+          if (stdin === null || !stdin.writable) return false;
+          try {
+            stdin.write(data);
+            return true;
+          } catch {
+            return false;
+          }
         },
         waitForExit() {
           return exited;

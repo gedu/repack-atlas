@@ -210,7 +210,8 @@ async function mountDevTui(
   model: DevTuiModel,
   onQuit: () => void,
   onOpenStudio: (() => void) | undefined,
-  io: DevIo
+  io: DevIo,
+  onSendInput: ((key: string, line: string) => boolean) | undefined
 ): Promise<(() => void) | null> {
   try {
     const { render } = await import('ink');
@@ -225,6 +226,7 @@ async function mountDevTui(
           model,
           onQuit,
           ...(onOpenStudio !== undefined ? { onOpenStudio } : {}),
+          ...(onSendInput !== undefined ? { onSendInput } : {}),
         }),
         { exitOnCtrlC: false }
       );
@@ -823,11 +825,27 @@ export async function runDevCommand(
       // Mount after the supervising/keys lines (they belong to the normal
       // screen and scroll away with the alt screen anyway — fine) and right
       // before `start()`, so no child output races the first frame.
+      //
+      // F12 typed input: routes the TUI's line to the selected app's live
+      // child stdin through the supervisor (which resolves by plan key OR
+      // graph name and only ever reaches a supervised app). The one-shot
+      // `launch` row is not routable — its child is transient and the
+      // supervisor never resolves it, so `writeAppInput('launch', …)`
+      // returns false; the TUI additionally disables input on a `oneshot`
+      // row so the key never looks like it did nothing.
+      //
+      // CAVEAT (why the help text only promises "send line to app stdin"):
+      // children spawn with PIPED stdin, so the bytes do reach the child
+      // process — but the react-native CLI reads its interactive shortcuts
+      // (`r` reload etc.) only from a TTY stdin. Watchers (esbuild/rspack)
+      // ignore stdin entirely. Delivery to the pipe is guaranteed; an effect
+      // on the child is not, and nothing here claims otherwise.
       teardownTui = await mountDevTui(
         tuiModel,
         requestShutdown,
         studio ? openStudio : undefined,
-        io
+        io,
+        (key, line) => supervisor.writeAppInput(key, line)
       );
       tuiActive = teardownTui !== null;
       if (!tuiActive && interactive) {
