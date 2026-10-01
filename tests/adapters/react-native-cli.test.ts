@@ -105,3 +105,91 @@ describe('createReactNativeCliResolver', () => {
     assert.match(result.message, /declares no "bin\.react-native"/);
   });
 });
+
+describe('createReactNativeCliResolver.startOptions', () => {
+  function appWithConfig(name: string, file: string, source: string): string {
+    const app = path.join(root, name);
+    mkdirSync(app, { recursive: true });
+    writeFileSync(path.join(app, file), source);
+    return app;
+  }
+
+  it('reads the long flags of the registered start command (aliases and placeholders stripped)', () => {
+    const app = appWithConfig(
+      'opts-js',
+      'react-native.config.js',
+      `console.log('config noise');
+module.exports = { commands: [
+  { name: 'bundle', options: [{ name: '--dev' }] },
+  { name: 'start', options: [
+    { name: '--port <number>' },
+    { name: '--no-interactive' },
+    { name: '--reset-cache, --resetCache' },
+  ] },
+] };`
+    );
+    assert.deepEqual(resolver.startOptions(app), {
+      status: 'ok',
+      options: ['--port', '--no-interactive', '--reset-cache', '--resetCache'],
+    });
+  });
+
+  it('accepts .cjs and ESM (.mjs default export) configs', () => {
+    const cjs = appWithConfig(
+      'opts-cjs',
+      'react-native.config.cjs',
+      "module.exports = { commands: [{ name: 'start', options: [{ name: '--bundler <t>' }] }] };"
+    );
+    assert.deepEqual(resolver.startOptions(cjs), { status: 'ok', options: ['--bundler'] });
+    const mjs = appWithConfig(
+      'opts-mjs',
+      'react-native.config.mjs',
+      "export default { commands: [{ name: 'start', options: [{ name: '--standalone' }] }] };"
+    );
+    assert.deepEqual(resolver.startOptions(mjs), { status: 'ok', options: ['--standalone'] });
+  });
+
+  it('a missing config is unknown, naming the app root', () => {
+    const app = path.join(root, 'opts-none');
+    mkdirSync(app, { recursive: true });
+    const result = resolver.startOptions(app);
+    assert.ok(result.status === 'unknown');
+    assert.match(result.message, /no react-native\.config/);
+    assert.ok(result.message.includes(app));
+  });
+
+  it('a config without a start command, or one that throws, is unknown', () => {
+    const noStart = appWithConfig(
+      'opts-nostart',
+      'react-native.config.js',
+      "module.exports = { commands: [{ name: 'bundle', options: [] }] };"
+    );
+    const r1 = resolver.startOptions(noStart);
+    assert.ok(r1.status === 'unknown');
+    assert.match(r1.message, /registers no "start" command/);
+    const broken = appWithConfig(
+      'opts-throws',
+      'react-native.config.js',
+      "throw new Error('kaboom');"
+    );
+    const r2 = resolver.startOptions(broken);
+    assert.ok(r2.status === 'unknown');
+    assert.match(r2.message, /kaboom/);
+  });
+
+  it('resolves modules the config requires from the app, not from Atlas', () => {
+    const app = appWithConfig(
+      'opts-require',
+      'react-native.config.js',
+      "module.exports = { commands: require('repack-stub') };"
+    );
+    const pkg = path.join(app, 'node_modules', 'repack-stub');
+    mkdirSync(pkg, { recursive: true });
+    writeFileSync(path.join(pkg, 'package.json'), '{"name":"repack-stub","main":"index.js"}');
+    writeFileSync(
+      path.join(pkg, 'index.js'),
+      "module.exports = [{ name: 'start', options: [{ name: '--platform <s>' }] }];"
+    );
+    assert.deepEqual(resolver.startOptions(app), { status: 'ok', options: ['--platform'] });
+  });
+});

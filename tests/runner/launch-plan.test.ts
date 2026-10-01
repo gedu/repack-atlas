@@ -168,6 +168,7 @@ describe('resolveToolchains (injected resolver edge cases)', () => {
             if (root === '/ws/a') throw new Error('boom');
             return okCli(root);
           },
+          startOptions: () => ({ status: 'unknown', message: 'n/a' }),
         },
       }
     );

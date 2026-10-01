@@ -12,11 +12,26 @@ import {
 
 type ArgvLaunch = Extract<DevLaunch, { kind: 'argv' }>;
 
+/** `start` options of a callstack/repack PR #1467 build. */
+const PR1467 = [
+  '--bundler',
+  '--config',
+  '--port',
+  '--no-interactive',
+  '--platform',
+  '--standalone',
+];
+/** `start` options of published Re.Pack 5.x (no --bundler/--standalone). */
+const REPACK5 = PR1467.filter(
+  (flag) => flag !== '--bundler' && flag !== '--standalone'
+);
+
 const launch = (extra: Partial<ArgvLaunch> = {}): ArgvLaunch => ({
   kind: 'argv',
   file: '/usr/bin/node',
   cli: '/ws/apps/host/node_modules/react-native/cli.js',
   bundler: 'rspack',
+  startOptions: PR1467,
   ...extra,
 });
 
@@ -96,6 +111,59 @@ describe('startArgs', () => {
         '--standalone',
       ]
     );
+  });
+
+  it('Re.Pack 5.x shape: omits --bundler and --standalone, keeps the rest', () => {
+    assert.deepEqual(
+      startArgs(
+        launch({
+          startOptions: REPACK5,
+          config: '/ws/c.js',
+          platform: 'ios',
+          standalone: true,
+        }),
+        8082
+      ).slice(1),
+      [
+        'start',
+        '--config',
+        '/ws/c.js',
+        '--port',
+        '8082',
+        '--no-interactive',
+        '--platform',
+        'ios',
+      ]
+    );
+  });
+
+  it('only passes --no-interactive, --platform and --config when declared', () => {
+    assert.deepEqual(
+      startArgs(
+        launch({
+          startOptions: ['--port'],
+          config: '/ws/c.js',
+          platform: 'ios',
+        }),
+        1
+      ).slice(1),
+      ['start', '--port', '1']
+    );
+  });
+
+  it('an undetermined option set omits --bundler/--standalone, keeps the long-standing flags', () => {
+    const { startOptions: _omit, ...rest } = launch({
+      platform: 'android',
+      standalone: true,
+    });
+    assert.deepEqual(startArgs(rest, 8081).slice(1), [
+      'start',
+      '--port',
+      '8081',
+      '--no-interactive',
+      '--platform',
+      'android',
+    ]);
   });
 
   it('a null port is display-only (`<auto>`)', () => {

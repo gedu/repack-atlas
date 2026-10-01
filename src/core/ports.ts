@@ -206,9 +206,22 @@ export type ReactNativeCliResult =
       message: string;
     };
 
+/**
+ * The long option flags (`--port`, `--no-interactive`, ...; value placeholders
+ * and aliases stripped) of the `start` command the app's React Native config
+ * registers. `unknown` means the set could not be determined (no config, no
+ * `start` command, or the config failed to load): callers must then take the
+ * safe path rather than assume an option exists.
+ */
+export type StartOptionsResult =
+  | { status: 'ok'; options: readonly string[] }
+  | { status: 'unknown'; message: string };
+
 export interface ReactNativeCliResolver {
   /** Resolve `react-native`'s CLI script as the app at `appRoot` would. */
   resolve(appRoot: string): ReactNativeCliResult;
+  /** Options the app's registered `start` command declares. Never throws. */
+  startOptions(appRoot: string): StartOptionsResult;
 }
 
 // --- PromptPort --------------------------------------------------------------------

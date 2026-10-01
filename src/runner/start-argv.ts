@@ -65,30 +65,64 @@ export type DevLaunch =
       file: string;
       /** Resolved `react-native` CLI script of THIS app. */
       cli: string;
+      /** Detected bundler: always shown, passed as `--bundler` only when the
+       * installed `start` declares it (Re.Pack 5.x picks it from the app's
+       * react-native config instead). */
       bundler: Bundler;
+      /** Long flags the app's registered `start` declares; absent = could
+       * not be determined (the safe path: no `--bundler`, no `--standalone`). */
+      startOptions?: readonly string[];
+      /** Why `startOptions` is absent (shown when it blocks a request). */
+      startOptionsNote?: string;
       /** Absolute bundler config; absent → the child's own discovery. */
       config?: string;
       platform?: 'ios' | 'android';
       standalone?: boolean;
     };
 
+/** Options only newer Re.Pack builds declare; never assumed when unknown. */
+const OPT_IN_FLAGS: readonly string[] = ['--bundler', '--standalone'];
+
+/**
+ * Whether `flag` may be passed to the installed `start` command: declared
+ * there, or (option set unknown) a long-standing option. `--bundler` and
+ * `--standalone` need an explicit declaration.
+ */
+export function declaresStartOption(
+  launch: Extract<DevLaunch, { kind: 'argv' }>,
+  flag: string
+): boolean {
+  if (launch.startOptions === undefined) return !OPT_IN_FLAGS.includes(flag);
+  return launch.startOptions.includes(flag);
+}
+
 /**
  * The argv after `file` for an argv launch:
- * `<cli> start --bundler b [--config c] --port N --no-interactive
- * [--platform p] [--standalone]`. `port: null` is display-only (`<auto>`,
- * a `--dry-run` remote the runner has not allocated yet).
+ * `<cli> start [--bundler b] [--config c] --port N [--no-interactive]
+ * [--platform p] [--standalone]`. Each option except `--port` is passed only
+ * when the installed `start` declares it (published Re.Pack 5.x has no
+ * `--bundler`/`--standalone`; callstack/repack PR #1467 adds them). `port:
+ * null` is display-only (`<auto>`).
  */
 export function startArgs(
   launch: Extract<DevLaunch, { kind: 'argv' }>,
   port: number | null
 ): string[] {
-  const args = [launch.cli, 'start', '--bundler', launch.bundler];
-  if (launch.config !== undefined) args.push('--config', launch.config);
+  const has = (flag: string): boolean => declaresStartOption(launch, flag);
+  const args = [launch.cli, 'start'];
+  if (has('--bundler')) args.push('--bundler', launch.bundler);
+  if (launch.config !== undefined && has('--config')) {
+    args.push('--config', launch.config);
+  }
   args.push('--port', port === null ? '<auto>' : String(port));
   // The supervisor owns stdin and signals: children are never interactive.
-  args.push('--no-interactive');
-  if (launch.platform !== undefined) args.push('--platform', launch.platform);
-  if (launch.standalone === true) args.push('--standalone');
+  if (has('--no-interactive')) args.push('--no-interactive');
+  if (launch.platform !== undefined && has('--platform')) {
+    args.push('--platform', launch.platform);
+  }
+  if (launch.standalone === true && has('--standalone')) {
+    args.push('--standalone');
+  }
   return args;
 }
 

@@ -10,7 +10,11 @@ import {
   isUrlSource,
   type FederationConfig,
 } from '../core/index.js';
-import { describeLaunch, type DevLaunch } from './start-argv.js';
+import {
+  declaresStartOption,
+  describeLaunch,
+  type DevLaunch,
+} from './start-argv.js';
 import { toolchainKey, type Toolchains } from './toolchain.js';
 
 /** Platforms `--platform` accepts (the two native compile scopes). */
@@ -224,6 +228,12 @@ export function buildDevPlan(input: BuildDevPlanInput): BuildDevPlanResult {
         file: process.execPath,
         cli: toolchain.cli,
         bundler: toolchain.bundler,
+        ...(toolchain.startOptions !== undefined
+          ? { startOptions: toolchain.startOptions }
+          : {}),
+        ...(toolchain.startOptionsNote !== undefined
+          ? { startOptionsNote: toolchain.startOptionsNote }
+          : {}),
         ...(entry.config !== undefined
           ? { config: path.resolve(configDir, entry.config) }
           : {}),
@@ -231,6 +241,19 @@ export function buildDevPlan(input: BuildDevPlanInput): BuildDevPlanResult {
         ...(input.standalone === entry.key ? { standalone: true } : {}),
       };
       cwd = appRoot;
+      if (
+        input.standalone === entry.key &&
+        !declaresStartOption(launch, '--standalone')
+      ) {
+        reasons.push(
+          `${entry.key}: --standalone refused: ${
+            toolchain.startOptions !== undefined
+              ? "the installed Re.Pack's start command has no --standalone option (it needs a Re.Pack build with federation dev-runner support, callstack/repack PR #1467)"
+              : `cannot confirm that the installed start command has --standalone (${toolchain.startOptionsNote ?? 'its options could not be read'})`
+          }. Give the app a "command" that starts it standalone, or drop --standalone.`
+        );
+        continue;
+      }
     }
 
     const manifestRef = resolveRef(configDir, entry.manifest);
@@ -271,6 +294,9 @@ export interface DevPlanEventApp {
   platform?: DevPlatform;
   /** Additive: true on the `--standalone` remote. */
   standalone?: true;
+  /** Additive: the bundler detected for a built argv (informational: it is
+   * passed as `--bundler` only when the installed `start` supports it). */
+  bundler?: 'rspack' | 'webpack';
 }
 
 /** Project plan entries to the stable `--json` / table shape. */
@@ -286,6 +312,7 @@ export function toPlanEventApps(entries: DevPlanEntry[]): DevPlanEventApp[] {
       : {}),
     ...(entry.platform !== undefined ? { platform: entry.platform } : {}),
     ...(entry.standalone === true ? { standalone: true as const } : {}),
+    ...(entry.launch.kind === 'argv' ? { bundler: entry.launch.bundler } : {}),
   }));
 }
 
