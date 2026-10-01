@@ -13,6 +13,7 @@
 import assert from 'node:assert/strict';
 import { spawn, type ChildProcess } from 'node:child_process';
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -63,7 +64,7 @@ const cleanupDirs: string[] = [];
 
 interface DevEvent {
   event: string;
-  apps?: { app: string; role: string; port: number | null; command: string; cwd: string }[];
+  apps?: { app: string; role: string; port: number | null; command: string; cwd: string; bundler?: string }[];
   url?: string;
   app?: string;
   status?: string;
@@ -961,6 +962,7 @@ if (args[0] && args[0].startsWith('run-')) {
   // the \`launch-mode\` file says: 'fail' exits 1, 'hang' lingers until killed.
   const fs = require('fs');
   fs.appendFileSync('launch.log', JSON.stringify(args) + '\\n');
+  fs.appendFileSync('launch.env', String(process.env.ATLAS_SHIM_RAN) + '\\n');
   console.log('launch-stub ' + JSON.stringify(args));
   const mode = fs.existsSync('launch-mode') ? fs.readFileSync('launch-mode', 'utf8').trim() : '';
   if (mode === 'fail') {
@@ -976,19 +978,59 @@ if (args[0] && args[0].startsWith('run-')) {
     process.exit(0);
   }
 } else {
+// Like the real CLI, reject options the app's react-native.config start
+// command does not declare (published Re.Pack 5.x has no --bundler).
+const declared = new Set();
+for (const command of require(process.cwd() + '/react-native.config.js').commands) {
+  if (command.name === 'start') {
+    for (const option of command.options) declared.add(option.name.split(' ')[0]);
+  }
+}
+for (const arg of args.slice(1)) {
+  if (arg.startsWith('--') && !declared.has(arg)) {
+    console.error("error: unknown option '" + arg + "'");
+    process.exit(1);
+  }
+}
 const port = Number(args[args.indexOf('--port') + 1]);
-console.log('rn-stub ' + JSON.stringify({ args, cwd: process.cwd() }));
+console.log('rn-stub ' + JSON.stringify({ args, cwd: process.cwd(), shim: process.env.ATLAS_SHIM_RAN || null }));
 require('net').createServer().listen(port, '127.0.0.1');
 process.on('SIGINT', () => process.exit(0));
 process.on('SIGTERM', () => process.exit(0));
 }
 `;
 
-/** Install the stub react-native (package + cli) and a bundler config. */
+/** `start` options of the installed Re.Pack, as the app's RN config declares. */
+const REPACK5_START_OPTIONS = [
+  '--port <number>',
+  '--no-interactive',
+  '--platform <string>',
+  '--config <path>',
+  '--no-reverse-port',
+];
+/** Re.Pack from callstack/repack PR #1467: adds --bundler and --standalone. */
+const PR1467_START_OPTIONS = [
+  ...REPACK5_START_OPTIONS,
+  '--bundler <type>',
+  '--standalone',
+];
+
+/**
+ * Install the stub react-native (package + cli), a bundler config and a
+ * react-native.config.js whose `start` command declares the options of the
+ * chosen Re.Pack shape (default: the #1467 build the argv rules were
+ * written against).
+ */
 function makeApp(
   workspace: string,
   dir: string,
-  options: { rn?: boolean; configFiles?: string[] } = {}
+  options: {
+    rn?: boolean;
+    configFiles?: string[];
+    repack?: 'repack5' | 'pr1467';
+    /** Also install `node_modules/.bin/react-native` (like pnpm/npm do). */
+    shim?: boolean;
+  } = {}
 ): string {
   const root = path.join(workspace, dir);
   mkdirSync(root, { recursive: true });
@@ -997,6 +1039,14 @@ function makeApp(
     writeFileSync(path.join(root, file), '');
   }
   if (options.rn !== false) {
+    const declared =
+      options.repack === 'repack5' ? REPACK5_START_OPTIONS : PR1467_START_OPTIONS;
+    writeFileSync(
+      path.join(root, 'react-native.config.js'),
+      `module.exports = { commands: [{ name: 'start', options: ${JSON.stringify(
+        declared.map((name) => ({ name }))
+      )} }] };\n`
+    );
     const pkg = path.join(root, 'node_modules', 'react-native');
     mkdirSync(pkg, { recursive: true });
     writeFileSync(
@@ -1004,6 +1054,16 @@ function makeApp(
       JSON.stringify({ name: 'react-native', bin: { 'react-native': './cli.js' } })
     );
     writeFileSync(path.join(pkg, 'cli.js'), STUB_RN_CLI);
+    if (options.shim === true) {
+      // Like pnpm's shim: sets up the environment, then runs the real script.
+      const bin = path.join(root, 'node_modules', '.bin');
+      mkdirSync(bin, { recursive: true });
+      writeFileSync(
+        path.join(bin, 'react-native'),
+        `#!/bin/sh\nexport ATLAS_SHIM_RAN=1\nexec "${process.execPath}" "${path.join(pkg, 'cli.js')}" "$@"\n# cmd-shim-target=${path.join(pkg, 'cli.js')}\n`
+      );
+      chmodSync(path.join(bin, 'react-native'), 0o755);
+    }
   }
   return root;
 }
@@ -1025,6 +1085,82 @@ describe('dev default argv (root without command)', () => {
     );
     return dir;
   }
+
+  it('Re.Pack 5.x shape: no --bundler is passed (the stub would reject it) and the app still starts', async () => {
+    const port = await freePort();
+    const dir = workspaceWith(
+      { host: { manifest: './h.json', root: './apps/host' }, remotes: {} },
+      (d) => makeApp(d, 'apps/host', { repack: 'repack5' })
+    );
+    const s = await session(
+      ['--ci', '--json', '--no-studio', '--port', String(port)],
+      dir
+    );
+    await s.waitForStatus('host', 'ready');
+    const plan = s.events.find((e) => e.event === 'plan')!;
+    assert.equal(
+      plan.apps![0]!.command,
+      `node node_modules/react-native/cli.js start --port ${port} --no-interactive`
+    );
+    assert.equal(plan.apps![0]!.bundler, 'rspack', 'the detected bundler is still shown');
+    const line = s.lines.find((l) => l.startsWith('[host] rn-stub '))!;
+    const seen = JSON.parse(line.slice('[host] rn-stub '.length)) as { args: string[] };
+    assert.deepEqual(seen.args, ['start', '--port', String(port), '--no-interactive']);
+    s.child.kill('SIGINT');
+    assert.equal((await s.exited).code, 0);
+  });
+
+  it('prefers the app\'s .bin/react-native shim (its environment reaches the CLI)', async () => {
+    const port = await freePort();
+    const dir = workspaceWith(
+      { host: { manifest: './h.json', root: './apps/host' }, remotes: {} },
+      (d) => makeApp(d, 'apps/host', { repack: 'repack5', shim: true })
+    );
+    const s = await session(['--ci', '--json', '--no-studio', '--port', String(port)], dir);
+    await s.waitForStatus('host', 'ready');
+    const plan = s.events.find((e) => e.event === 'plan')!;
+    assert.equal(
+      plan.apps![0]!.command,
+      `node_modules/.bin/react-native start --port ${port} --no-interactive`
+    );
+    const line = s.lines.find((l) => l.startsWith('[host] rn-stub '))!;
+    const seen = JSON.parse(line.slice('[host] rn-stub '.length)) as { args: string[]; shim: string | null };
+    assert.deepEqual(seen.args, ['start', '--port', String(port), '--no-interactive']);
+    assert.equal(seen.shim, '1', 'the shim ran and exported its environment');
+    s.child.kill('SIGINT');
+    assert.equal((await s.exited).code, 0);
+  });
+
+  it('without a shim (npm/yarn layouts) it falls back to `node <cli.js>`', async () => {
+    const port = await freePort();
+    const dir = workspaceWith(
+      { host: { manifest: './h.json', root: './apps/host' }, remotes: {} },
+      (d) => makeApp(d, 'apps/host', { repack: 'repack5' })
+    );
+    const s = await session(['--ci', '--json', '--no-studio', '--port', String(port)], dir);
+    await s.waitForStatus('host', 'ready');
+    const plan = s.events.find((e) => e.event === 'plan')!;
+    assert.match(plan.apps![0]!.command, /^node node_modules\/react-native\/cli\.js start /);
+    const line = s.lines.find((l) => l.startsWith('[host] rn-stub '))!;
+    assert.equal((JSON.parse(line.slice('[host] rn-stub '.length)) as { shim: unknown }).shim, null);
+    s.child.kill('SIGINT');
+    assert.equal((await s.exited).code, 0);
+  });
+
+  it('an app without a react-native config (options unknown) omits --bundler too', async () => {
+    const dir = workspaceWith(
+      { host: { manifest: './h.json', root: './apps/host' }, remotes: {} },
+      (d) => {
+        const root = makeApp(d, 'apps/host');
+        rmSync(path.join(root, 'react-native.config.js'));
+      }
+    );
+    const result = await runToCompletion(['--dry-run', '--json', '--port', String(await freePort())], dir);
+    assert.equal(result.code, 0, result.stderr);
+    const plan = parseEvents(result.stdout)[0]!;
+    assert.doesNotMatch(plan.apps![0]!.command, /--bundler/);
+    assert.match(plan.apps![0]!.command, /--no-interactive/);
+  });
 
   it('an app with only `root` starts through the built argv and reaches ready', async () => {
     const port = await freePort();
@@ -1379,6 +1515,29 @@ describe('dev --platform and --standalone', () => {
     }
   });
 
+  it('--standalone on a Re.Pack 5.x start (no such option) exits 2 naming the app, nothing spawned', async () => {
+    const dir = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'atlas-sa5-')));
+    cleanupDirs.push(dir);
+    writeFileSync(
+      path.join(dir, 'repack-federation.json'),
+      JSON.stringify({
+        host: { manifest: './h.json', root: './apps/host' },
+        remotes: { solo: { manifest: './s.json', root: './apps/solo', standalone: true } },
+      })
+    );
+    makeApp(dir, 'apps/host', { repack: 'repack5' });
+    makeApp(dir, 'apps/solo', { repack: 'repack5' });
+    for (const args of [['--dry-run'], ['--ci', '--json', '--no-studio']]) {
+      const result = await runToCompletion(
+        [...args, '--standalone', 'solo', '--port', String(await freePort())],
+        dir
+      );
+      assert.equal(result.code, 2, result.stderr);
+      assert.match(result.stderr, /solo: --standalone refused: the installed Re\.Pack's start command has no --standalone option/);
+      assert.ok(!result.stdout.includes('rn-stub'), 'nothing spawned');
+    }
+  });
+
   it('--standalone without a value exits 2', async () => {
     const result = await runToCompletion(['--dry-run', '--standalone'], mixed());
     assert.equal(result.code, 2);
@@ -1502,6 +1661,28 @@ describe('dev --launch', () => {
   }
 
   const base = async () => ['--ci', '--json', '--no-studio', '--port', String(await freePort())];
+
+  it('--launch runs run-<platform> through the shim when the target has one', async () => {
+    const dir = workspaceWith(
+      { host: { manifest: './h.json', root: './apps/host' }, remotes: {} },
+      (d) => makeApp(d, 'apps/host', { shim: true })
+    );
+    const s = await session(
+      [...(await base()), '--platform', 'ios', '--launch'],
+      dir
+    );
+    await s.waitForEvent((e) => e.event === 'launch' && e.status === 'exited');
+    assert.deepEqual(launchLog(dir, 'host'), [['run-ios', '--no-packager']]);
+    assert.equal(
+      readFileSync(path.join(dir, 'apps', 'host', 'launch.env'), 'utf8').trim(),
+      '1',
+      'the one-shot ran through the shim'
+    );
+    const plan = s.events.find((e) => e.event === 'plan')!;
+    assert.equal(plan.launch!.command, 'node_modules/.bin/react-native run-ios --no-packager');
+    s.child.kill('SIGINT');
+    assert.equal((await s.exited).code, 0);
+  });
 
   it('--launch --platform ios spawns run-ios --no-packager exactly once, after the host is ready', async () => {
     const dir = rooted();

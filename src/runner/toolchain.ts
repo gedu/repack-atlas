@@ -17,7 +17,17 @@ import {
 } from './start-argv.js';
 
 export type ToolchainResolution =
-  | { ok: true; bundler: Bundler; cli: string }
+  | {
+      ok: true;
+      bundler: Bundler;
+      cli: string;
+      /** The app's `.bin/react-native` shim, when it has one. */
+      shim?: string;
+      /** Options the app's `start` declares; absent = undetermined. */
+      startOptions?: readonly string[];
+      /** Why `startOptions` is absent. */
+      startOptionsNote?: string;
+    }
   | { ok: false; reason: string };
 
 /**
@@ -84,10 +94,25 @@ export async function resolveToolchains(
         message: `the react-native CLI lookup failed: ${String(error)}`,
       };
     }
-    resolved[key] =
-      cli.status === 'ok'
-        ? { ok: true, bundler, cli: cli.cli }
-        : { ok: false, reason: cli.message };
+    if (cli.status !== 'ok') {
+      resolved[key] = { ok: false, reason: cli.message };
+      continue;
+    }
+    let inspected: ReturnType<ReactNativeCliResolver['startOptions']>;
+    try {
+      inspected = deps.reactNativeCli.startOptions(target.root);
+    } catch (error) {
+      inspected = { status: 'unknown', message: String(error) };
+    }
+    resolved[key] = {
+      ok: true,
+      bundler,
+      cli: cli.cli,
+      ...(cli.shim !== undefined ? { shim: cli.shim } : {}),
+      ...(inspected.status === 'ok'
+        ? { startOptions: inspected.options }
+        : { startOptionsNote: inspected.message }),
+    };
   }
   return resolved;
 }

@@ -11,11 +11,15 @@
 //
 // `--no-packager` always: the session's dev servers ARE the packager, and a
 // second one would fight for the port or split bundle serving away from the
-// federation session. `--device` rides as one verbatim argv entry (no shell).
+// federation session. `--device` rides as one verbatim argv entry (no shell; a Windows `.cmd`
+// shim is run via `cmd.exe` with every argument quoted, see `cmdShimSpawn`).
+//
+// A hoisted shim is shown by its absolute path, so `--dry-run --json` output
+// for such installs is machine-specific.
 
 import type { ReactNativeCliResult } from '../core/index.js';
 import type { DevPlanEntry, DevPlatform } from './plan.js';
-import { describeArgv } from './start-argv.js';
+import { cliInvocation, describeArgv, describeShim } from './start-argv.js';
 
 /** The one-shot `run-<platform>` child, in the supervisor's spawn shape. */
 export interface LaunchPlan {
@@ -23,10 +27,15 @@ export interface LaunchPlan {
   triggerKey: string;
   /** Graph node name of that app (what the plan shows). */
   app: string;
-  /** Always `process.execPath` (PATH is never consulted). */
+  /** The target's `.bin/react-native` shim, else `process.execPath` (PATH is
+   * never consulted). */
   file: string;
-  /** `[<target root's react-native cli>, run-<platform>, --no-packager, ...]`. */
+  /** `[<cli script if node>, run-<platform>, --no-packager, ...]`. */
   args: string[];
+  /** A Windows `.cmd` shim: spawned through `cmd.exe` with quoted args. */
+  shell?: boolean;
+  /** True when `file` is the shim (display only). */
+  viaShim?: true;
   /** The target root. */
   cwd: string;
 }
@@ -72,14 +81,17 @@ export function buildLaunchPlan(
       reason: `--launch: ${target.key}: ${cli.message} (app root ${target.root})`,
     };
   }
+  const invocation = cliInvocation(cli);
   return {
     ok: true,
     launch: {
       triggerKey: target.key,
       app: target.name,
-      file: process.execPath,
+      file: invocation.file,
+      ...(invocation.shell === true ? { shell: true } : {}),
+      ...(invocation.cli === undefined ? { viaShim: true as const } : {}),
       args: [
-        cli.cli,
+        ...(invocation.cli !== undefined ? [invocation.cli] : []),
         `run-${input.platform}`,
         '--no-packager',
         ...(input.device !== undefined ? ['--device', input.device] : []),
@@ -99,7 +111,10 @@ export interface DevPlanEventLaunch {
 export function toPlanEventLaunch(launch: LaunchPlan): DevPlanEventLaunch {
   return {
     app: launch.app,
-    command: describeArgv(launch.args, launch.cwd),
+    command:
+      launch.viaShim === true
+        ? describeShim(launch.file, launch.args, launch.cwd)
+        : describeArgv(launch.args, launch.cwd),
     cwd: launch.cwd,
   };
 }

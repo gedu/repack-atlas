@@ -119,6 +119,11 @@ export interface SpawnSpec {
    * `npx`/PATH-wrapped user commands; avoid otherwise.
    */
   shell?: boolean;
+  /**
+   * Windows only: pass `args` to the child without Node's own quoting (the
+   * caller already quoted them, e.g. `cmd.exe /d /s /c "<line>"`).
+   */
+  windowsVerbatimArguments?: boolean;
 }
 
 /** A started child process. */
@@ -199,6 +204,13 @@ export type ReactNativeCliResult =
       status: 'ok';
       /** Absolute path of the CLI script (`bin.react-native`). */
       cli: string;
+      /**
+       * The package manager's `node_modules/.bin/react-native` shim, when
+       * one exists. Running it (not `node <cli>`) keeps the environment the
+       * shim sets up, e.g. pnpm's `NODE_PATH`, without which the CLI cannot
+       * find its platform plugins in a pnpm workspace.
+       */
+      shim?: string;
     }
   | {
       status: 'failed';
@@ -206,9 +218,22 @@ export type ReactNativeCliResult =
       message: string;
     };
 
+/**
+ * The long option flags (`--port`, `--no-interactive`, ...; value placeholders
+ * and aliases stripped) of the `start` command the app's React Native config
+ * registers. `unknown` means the set could not be determined (no config, no
+ * `start` command, or the config failed to load): callers must then take the
+ * safe path rather than assume an option exists.
+ */
+export type StartOptionsResult =
+  | { status: 'ok'; options: readonly string[] }
+  | { status: 'unknown'; message: string };
+
 export interface ReactNativeCliResolver {
   /** Resolve `react-native`'s CLI script as the app at `appRoot` would. */
   resolve(appRoot: string): ReactNativeCliResult;
+  /** Options the app's registered `start` command declares. Never throws. */
+  startOptions(appRoot: string): StartOptionsResult;
 }
 
 // --- PromptPort --------------------------------------------------------------------

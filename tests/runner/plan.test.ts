@@ -14,6 +14,16 @@ import {
 
 const CONFIG_DIR = '/ws';
 
+/** `start` options of a callstack/repack PR #1467 build. */
+const PR1467_OPTIONS = [
+  '--bundler',
+  '--config',
+  '--port',
+  '--no-interactive',
+  '--platform',
+  '--standalone',
+];
+
 const CONFIG: FederationConfig = {
   host: { manifest: './m/host.json', root: './apps/host', command: 'run host' },
   remotes: {
@@ -161,8 +171,8 @@ describe('host port precedence', () => {
 describe('default argv (root without command)', () => {
   const HOST_ROOT = '/ws/apps/host';
   const toolchains: Toolchains = {
-    [HOST_ROOT]: { ok: true, bundler: 'rspack', cli: `${HOST_ROOT}/node_modules/react-native/cli.js` },
-    [toolchainKey('/ws/apps/web', 'webpack.dev.js')]: { ok: true, bundler: 'webpack', cli: '/store/rn/cli.js' },
+    [HOST_ROOT]: { ok: true, bundler: 'rspack', cli: `${HOST_ROOT}/node_modules/react-native/cli.js`, startOptions: PR1467_OPTIONS },
+    [toolchainKey('/ws/apps/web', 'webpack.dev.js')]: { ok: true, bundler: 'webpack', cli: '/store/rn/cli.js', startOptions: PR1467_OPTIONS },
   };
   const config: FederationConfig = {
     host: { manifest: './m/host.json', root: './apps/host' },
@@ -196,6 +206,7 @@ describe('default argv (root without command)', () => {
       file: process.execPath,
       cli: `${HOST_ROOT}/node_modules/react-native/cli.js`,
       bundler: 'rspack',
+      startOptions: PR1467_OPTIONS,
     });
     assert.equal(host!.cwd, HOST_ROOT);
     assert.equal(web!.cwd, '/ws/apps/web');
@@ -204,6 +215,7 @@ describe('default argv (root without command)', () => {
       file: process.execPath,
       cli: '/store/rn/cli.js',
       bundler: 'webpack',
+      startOptions: PR1467_OPTIONS,
       config: '/ws/webpack.dev.js',
     });
     // `command` stays an override: verbatim, config-dir cwd, no toolchain.
@@ -261,8 +273,8 @@ describe('default argv (root without command)', () => {
         configDir: CONFIG_DIR,
         hostName: 'h',
         toolchains: {
-          [toolchainKey('/ws/apps/shared', 'rspack.a.js')]: { ok: true, bundler: 'rspack', cli: '/c.js' },
-          [toolchainKey('/ws/apps/shared', 'webpack.b.js')]: { ok: true, bundler: 'webpack', cli: '/c.js' },
+          [toolchainKey('/ws/apps/shared', 'rspack.a.js')]: { ok: true, bundler: 'rspack', cli: '/c.js', startOptions: PR1467_OPTIONS },
+          [toolchainKey('/ws/apps/shared', 'webpack.b.js')]: { ok: true, bundler: 'webpack', cli: '/c.js', startOptions: PR1467_OPTIONS },
         },
       })
     );
@@ -399,5 +411,104 @@ describe('buildDevPlan port overrides (wizard answers)', () => {
 
   it('gives an auto remote the port the user named', () => {
     assert.equal(ports({ alpha: 9200 }).alpha, 9200);
+  });
+});
+
+describe('--standalone against the installed start options', () => {
+  const config: FederationConfig = {
+    host: { manifest: './m/host.json', root: './apps/host' },
+    remotes: {
+      web: { manifest: './m/web.json', root: './apps/web', standalone: true },
+    },
+  };
+  const toolchain = (
+    extra: { startOptions?: string[]; startOptionsNote?: string }
+  ): Toolchains => {
+    const base = { ok: true as const, bundler: 'rspack' as const, cli: '/c.js' };
+    return {
+      '/ws/apps/host': { ...base, ...extra },
+      '/ws/apps/web': { ...base, ...extra },
+    };
+  };
+  const plan = (toolchains: Toolchains, standalone = true) =>
+    buildDevPlan({
+      config,
+      configDir: CONFIG_DIR,
+      hostName: 'host_app',
+      toolchains,
+      ...(standalone ? { standalone: 'web' } : {}),
+    });
+
+  it('Re.Pack 5.x (no --standalone declared): the plan fails naming the app', () => {
+    const result = plan(toolchain({ startOptions: ['--port', '--no-interactive'] }));
+    assert.ok(!result.ok);
+    assert.match(
+      result.reasons.join('\n'),
+      /web: --standalone refused: the installed Re\.Pack's start command has no --standalone option/
+    );
+  });
+
+  it('an undeterminable option set refuses --standalone and says why', () => {
+    const result = plan(toolchain({ startOptionsNote: 'no react-native.config' }));
+    assert.ok(!result.ok);
+    assert.match(result.reasons.join('\n'), /cannot confirm .*no react-native\.config/);
+  });
+
+  it('a #1467-style start (declares --standalone) is accepted', () => {
+    const entries = ok(
+      plan(toolchain({ startOptions: ['--port', '--standalone', '--bundler'] }))
+    ).entries;
+    assert.equal(entries.find((e) => e.key === 'web')!.standalone, true);
+  });
+
+  it('without --standalone the option set does not matter; the event shows the bundler', () => {
+    const entries = ok(plan(toolchain({ startOptions: ['--port'] }), false)).entries;
+    const apps = toPlanEventApps(entries);
+    assert.deepEqual(apps.map((a) => a.bundler), ['rspack', 'rspack']);
+    assert.doesNotMatch(apps[0]!.command, /--bundler/);
+  });
+});
+
+describe('buildDevPlan: flags the installed start does not declare', () => {
+  const base = { ok: true as const, bundler: 'rspack' as const, cli: '/c.js' };
+  const plan = (
+    startOptions: string[] | undefined,
+    extra: { platform?: 'ios'; config?: string }
+  ) =>
+    buildDevPlan({
+      config: {
+        host: {
+          manifest: './m/host.json',
+          root: './apps/host',
+          ...(extra.config !== undefined ? { config: extra.config } : {}),
+        },
+        remotes: {},
+      },
+      configDir: CONFIG_DIR,
+      hostName: 'host_app',
+      toolchains: {
+        [toolchainKey('/ws/apps/host', extra.config)]: {
+          ...base,
+          ...(startOptions !== undefined ? { startOptions } : {}),
+        },
+      },
+      ...(extra.platform !== undefined ? { platform: extra.platform } : {}),
+    });
+
+  it('a "config" field the start lacks fails naming the app and the flag', () => {
+    const result = plan(['--port'], { config: 'rspack.dev.js' });
+    assert.ok(!result.ok);
+    assert.match(result.reasons.join('\n'), /host: .*rspack\.dev\.js.*no --config option/);
+  });
+
+  it('--platform the start lacks fails naming the app and the flag', () => {
+    const result = plan(['--port'], { platform: 'ios' });
+    assert.ok(!result.ok);
+    assert.match(result.reasons.join('\n'), /host: --platform ios .*no --platform option/);
+  });
+
+  it('declared, or an unknown option set, keeps the safe behavior', () => {
+    ok(plan(['--port', '--config', '--platform'], { platform: 'ios', config: 'r.js' }));
+    ok(plan(undefined, { platform: 'ios', config: 'r.js' }));
   });
 });

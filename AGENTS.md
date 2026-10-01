@@ -102,10 +102,14 @@ src/
 │   │                    #   wrapper the showcase app adds to its rspack config
 │   └── vendored/        #   Atlas-owned fork of Re.Pack code, MIT headers, VENDORED.md
 ├── adapters/            # port implementations: workspace config reader,
-│                        #   manifest sources, ProjectFs, ProcessRunner
+│                        #   manifest sources, ProjectFs, ProcessRunner,
+│                        #   react-native CLI/start-options resolver, prompts
 ├── studio/              # node:http server (127.0.0.1, GET-only) + page.ts +
 │                        #   workspace graph loader; serves core/graph.ts output
-└── runner/              # interactive dev runner (supervisor, keymap, SSE)
+└── runner/              # dev runner: plan.ts (pure plan builder), ports.ts,
+                         #   start-argv.ts (bundler detection + argv rules),
+                         #   toolchain.ts (per-app CLI/options resolution),
+                         #   launch-plan.ts, supervisor.ts (spawn, readiness)
 tests/                   # node:test suites (unit + CLI integration on fixtures)
 tests/e2e/               # Playwright specs for Studio (own tsconfig with DOM lib)
 playwright.config.ts     # boots tools/studio-preview.mjs on a fixed port

@@ -99,6 +99,9 @@ export function createNodeProcessRunner(): ProcessRunner {
         cwd: spec.cwd,
         env,
         shell: spec.shell ?? false,
+        ...(spec.windowsVerbatimArguments === true
+          ? { windowsVerbatimArguments: true }
+          : {}),
         // Own process group (POSIX): the group leader's pid == child pid,
         // so `kill(-pid)` reaches every descendant, not just the child.
         // Windows ignores this and killTree degrades to a direct kill.
