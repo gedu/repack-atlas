@@ -247,16 +247,16 @@ Engineering-rules audit: #1 batched render ✅ (100ms tick, seam never renders);
 #2 visible-only ✅ (ring + logWindow); #4 flicker ✅ (ink diff), spinner
 isolation partial; #5 restore hardening partial (async crash could leave
 alt-screen); #6 multi-terminal ❌ (only Ghostty smoke so far); #7 pure logic ✅.
-- [ ] G1 — Panel-level notice: when scrolled above the bottom, show a dim
+- [x] G1 — Panel-level notice: when scrolled above the bottom, show a dim
       notice line at the panel bottom `↓ N new lines below` (N since
       autoscroll paused), cleared on return to bottom. (rules #3)
-- [ ] G2 — Sidebar activity badge: keep the bounce glyph, DROP the number
+- [x] G2 — Sidebar activity badge: keep the bounce glyph, DROP the number
       (user: animation alone is great).
-- [ ] G3 — Restore hardening: while the TUI is mounted, an
+- [x] G3 — Restore hardening: while the TUI is mounted, an
       uncaughtException/unhandledRejection must first unmount, leave
       alt-screen, show cursor, disable mouse tracking, restore stdin, THEN
       rethrow/exit; document SIGKILL leaves the terminal (inherent).
-- [ ] G4 — Startup banner: centered ASCII art atlas/map glyph in Re.Pack-ish
+- [x] G4 — Startup banner: centered ASCII art atlas/map glyph in Re.Pack-ish
       colors + `repack-atlas v<x>` + tagline, printed on the NORMAL screen
       before the wizard/supervision (human paths only; --json/--ci/non-TTY
       never print it). Art style: user-supplied braille flower as reference;
@@ -264,3 +264,14 @@ alt-screen); #6 multi-terminal ❌ (only Ghostty smoke so far); #7 pure logic �
 - [ ] G5 (NEXT CYCLE, after user terminal smoke) — wizard-in-TUI: replace
       clack prompts with selection inside the dashboard (sidebar = apps to
       run). Separate work cycle; touches the prompt gate.
+
+### G1-G4 landed
+- `709071b` G1+G2 (notice + numberless badge, 666/666)
+- `b64be82` G3 crash-restore guard, handlers registered+removed asserted
+  (667/667; real-pty crash smoke = user)
+- `40cf6f4` G4 banner: pure banner.ts (pink 38;5;213 dotted globe+compass,
+  green poles, bold wordmark, dim tagline), shared version.ts, human TTY
+  only (677/677). Parent spot check: pnpm test 677/678->677/677 pass.
+### Remaining
+- G5 wizard-in-TUI: next cycle, after the user's multi-terminal smoke
+  (iTerm2/Terminal.app/tmux/VS Code) and banner/notice visual check.
