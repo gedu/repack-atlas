@@ -101,6 +101,8 @@ export async function runDevWizard(
         label: entry.key,
       })),
       initialValues: remotes.map((entry) => entry.key),
+      // An empty pick is a host-only session, like `--apps host`.
+      emptyHint: 'host only',
     });
     if (answer.status === 'cancelled') return cancelled();
     selected = answer.value;

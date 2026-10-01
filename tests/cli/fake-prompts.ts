@@ -12,6 +12,8 @@ export interface FakePrompts extends PromptPort {
   asked: string[];
   /** Option values offered per `select`/`multiselect`, in the order asked. */
   offered: Array<{ message: string; values: string[] }>;
+  /** `emptyHint` of every `multiselect`, in the order asked. */
+  emptyHints: Array<string | undefined>;
   notes: string[];
   cancels: string[];
   closed: number;
@@ -25,12 +27,14 @@ export function fakePrompts(script: ScriptedAnswer[]): FakePrompts {
   const fake: FakePrompts = {
     asked: [],
     offered: [],
+    emptyHints: [],
     notes: [],
     cancels: [],
     closed: 0,
     validations: [],
     remaining: () => queue.length,
     multiselect: (q) => {
+      fake.emptyHints.push(q.emptyHint);
       fake.offered.push({ message: q.message, values: q.options.map((o) => o.value) });
       return answer(`multiselect: ${q.message}`);
     },

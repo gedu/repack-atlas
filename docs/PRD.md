@@ -303,7 +303,10 @@ default argv, port rules, launch), and the deviations are listed below.
 
 **Wizard.** It runs only when there is no `--apps`, no `--no-interactive`, `--ci`
 or `--json`, and both stdin and stdout are TTYs. Steps: remotes (all
-preselected; skipped when there are none), platform (`ios`, `android` or all;
+preselected, and an empty pick is allowed: it is a host-only session, the same
+plan as `--apps host`; in clack deselect all, in the readline fallback type
+`none`, while an empty line keeps the preselection; skipped when there are
+none), platform (`ios`, `android` or all;
 "all" is not offered with `--launch`), launch (single platform only, never
 re-asked when a flag decided it), a port for every app in the session, and
 standalone for selected remotes that declare it. The answers become the same

@@ -100,6 +100,75 @@ describe('readline prompts (piped stdin)', () => {
     prompts.close();
   });
 
+  it('lets `none` select nothing when emptyHint is set, in any case', async () => {
+    const io = piped('none\nNONE\n  none \n');
+    const prompts = createReadlinePrompts({ input: io.stdin, output: io.stdout });
+    const options = [
+      { value: 'alpha', label: 'alpha' },
+      { value: 'beta', label: 'beta' },
+    ];
+    for (let i = 0; i < 3; i += 1) {
+      assert.deepEqual(
+        await prompts.multiselect({
+          message: 'Which remotes to run?',
+          options,
+          initialValues: ['alpha', 'beta'],
+          emptyHint: 'host only',
+        }),
+        { status: 'ok', value: [] }
+      );
+    }
+    assert.match(
+      io.output(),
+      /Which remotes to run\? \(comma-separated, empty = alpha, beta; none = host only; options: alpha, beta\): /
+    );
+    prompts.close();
+  });
+
+  it('keeps an empty line on the preselection when emptyHint is set', async () => {
+    const io = piped('\n');
+    const prompts = createReadlinePrompts({ input: io.stdin, output: io.stdout });
+    const options = [{ value: 'alpha', label: 'alpha' }];
+    assert.deepEqual(
+      await prompts.multiselect({
+        message: 'Remotes?',
+        options,
+        initialValues: ['alpha'],
+        emptyHint: 'host only',
+      }),
+      { status: 'ok', value: ['alpha'] }
+    );
+    prompts.close();
+  });
+
+  it('an option named none wins over the keyword and is not advertised', async () => {
+    const io = piped('none\n');
+    const prompts = createReadlinePrompts({ input: io.stdin, output: io.stdout });
+    const options = [
+      { value: 'none', label: 'none' },
+      { value: 'alpha', label: 'alpha' },
+    ];
+    assert.deepEqual(
+      await prompts.multiselect({ message: 'Remotes?', options, emptyHint: 'host only' }),
+      { status: 'ok', value: ['none'] }
+    );
+    assert.doesNotMatch(io.output(), /none = /);
+    prompts.close();
+  });
+
+  it('without emptyHint, none is an unknown option and the prompt re-asks', async () => {
+    const io = piped('none\n\n');
+    const prompts = createReadlinePrompts({ input: io.stdin, output: io.stdout });
+    const options = [{ value: 'alpha', label: 'alpha' }];
+    assert.deepEqual(await prompts.multiselect({ message: 'Remotes?', options }), {
+      status: 'cancelled',
+    });
+    assert.match(io.output(), /Unknown option; choose from: alpha/);
+    assert.match(io.output(), /Select at least one option/);
+    assert.doesNotMatch(io.output(), /none = /);
+    prompts.close();
+  });
+
   it('treats EOF as a cancel, before and between questions', async () => {
     const io = piped('y\n');
     const prompts = createReadlinePrompts({ input: io.stdin, output: io.stdout });
@@ -193,6 +262,26 @@ describe('clack prompts', () => {
     prompts.note('hello');
     prompts.cancel('bye');
     assert.deepEqual(clack.calls.slice(-2), ['info:hello', 'cancel:bye']);
+  });
+});
+
+describe('clack required flag', () => {
+  it('follows emptyHint: required without it, optional with it', async () => {
+    const seen: Array<boolean | undefined> = [];
+    const clack = fakeClack([['a'], []]);
+    const original = clack.multiselect;
+    clack.multiselect = (options) => {
+      seen.push(options.required);
+      return original(options);
+    };
+    const prompts = createClackPrompts(clack);
+    const options = [{ value: 'a', label: 'a' }];
+    await prompts.multiselect({ message: 'm', options });
+    assert.deepEqual(
+      await prompts.multiselect({ message: 'm', options, emptyHint: 'host only' }),
+      { status: 'ok', value: [] }
+    );
+    assert.deepEqual(seen, [true, false]);
   });
 });
 

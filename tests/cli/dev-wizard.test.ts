@@ -9,7 +9,8 @@ import {
   type WizardContext,
   type WizardOutcome,
 } from '../../src/cli/dev-wizard.js';
-import type { DevPlanEntry } from '../../src/runner/plan.js';
+import type { FederationConfig } from '../../src/core/index.js';
+import { buildDevPlan, type DevPlanEntry } from '../../src/runner/plan.js';
 import { CANCEL, fakePrompts, type ScriptedAnswer } from './fake-prompts.js';
 
 const entry = (
@@ -78,6 +79,37 @@ describe('runDevWizard', () => {
       standalone: 'alpha',
     });
     assert.equal(prompts.remaining(), 0);
+  });
+
+  it('an empty remotes answer is a host-only session, same plan as --apps host', async () => {
+    const { prompts, outcome } = await run([
+      [], // remotes: none
+      'ios',
+      false, // launch no
+      true, // host port
+    ]);
+    assert.deepEqual(prompts.emptyHints, ['host only']);
+    assert.ok(!prompts.asked.some((q) => q.includes('alpha')));
+    const answers = completed(outcome);
+    assert.deepEqual(answers.apps, ['host']);
+    assert.equal(answers.standalone, undefined);
+
+    const config: FederationConfig = {
+      host: { manifest: './m/host.json', command: 'run host' },
+      remotes: {
+        alpha: { manifest: './m/alpha.json', command: 'run alpha' },
+        beta: { manifest: './m/beta.json', command: 'run beta' },
+      },
+    };
+    const plan = (apps: string[]) =>
+      buildDevPlan({ config, configDir: '/ws', hostName: 'host_app', apps });
+    const flagged = plan(['host']);
+    assert.ok(flagged.ok);
+    assert.deepEqual(plan(answers.apps), flagged);
+    assert.deepEqual(
+      flagged.entries.map((e) => e.key),
+      ['host']
+    );
   });
 
   it('asks ports only for the host and the selected remotes', async () => {

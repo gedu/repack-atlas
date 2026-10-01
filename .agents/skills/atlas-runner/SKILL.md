@@ -63,7 +63,7 @@ does it fall back to `node <cli.js>`. Plans show
 - `--json` events (`plan`, `studio`, `app`, `launch`, `exit`) only grow: add fields, never rename or drop.
 - A new flag needs, in one change: `DEV_HELP`, a wizard answer or an explicit "flag only" reason, README/PRD §7.1.1 rows, and tests.
 - The wizard must not offer an answer the flags would reject (for example "all" platform under `--launch`).
-- The readline fallback never returns an empty selection (it re-asks); the clack adapter passes `required: false`, so an explicit empty pick means host only there.
+- Host-only sessions: the remotes question passes `emptyHint: 'host only'`. With it, clack gets `required: false` (deselect all) and readline accepts `none` (case-insensitive; an option literally named `none` wins). Both end as `apps: ['host']`, the same plan input as `--apps host`. An empty readline line still takes the preselection (all remotes). Without `emptyHint` an empty selection is never valid (readline re-asks, clack stays required).
 
 ## Testing
 

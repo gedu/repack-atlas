@@ -80,7 +80,9 @@ if you ask, launches the app on a device. On a terminal it opens a wizard:
 repack-atlas dev
 ```
 
-The wizard asks which remotes to run, the platform (iOS, Android or all),
+The wizard asks which remotes to run (all are preselected; deselect them all,
+or type `none` in the readline fallback, for a host-only session, the same as
+`--apps host`), the platform (iOS, Android or all),
 whether to launch the app (one platform only), a port for each app and, for
 remotes that declare `standalone: true`, whether to run one standalone. Ctrl-C
 at any question exits `0` with nothing started.

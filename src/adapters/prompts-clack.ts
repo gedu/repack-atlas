@@ -55,7 +55,7 @@ export function createClackPrompts(clack: ClackLike): PromptPort {
           ...(question.initialValues !== undefined
             ? { initialValues: question.initialValues }
             : {}),
-          required: false,
+          required: question.emptyHint === undefined,
           maxItems: 8,
         })
       ),
