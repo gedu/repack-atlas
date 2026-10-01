@@ -468,3 +468,47 @@ describe('--standalone against the installed start options', () => {
     assert.doesNotMatch(apps[0]!.command, /--bundler/);
   });
 });
+
+describe('buildDevPlan: flags the installed start does not declare', () => {
+  const base = { ok: true as const, bundler: 'rspack' as const, cli: '/c.js' };
+  const plan = (
+    startOptions: string[] | undefined,
+    extra: { platform?: 'ios'; config?: string }
+  ) =>
+    buildDevPlan({
+      config: {
+        host: {
+          manifest: './m/host.json',
+          root: './apps/host',
+          ...(extra.config !== undefined ? { config: extra.config } : {}),
+        },
+        remotes: {},
+      },
+      configDir: CONFIG_DIR,
+      hostName: 'host_app',
+      toolchains: {
+        [toolchainKey('/ws/apps/host', extra.config)]: {
+          ...base,
+          ...(startOptions !== undefined ? { startOptions } : {}),
+        },
+      },
+      ...(extra.platform !== undefined ? { platform: extra.platform } : {}),
+    });
+
+  it('a "config" field the start lacks fails naming the app and the flag', () => {
+    const result = plan(['--port'], { config: 'rspack.dev.js' });
+    assert.ok(!result.ok);
+    assert.match(result.reasons.join('\n'), /host: .*rspack\.dev\.js.*no --config option/);
+  });
+
+  it('--platform the start lacks fails naming the app and the flag', () => {
+    const result = plan(['--port'], { platform: 'ios' });
+    assert.ok(!result.ok);
+    assert.match(result.reasons.join('\n'), /host: --platform ios .*no --platform option/);
+  });
+
+  it('declared, or an unknown option set, keeps the safe behavior', () => {
+    ok(plan(['--port', '--config', '--platform'], { platform: 'ios', config: 'r.js' }));
+    ok(plan(undefined, { platform: 'ios', config: 'r.js' }));
+  });
+});

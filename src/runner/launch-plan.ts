@@ -11,7 +11,11 @@
 //
 // `--no-packager` always: the session's dev servers ARE the packager, and a
 // second one would fight for the port or split bundle serving away from the
-// federation session. `--device` rides as one verbatim argv entry (no shell).
+// federation session. `--device` rides as one verbatim argv entry (no shell; a Windows `.cmd`
+// shim is run via `cmd.exe` with every argument quoted, see `cmdShimSpawn`).
+//
+// A hoisted shim is shown by its absolute path, so `--dry-run --json` output
+// for such installs is machine-specific.
 
 import type { ReactNativeCliResult } from '../core/index.js';
 import type { DevPlanEntry, DevPlatform } from './plan.js';
@@ -28,7 +32,7 @@ export interface LaunchPlan {
   file: string;
   /** `[<cli script if node>, run-<platform>, --no-packager, ...]`. */
   args: string[];
-  /** Run through a shell (a Windows `.cmd` shim). */
+  /** A Windows `.cmd` shim: spawned through `cmd.exe` with quoted args. */
   shell?: boolean;
   /** True when `file` is the shim (display only). */
   viaShim?: true;

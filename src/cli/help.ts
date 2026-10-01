@@ -121,7 +121,10 @@ An app with a "root" starts through the argv Atlas builds, like upstream
 Re.Pack's federation dev runner: the app's own node_modules/.bin/react-native
 (node <its react-native CLI> when there is no shim)
 start [--bundler <rspack|webpack>] [--config <path>] --port <n>
---no-interactive, run without a shell and with the app root as cwd. The CLI
+--no-interactive, run without a shell and with the app root as cwd (a Windows
+.cmd shim runs as cmd.exe /d /s /c with every argument quoted, never through
+a raw shell). A hoisted shim shows as an absolute path in the plan, so
+--dry-run --json is machine-specific there. The CLI
 is resolved from each app's own root (missing = exit 2 naming the app). Only
 options the app's installed "start" command declares are passed (read from
 its react-native.config.js): published Re.Pack 5.x has no --bundler (its
@@ -163,8 +166,9 @@ Options
                        gets --standalone (ATLAS_APP_STANDALONE=1 for a
                        "command"); the rest of the session is unchanged.
   --launch             Put the app on the device once the target is ready:
-                       one-shot node <target's own react-native CLI>
-                       run-<platform> --no-packager, run from the target's
+                       one-shot <target's own .bin/react-native shim, else
+                       node <its react-native CLI>> run-<platform>
+                       --no-packager, run from the target's
                        root with its logs prefixed [launch]. The target is
                        the --standalone remote, else the host (it must be in
                        the session and declare a "root", even with a

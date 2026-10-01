@@ -316,7 +316,7 @@ adapter takes over. It is the only runtime dependency (AGENTS.md rule 11).
 **What runs.** Each app with a `root` starts through an argv Atlas builds:
 the app's `node_modules/.bin/react-native` shim (pnpm's shim sets the `NODE_PATH` the CLI needs; without a shim, `node <the app's react-native CLI>`) `start [--bundler <rspack|webpack>] [--config
 <path>] --port <n> --no-interactive [--platform <p>] [--standalone]`, with the
-app root as cwd and no shell. The CLI is resolved from each app's own root, so
+app root as cwd and no shell (a Windows `.cmd` shim runs as `cmd.exe /d /s /c` with every argument quoted and verbatim, never `shell: true`). A shim hoisted above the app shows by absolute path, so `--dry-run --json` is machine-specific there. A `config` entry or `--platform` that the installed `start` does not declare fails the plan (exit 2) instead of being dropped. The CLI is resolved from each app's own root, so
 `react-native` must be installed there. The bundler comes from the `config` file
 name, else from the `rspack.config.*` / `webpack.config.*` found in the app
 root (rspack when both or none exist). Options are **feature-detected per app**:

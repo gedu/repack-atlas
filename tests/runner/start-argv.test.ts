@@ -5,8 +5,10 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
   cliInvocation,
+  cmdShimSpawn,
   describeLaunch,
   detectBundler,
+  quoteForCmd,
   startArgs,
   type DevLaunch,
 } from '../../src/runner/start-argv.js';
@@ -223,5 +225,36 @@ describe('describeLaunch', () => {
     assert.match(line, /^node \/store\/rn\/cli\.js start /);
     assert.match(line, /--config "\/ws\/my app\/rspack\.config\.js"/);
     assert.match(line, /--port <auto>/);
+  });
+});
+
+describe('quoteForCmd / cmdShimSpawn (Windows .cmd shims)', () => {
+  it('wraps in quotes and caret-escapes metacharacters twice (cross-spawn)', () => {
+    assert.equal(quoteForCmd('plain'), '^^^"plain^^^"');
+    assert.equal(quoteForCmd('a b'), '^^^"a^^^ b^^^"');
+    assert.equal(quoteForCmd('a&b|c<d>e^f%g'), '^^^"a^^^&b^^^|c^^^<d^^^>e^^^^f^^^%g^^^"');
+    assert.equal(quoteForCmd('a&b', false), '^"a^&b^"');
+  });
+
+  it('escapes embedded quotes and trailing backslashes like the C runtime', () => {
+    assert.equal(quoteForCmd('say "hi"', false), '^"say^ \\^"hi\\^"^"');
+    assert.equal(quoteForCmd('C:\\dir\\', false), '^"C:\\dir\\\\^"');
+    assert.equal(quoteForCmd('a\\"b', false), '^"a\\\\\\^"b^"');
+  });
+
+  it('spawns cmd.exe /d /s /c with verbatim args, never a shell, and no bare metacharacter', () => {
+    const spawn = cmdShimSpawn('C:\\app\\node_modules\\.bin\\react-native.cmd', [
+      'run-ios',
+      '--device',
+      'x & calc',
+    ]);
+    assert.equal(spawn.file, 'cmd.exe');
+    assert.equal(spawn.windowsVerbatimArguments, true);
+    assert.deepEqual(spawn.args.slice(0, 3), ['/d', '/s', '/c']);
+    const line = spawn.args[3]!;
+    assert.match(line, /^".*"$/);
+    // Every `&` in the device value sits behind a caret: no live operator.
+    assert.doesNotMatch(line.replace(/\^&/g, ''), /&/);
+    assert.ok(line.includes('x^^^ ^^^&^^^ calc'), line);
   });
 });

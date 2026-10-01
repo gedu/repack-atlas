@@ -65,9 +65,45 @@ export interface CliInvocation {
 }
 
 /**
+ * Quote one argument for a `.cmd` shim run through `cmd.exe` (the cross-spawn
+ * algorithm): MSVCRT quoting first (backslashes before a quote doubled, `"`
+ * -> `\"`, trailing backslashes doubled, wrap in quotes), then every cmd.exe
+ * metacharacter caret-escaped. A `.cmd` shim re-parses its arguments through
+ * `%*`, so the escaping is applied twice (`doubleEscape`).
+ */
+const CMD_META = /([()\][%!^"`<>&|;, *?])/g;
+
+export function quoteForCmd(arg: string, doubleEscape = true): string {
+  let out = arg.replace(/(\\*)"/g, '$1$1\\"');
+  out = out.replace(/(\\*)$/, '$1$1');
+  out = `"${out}"`;
+  out = out.replace(CMD_META, '^$1');
+  return doubleEscape ? out.replace(CMD_META, '^$1') : out;
+}
+
+/**
+ * The spawn shape for a Windows `.cmd` shim: `cmd.exe /d /s /c "<line>"` with
+ * verbatim arguments, every argument quoted by `quoteForCmd`, so a `--device`
+ * or `--config` value can never inject a command. No `shell: true`.
+ */
+export function cmdShimSpawn(
+  shim: string,
+  args: readonly string[]
+): { file: string; args: string[]; windowsVerbatimArguments: true } {
+  const line = [shim.replace(CMD_META, '^$1'), ...args.map((a) => quoteForCmd(a))]
+    .join(' ');
+  return {
+    file: 'cmd.exe',
+    args: ['/d', '/s', '/c', `"${line}"`],
+    windowsVerbatimArguments: true,
+  };
+}
+
+/**
  * Prefer the app's package-manager shim (it exports the environment the CLI
  * needs, e.g. pnpm's NODE_PATH); fall back to `node <cli.js>` when the layout
- * has no shim. A Windows `.cmd` shim needs a shell.
+ * has no shim. A Windows `.cmd` shim is flagged (`shell`) so the spawn goes
+ * through `cmdShimSpawn` (cmd.exe with quoted arguments), never a raw shell.
  */
 export function cliInvocation(resolved: {
   cli: string;
@@ -93,7 +129,7 @@ export type DevLaunch =
       /** Resolved `react-native` CLI script of THIS app; present only when
        * `file` is `node` (no shim), then it is the first argument. */
       cli?: string;
-      /** Run through a shell (a Windows `.cmd` shim). */
+      /** A Windows `.cmd` shim: spawned via `cmdShimSpawn`, not directly. */
       shell?: boolean;
       /** Detected bundler: always shown, passed as `--bundler` only when the
        * installed `start` declares it (Re.Pack 5.x picks it from the app's
@@ -159,7 +195,8 @@ export function startArgs(
 /**
  * Readable form of a shim launch: the shim path relative to `cwd` when it
  * lives below it (`node_modules/.bin/react-native start ...`), absolute
- * otherwise (a hoisted workspace-root shim).
+ * otherwise (a hoisted workspace-root shim). The absolute form makes
+ * `--dry-run --json` output machine-specific for hoisted installs.
  */
 export function describeShim(
   file: string,

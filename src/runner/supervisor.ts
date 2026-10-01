@@ -14,9 +14,12 @@
 //     naturally. A command that wants the runner's port must read
 //     `ATLAS_APP_PORT` — the runner never rewrites a user's command line.
 //   - An app with only a `root` runs the argv Atlas builds (`src/runner/
-//     start-argv.ts`, upstream #1467 parity): `node <the app's own
-//     react-native CLI> start --bundler <detected> [--config <path>] --port N
-//     --no-interactive`, spawned WITHOUT a shell and with the app root as cwd.
+//     start-argv.ts`, upstream #1467 parity): `<the app's own
+//     node_modules/.bin/react-native shim | node <its react-native CLI>> start
+//     [--bundler <detected>] [--config <path>] --port N --no-interactive`,
+//     spawned WITHOUT a shell and with the app root as cwd. The one exception
+//     is a Windows `.cmd` shim, run as `cmd.exe /d /s /c "<quoted line>"` with
+//     verbatim arguments (every argument quoted, never `shell: true`).
 //   - An app with neither is skipped with a console warning, never guessed.
 //   - Both kinds receive `ATLAS_APP_NAME` (graph node name), `ATLAS_APP_PORT`
 //     (the runner-resolved port), `ATLAS_APP_ROOT` (resolved `root`, may be
@@ -63,8 +66,20 @@ import {
   PORT_CONFLICT_HINT,
 } from './ports.js';
 import { buildLaunchPlan, type LaunchPlan } from './launch-plan.js';
-import { startArgs, type DevLaunch } from './start-argv.js';
+import { cmdShimSpawn, startArgs, type DevLaunch } from './start-argv.js';
 import { resolveToolchains } from './toolchain.js';
+
+/**
+ * Spawn shape of one argv child: direct (`shell: false`), except a Windows
+ * `.cmd` shim, which goes through `cmd.exe` with every argument quoted.
+ */
+function shimSpawn(
+  file: string,
+  args: string[],
+  cmdShim: boolean | undefined
+): { file: string; args: string[]; windowsVerbatimArguments?: boolean } {
+  return cmdShim === true ? cmdShimSpawn(file, args) : { file, args };
+}
 
 /** Fallback node name when the host manifest cannot be read. */
 const HOST_FALLBACK_NAME = 'host';
@@ -351,7 +366,7 @@ export interface OneShotSpec {
   file: string;
   args: string[];
   cwd: string;
-  /** Run through a shell (a Windows `.cmd` shim). */
+  /** A Windows `.cmd` shim: spawned through `cmd.exe` with quoted args. */
   shell?: boolean;
 }
 
@@ -447,11 +462,9 @@ export function createDevSupervisor(options: DevSupervisorOptions) {
             shell: true,
           }
         : {
-            file: launch.file,
-            args: startArgs(launch, app.plan.port),
+            ...shimSpawn(launch.file, startArgs(launch, app.plan.port), launch.shell),
             cwd: app.plan.cwd,
             env: envFor(app.plan),
-            shell: launch.shell === true,
           }
     );
     app.handle = handle;
@@ -523,10 +536,8 @@ export function createDevSupervisor(options: DevSupervisorOptions) {
       let handle: ProcessHandle;
       try {
         handle = options.processRunner.start({
-          file: spec.file,
-          args: spec.args,
+          ...shimSpawn(spec.file, spec.args, spec.shell),
           cwd: spec.cwd,
-          shell: spec.shell === true,
         });
       } catch {
         options.onOneShot?.(name, {

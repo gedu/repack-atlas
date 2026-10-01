@@ -99,12 +99,48 @@ describe('createReactNativeCliResolver', () => {
     assert.deepEqual(resolver.resolve(app), { status: 'ok', cli }, 'no shim yet');
     const bin = path.join(app, 'node_modules', '.bin');
     mkdirSync(bin, { recursive: true });
-    writeFileSync(path.join(bin, 'react-native'), '#!/bin/sh\n');
+    symlinkSync(cli, path.join(bin, 'react-native'));
     assert.deepEqual(resolver.resolve(app), {
       status: 'ok',
       cli,
       shim: path.join(bin, 'react-native'),
     });
+  });
+
+  it('accepts a pnpm-style text shim that names this cli (cmd-shim-target)', (t) => {
+    if (process.platform === 'win32') return t.skip('posix shim name');
+    const app = path.join(root, 'pnpmshim');
+    const cli = rnPackage(path.join(app, 'node_modules', 'react-native'), {
+      'react-native': './cli.js',
+    });
+    const bin = path.join(app, 'node_modules', '.bin');
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(
+      path.join(bin, 'react-native'),
+      `#!/bin/sh\nexec node "$basedir/../react-native/cli.js" "$@"\n# cmd-shim-target=${cli}\n`
+    );
+    assert.equal(
+      (resolver.resolve(app) as { shim?: string }).shim,
+      path.join(bin, 'react-native')
+    );
+  });
+
+  it('skips a hoisted shim that belongs to a different react-native', (t) => {
+    if (process.platform === 'win32') return t.skip('posix shim name');
+    const workspace = path.join(root, 'mismatch');
+    const otherCli = rnPackage(
+      path.join(workspace, 'node_modules', 'react-native'),
+      { 'react-native': './cli.js' }
+    );
+    const hoistedBin = path.join(workspace, 'node_modules', '.bin');
+    mkdirSync(hoistedBin, { recursive: true });
+    symlinkSync(otherCli, path.join(hoistedBin, 'react-native'));
+    const app = path.join(workspace, 'apps', 'a');
+    const ownCli = rnPackage(path.join(app, 'node_modules', 'react-native'), {
+      'react-native': './cli.js',
+    });
+    // The app has its own react-native but no shim: the hoisted one is not its.
+    assert.deepEqual(resolver.resolve(app), { status: 'ok', cli: ownCli });
   });
 
   it('a missing package fails naming the app root', () => {
@@ -210,5 +246,55 @@ module.exports = { commands: [
       "module.exports = [{ name: 'start', options: [{ name: '--platform <s>' }] }];"
     );
     assert.deepEqual(resolver.startOptions(app), { status: 'ok', options: ['--platform'] });
+  });
+});
+
+describe('createReactNativeCliResolver.startOptions failures', () => {
+  function app(name: string, source: string): string {
+    const dir = path.join(root, name);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(path.join(dir, 'react-native.config.js'), source);
+    return dir;
+  }
+
+  it('reports the exit code and the first stderr line', () => {
+    const dir = app(
+      'exitcode',
+      "console.error('boom happened'); process.exit(3);"
+    );
+    const result = resolver.startOptions(dir);
+    assert.ok(result.status === 'unknown');
+    assert.match(result.message, /exited with code 3: boom happened/);
+  });
+
+  it('keeps a report printed before the process is killed late', () => {
+    const dir = app(
+      'slowexit',
+      "module.exports = { commands: [{ name: 'start', options: [{ name: '--port <n>' }] }] };\nsetInterval(() => {}, 1000);"
+    );
+    process.env['ATLAS_RN_INSPECT_TIMEOUT_MS'] = '1500';
+    try {
+      assert.deepEqual(resolver.startOptions(dir), {
+        status: 'ok',
+        options: ['--port'],
+      });
+    } finally {
+      delete process.env['ATLAS_RN_INSPECT_TIMEOUT_MS'];
+    }
+  });
+
+  it('a hang without a report is unknown and says it timed out', () => {
+    const dir = app(
+      'hang',
+      'Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 60000);'
+    );
+    process.env['ATLAS_RN_INSPECT_TIMEOUT_MS'] = '1500';
+    try {
+      const result = resolver.startOptions(dir);
+      assert.ok(result.status === 'unknown');
+      assert.match(result.message, /timed out after 1\.5s/);
+    } finally {
+      delete process.env['ATLAS_RN_INSPECT_TIMEOUT_MS'];
+    }
   });
 });

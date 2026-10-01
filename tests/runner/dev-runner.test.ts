@@ -1060,7 +1060,7 @@ function makeApp(
       mkdirSync(bin, { recursive: true });
       writeFileSync(
         path.join(bin, 'react-native'),
-        `#!/bin/sh\nexport ATLAS_SHIM_RAN=1\nexec "${process.execPath}" "${path.join(pkg, 'cli.js')}" "$@"\n`
+        `#!/bin/sh\nexport ATLAS_SHIM_RAN=1\nexec "${process.execPath}" "${path.join(pkg, 'cli.js')}" "$@"\n# cmd-shim-target=${path.join(pkg, 'cli.js')}\n`
       );
       chmodSync(path.join(bin, 'react-native'), 0o755);
     }

@@ -119,6 +119,11 @@ export interface SpawnSpec {
    * `npx`/PATH-wrapped user commands; avoid otherwise.
    */
   shell?: boolean;
+  /**
+   * Windows only: pass `args` to the child without Node's own quoting (the
+   * caller already quoted them, e.g. `cmd.exe /d /s /c "<line>"`).
+   */
+  windowsVerbatimArguments?: boolean;
 }
 
 /** A started child process. */

@@ -241,6 +241,25 @@ export function buildDevPlan(input: BuildDevPlanInput): BuildDevPlanResult {
         ...(input.standalone === entry.key ? { standalone: true } : {}),
       };
       cwd = appRoot;
+      const dropped: Array<[string, string]> = [];
+      if (entry.config !== undefined) {
+        dropped.push(['--config', `the "config" field (${entry.config})`]);
+      }
+      if (input.platform !== undefined) {
+        dropped.push(['--platform', `--platform ${input.platform}`]);
+      }
+      const missing = dropped.find(
+        ([flag]) =>
+          launch.kind === 'argv' &&
+          launch.startOptions !== undefined &&
+          !declaresStartOption(launch, flag)
+      );
+      if (missing !== undefined) {
+        reasons.push(
+          `${entry.key}: ${missing[1]} would be dropped: the installed Re.Pack's start command declares no ${missing[0]} option. Give the app a "command" that handles it, or drop it.`
+        );
+        continue;
+      }
       if (
         input.standalone === entry.key &&
         !declaresStartOption(launch, '--standalone')
