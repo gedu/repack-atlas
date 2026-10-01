@@ -178,6 +178,50 @@ Smoke PASSED visually ("se ve bien"), five feedback items → follow-up tasks:
 Delegate F1-F5 as one bounded UI-polish writer (files: app.tsx, model.ts if
 pinning belongs there, tests). Then user smoke again.
 
+## Second smoke feedback (user, 2026-10-01) → F6-F12
+- [x] F6 — Scroll-up beyond top blanks the panel: logWindow must clamp the
+      offset to `max(0, total - pageHeight)` (with the pinned line counted).
+- [x] F7 — `Building the app........` (8+ dots) still floods: the collapse
+      normalizer tolerates only ≤6 trailing dots; drop that cap for
+      dots-only variation. (Two lines in the launch panel differ only by
+      8 vs 5 dots and both survived.)
+- [x] F8 — Bar never reaches 100%: Re.Pack's child never prints a 100 frame
+      (jumps 98% → Compiled). When a terminal line (Compiled/success/error)
+      arrives for an active bar, render the bar completed (fill to full,
+      percent 100) as the bar's final frame — the build DID complete, this
+      re-draws an outcome the child already reported. Un-pin the bar once a
+      terminal line follows it (trading showed a pinned 98% bar below
+      `Compiled` — the pin must die on terminal lines, not only by
+      recency).
+- [x] F9 — No Re.Pack colors visible: piped children emit FALLBACK ascii
+      symbols (i, !, x, ✓, ->) per repack reporters.ts; LEADING_SYMBOL only
+      matches the unicode set, so colored glyphs never triggered. Add the
+      ascii fallbacks (leading token before a space). Polish: dim the
+      `[hh:mm:ss.SSSZ]` timestamp span, keep messages default foreground.
+- [x] F10 — Real-time liveness: sidebar rows show an unread-activity marker
+      after the port when logs arrived while the app is NOT selected
+      (count + animated ▾ bounce, cleared on select). Creative but subtle.
+- [x] F11 — `m` toggles mouse reporting off (native drag-copy without
+      Shift, wheel becomes terminal-native) / on; footer reflects state.
+      Full-row highlight during native copy is a terminal artifact, not
+      ours — document.
+- [x] F12 — Typed input: `i` opens a one-line input at the panel bottom;
+      Enter sends the line + \n to the SELECTED app's stdin (new lines
+      only). Requires: ProcessHandle.writeStdin (core port, additive),
+      adapter writes child.stdin (children already spawn piped),
+      supervisor.writeAppInput(key|name, line), seam passes a callback
+      into the TUI; oneshot 'launch' row has no persistent stdin → input
+      disabled for it. Test: stub bundler echoes stdin back to stdout
+      (fixtures pattern). Honest caveat: RN CLI reads interactive keys
+      only on a TTY stdin; piped lines still reach child.stdin and work
+      for any child that reads stdin, but RN's key shortcuts may ignore
+      them — report observed behavior, do not promise reload keys work.
+
+## Next step (current)
+One bounded writer, two work-unit commits: U1 = F6-F11 (app.tsx/model.ts +
+tests), U2 = F12 (ports/adapter/supervisor/dev.ts/TUI + stub test).
+COMMIT AFTER EACH UNIT before anything else (workers keep dying mid-report).
+
 ### F1-F5 landed (uncommitted worker output finished + verified by parent)
 Worker died before reporting; parent verified: 2 real fixes applied by the
 parent — stripSpinner left a leading space (test expected trim); SGR mouse
@@ -188,3 +232,12 @@ renderer re-inserts. Observed: build/lint/typecheck exit 0; pnpm test 638/638
 (sidebar=selection, panel=scroll 3 lines), footer notes shift+drag copy.
 F4 pin rule: progress-shaped line pinned only while within the last 3 buffer
 lines; 100% bar normalization only redraws what the child printed.
+
+### F6-F12 landed
+- U1 `f2d8a1d` (F6-F11), U2 `ecf01c5` (F12 typed stdin; ProcessHandle.
+  writeStdin optional, supervisor.writeAppInput, `i` prompt; TTY caveat:
+  RN CLI reads shortcuts only from a TTY stdin — bytes reach the child,
+  effects depend on the child reading stdin).
+- Parent spot check: `pnpm test` 663/663 pass (was 638; +25). check:commits
+  OK (9 items). Deviation accepted: `! `-prefixed stderr lines settle
+  instead of collapsing (warn/error text never swallowed).
