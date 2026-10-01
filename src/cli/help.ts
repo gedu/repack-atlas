@@ -210,6 +210,8 @@ Options
   --help               Print this help
 
 Keys (interactive TTY only; degrades to Ctrl-C without one)
+  An interactive session renders a dashboard: app sidebar + per-app logs.
+  ↑ / ↓   Select an app (PgUp / PgDn scroll the selected log)
   v / o   Open the Studio URL in the browser (the URL is logged regardless)
   q       Quit — same as Ctrl-C (SIGINT → grace → kill each process group)
 

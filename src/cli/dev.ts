@@ -18,6 +18,12 @@
 // lines stay plain `[name]`-prefixed lines on stdout (same convention as
 // upstream `federation-dev`): parse stdout line by line and keep only
 // lines starting with `{`.
+//
+// Human TTY sessions render the ink dashboard (`dev-tui/`, mounted below
+// right before supervision starts): a TUI failure never fails the session.
+// Machine paths (`--json`, `--ci`, non-TTY, `--dry-run`) never import
+// ink/react (AGENTS.md rule 11 exception (b)): the render layer is
+// dynamic-imported inside the TUI gate only.
 
 import {
   createManifestSource,
@@ -64,6 +70,16 @@ import {
   PORT_CONFLICT_HINT,
 } from '../runner/ports.js';
 import { type PromptPort } from '../core/index.js';
+// The TUI view-model is PURE (no ink/react — model.ts holds the promise), so
+// importing it statically keeps rule 11 exception (b) intact: only the ink
+// render layer (`dev-tui/app.js` + `ink`/`react`) stays behind dynamic
+// imports. tests/cli/dev-tui-seam.test.ts locks this file free of any
+// top-level ink/react import.
+import {
+  createDevTuiModel,
+  type DevTuiModel,
+  type DevTuiRosterEntry,
+} from './dev-tui/model.js';
 import { lastValue, parseArgs, type ArgSpec } from './args.js';
 import { runDevWizard, shouldRunWizard } from './dev-wizard.js';
 import { DEV_HELP } from './help.js';
@@ -162,6 +178,74 @@ function openInBrowser(
     void handle.waitForExit();
   } catch {
     io.writeErr(`dev: could not open the browser (${url})`);
+  }
+}
+
+/**
+ * Alt-screen enter + cursor hide, and the reverse (leave + cursor show).
+ * ink 6 does NOT enter the alt screen itself, so the seam owns it: the
+ * dashboard renders on a scratch screen and the plain shell output (plan
+ * table, final messages) stays scrollback-untouched above it.
+ */
+const ALT_SCREEN_ENTER = '\u001b[?1049h\u001b[?25l';
+const ALT_SCREEN_LEAVE = '\u001b[?25h\u001b[?1049l';
+
+/** Swallows human output; used to keep `reportLaunch`'s emit path in the TUI. */
+const NULL_IO: DevIo = { writeOut() {}, writeErr() {} };
+
+/**
+ * Mounts the ink dashboard (rule 11 exception (b)) for an interactive
+ * session. ALL of ink/react/app.js is behind dynamic imports — a static
+ * import here would load them on every machine path, so the TUI can only
+ * ever cost startup time, never break `--json`/`--ci`/non-TTY (the contract
+ * tests/cli/dev-tui-seam.test.ts locks by static analysis — the eslint
+ * config has no ink/react rule, so that test is the fence).
+ * `createElement` comes from react directly; app.js's emitted JSX (react-jsx
+ * transform) pulls `react/jsx-runtime` through app.js itself.
+ * Returns a teardown (unmount under the alt screen, then leave it), or `null`
+ * when anything failed to load or render — the caller keeps plain output.
+ * A dev session must never die because its render layer broke.
+ */
+async function mountDevTui(
+  model: DevTuiModel,
+  onQuit: () => void,
+  onOpenStudio: (() => void) | undefined,
+  io: DevIo
+): Promise<(() => void) | null> {
+  try {
+    const { render } = await import('ink');
+    const { createElement } = await import('react');
+    const { DevTuiApp } = await import('./dev-tui/app.js');
+    // Alt screen before render: ink's first frame lands on the scratch
+    // screen. exitOnCtrlC:false keeps Ctrl-C flowing to onQuit.
+    process.stdout.write(ALT_SCREEN_ENTER);
+    try {
+      const instance = render(
+        createElement(DevTuiApp, {
+          model,
+          onQuit,
+          ...(onOpenStudio !== undefined ? { onOpenStudio } : {}),
+        }),
+        { exitOnCtrlC: false }
+      );
+      return () => {
+        // Unmount FIRST so ink's final frame paints under the alt screen,
+        // then leave it: the shell prompt returns clean.
+        try {
+          instance.unmount();
+        } finally {
+          process.stdout.write(ALT_SCREEN_LEAVE);
+        }
+      };
+    } catch (error) {
+      // Render broke after we took the screen: give it back.
+      process.stdout.write(ALT_SCREEN_LEAVE);
+      throw error;
+    }
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    io.writeErr(`dev: TUI unavailable (${reason}); using plain output`);
+    return null;
   }
 }
 
@@ -579,12 +663,45 @@ export async function runDevCommand(
   }
 
   // 3. Supervisor. Status transitions fan out to: the --json stream, an
-  // SSE repaint, and (human mode) a one-line notice.
+  // SSE repaint, and (human mode) a one-line notice — or the TUI dashboard
+  // for a human at a real terminal (see the gate below).
+  //
+  // TUI gate (rule 11 exception (b)): the SAME human-interactive condition
+  // as the key handling (`interactive`: no --ci, no --json, TTY stdin) PLUS
+  // TTY stdout, reached only on the live plan path after the wizard closed
+  // and the plan/warnings/studio-URL lines printed. `env.stdoutIsTTY` (not
+  // process) keeps the gate injectable for tests. The roster mirrors
+  // `plan.apps` in plan order (buildDevPlan puts the host first); rows
+  // answer to key AND graph name, which is what the supervisor emits.
+  const tuiModel =
+    !ci && !json && Boolean(process.stdin.isTTY) && env.stdoutIsTTY
+      ? createDevTuiModel({
+          apps: plan.apps.map(
+            (app): DevTuiRosterEntry => ({
+              key: app.key,
+              name: app.name,
+              role: app.role,
+              port: app.port,
+              ...(app.reassignedFrom !== undefined
+                ? { reassignedFrom: app.reassignedFrom }
+                : {}),
+            })
+          ),
+          ...(plan.launch !== undefined ? { launchName: 'launch' } : {}),
+        })
+      : null;
+  // Flip to true only once ink actually rendered; the hooks below branch on
+  // it (they can only fire after `start()`, well after the mount attempt).
+  let tuiActive = false;
   const supervisor = createDevSupervisor({
     plan,
     processRunner,
-    onLog(app, _stream, line) {
-      io.writeOut(`[${app}] ${line}`);
+    onLog(app, stream, line) {
+      if (tuiActive) {
+        tuiModel?.log(app, stream, line, Date.now());
+      } else {
+        io.writeOut(`[${app}] ${line}`);
+      }
     },
     onStatus(app, status, port, pid) {
       const reassignedFrom = plan.apps.find(
@@ -598,10 +715,26 @@ export async function runDevCommand(
         ...(pid !== undefined ? { pid } : {}),
         ...(reassignedFrom !== undefined ? { reassignedFrom } : {}),
       });
-      if (!json) io.writeOut(`dev: ${app} → ${status} (port ${port})`);
+      if (tuiActive) {
+        // The sidebar row replaces the one-line notice; --json above and the
+        // SSE repaint below are unchanged.
+        tuiModel?.status(app, status, port, pid);
+      } else if (!json) {
+        io.writeOut(`dev: ${app} → ${status} (port ${port})`);
+      }
       void studio?.notify();
     },
     onOneShot(name, result) {
+      if (tuiActive) {
+        // Keep the emit path EXACTLY (the --json launch events); route the
+        // one-shot row's status through the model instead of reportLaunch's
+        // human lines — the sidebar already shows started/exited/error via
+        // oneShot, so its plain/notice lines would be noise on the alt
+        // screen.
+        reportLaunch(name, result, emit, NULL_IO, json);
+        tuiModel?.oneShot(name, result);
+        return;
+      }
       reportLaunch(name, result, emit, io, json);
     },
   });
@@ -640,22 +773,40 @@ export async function runDevCommand(
   // Keys only on a real TTY without --json/--ci; non-TTY (CI, pipes)
   // degrades to signal-driven shutdown with no stdin tampering.
   const interactive = !ci && !json && Boolean(process.stdin.isTTY);
+  const openStudio = (): void => {
+    if (!studio) return;
+    const url = studio.url();
+    if (url) openInBrowser(url, processRunner, io);
+  };
+  // The raw-mode key handler serves the PLAIN interactive rendering only.
+  // When the TUI mounts, ink's useInput owns stdin raw mode entirely (it
+  // setRawMode(true) on mount and restores on unmount) and its own keys
+  // (q/Ctrl-C → onQuit, v/o → onOpenStudio) replace these — double-managing
+  // raw mode or double-listening would fight over every keystroke.
   const onKeydata = (chunk: Buffer): void => {
     const key = chunk.toString('utf8');
     // Raw mode bypasses the tty driver: Ctrl-C arrives as ETX, `q` quits,
     // `v`/`o` open the Studio URL in the platform browser.
     if (key === 'q' || key === '\u0003') requestShutdown();
-    else if ((key === 'v' || key === 'o') && studio) {
-      const url = studio.url();
-      if (url) openInBrowser(url, processRunner, io);
-    }
+    else if ((key === 'v' || key === 'o') && studio) openStudio();
   };
-  if (interactive) {
+  // With the TUI mounting, stdin state must be clean before ink takes it:
+  // the wizard's PromptPort is closed by now (clack restores raw mode and
+  // shows the cursor when a question settles; readline closes its interface
+  // and never touched raw mode), so the seam only pauses the stream here —
+  // ink refs/reuses stdin itself.
+  const tuiWillMount = tuiModel !== null;
+  let plainKeysAttached = false;
+  const attachPlainKeys = (): void => {
+    plainKeysAttached = true;
     process.stdin.setRawMode(true);
     process.stdin.resume();
     process.stdin.on('data', onKeydata);
-  }
+  };
+  if (interactive && !tuiWillMount) attachPlainKeys();
+  else if (tuiWillMount) process.stdin.pause();
 
+  let teardownTui: (() => void) | null = null;
   try {
     if (!json) {
       const summary = plan.apps
@@ -664,20 +815,50 @@ export async function runDevCommand(
       io.writeOut(
         `dev: supervising ${plan.apps.length} app(s)${summary ? ` (${summary})` : ''}`
       );
-      if (interactive) {
+      if (interactive && !tuiWillMount) {
         io.writeOut('keys: [v]/[o] open studio · [q] or Ctrl-C quit');
+      }
+    }
+    if (tuiWillMount) {
+      // Mount after the supervising/keys lines (they belong to the normal
+      // screen and scroll away with the alt screen anyway — fine) and right
+      // before `start()`, so no child output races the first frame.
+      teardownTui = await mountDevTui(
+        tuiModel,
+        requestShutdown,
+        studio ? openStudio : undefined,
+        io
+      );
+      tuiActive = teardownTui !== null;
+      if (!tuiActive && interactive) {
+        // TUI broke: degrade to today's plain interactive rendering —
+        // warning already written by mountDevTui — so re-attach the plain
+        // keys the mount attempt had suppressed.
+        if (!json) {
+          io.writeOut('keys: [v]/[o] open studio · [q] or Ctrl-C quit');
+        }
+        attachPlainKeys();
       }
     }
     await supervisor.start();
     await finished;
   } finally {
-    if (interactive) {
-      process.stdin.setRawMode(false);
-      process.stdin.pause();
-      process.stdin.removeListener('data', onKeydata);
+    // Order: TUI teardown FIRST (unmount paints its final frame under the
+    // alt screen, then the alt-screen leave restores the shell screen),
+    // then the plain-mode stdin teardown, then the signal handlers. Hooks
+    // still firing after teardown (shutdown statuses) write to the model —
+    // harmless — and keep emitting --json; nothing prints to the screen.
+    try {
+      teardownTui?.();
+    } finally {
+      if (plainKeysAttached) {
+        process.stdin.setRawMode(false);
+        process.stdin.pause();
+        process.stdin.removeListener('data', onKeydata);
+      }
+      process.removeListener('SIGINT', onSigint);
+      process.removeListener('SIGTERM', onSigterm);
     }
-    process.removeListener('SIGINT', onSigint);
-    process.removeListener('SIGTERM', onSigterm);
   }
 
   await supervisor.shutdown();
