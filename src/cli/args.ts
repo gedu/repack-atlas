@@ -1,5 +1,5 @@
-// Hand-rolled argv parsing for the `repack-atlas` bin (no runtime deps,
-// AGENTS.md: the CLI is a thin adapter and brings no new dependency). One
+// Hand-rolled argv parsing for the `repack-atlas` bin (no new dependency,
+// AGENTS.md rule 11: the CLI is a thin adapter). One
 // small spec-driven parser is shared by every subcommand so unknown options,
 // missing values and repeatable options behave identically everywhere —
 // every parse failure maps to exit code 2 ("could not answer").

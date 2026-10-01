@@ -2,7 +2,7 @@
 // to run, spawns each app (its command or built argv) through the `ProcessRunner` port,
 // and tracks one live status per app. This is a REIMPLEMENTATION of the
 // concept in upstream #1467 (`federation-dev`) at demo scope — not a port:
-// no wizard, no adb. The upstream README
+// the wizard lives in `src/cli/dev-wizard.ts`, there is no adb. The upstream README
 // (`website/src/latest/api/cli/federation-dev.mdx` @ feat/federation-dev-runner)
 // was consulted for concepts only (prefixed logs, port probes before spawn,
 // ordered SIGINT→grace→SIGTERM shutdown, one JSON event per transition).
@@ -102,6 +102,9 @@ export interface LoadedDevPlan {
   configDir: string;
   entries: DevPlanEntry[];
   skipped: DevSkippedApp[];
+  /** Config keys of the remotes declaring `standalone: true` (the wizard
+   * offers standalone only for these). */
+  standaloneRemotes: string[];
   /** Present only with `--launch`: the one-shot app launch. */
   launch?: LaunchPlan;
 }
@@ -144,6 +147,8 @@ export interface DevPlanOptions {
   platform?: DevPlatform;
   /** Remote key started with `--standalone` (gated on `standalone: true`). */
   standalone?: string;
+  /** Per-app port overrides by config key (wizard answers, validated). */
+  ports?: Readonly<Record<string, number>>;
   /** `--auto-ports`: busy declared ports move to a free port. */
   autoPorts?: boolean;
   /** `--launch` (needs `platform`; the CLI gates that first) + `--device`. */
@@ -224,6 +229,7 @@ export async function loadDevPlan(
     ...(options.standalone !== undefined
       ? { standalone: options.standalone }
       : {}),
+    ...(options.ports !== undefined ? { ports: options.ports } : {}),
   });
   if (!built.ok) return built;
 
@@ -248,6 +254,9 @@ export async function loadDevPlan(
     configDir,
     entries: built.entries,
     skipped: built.skipped,
+    standaloneRemotes: Object.entries(config.remotes)
+      .filter(([, remote]) => remote.standalone === true)
+      .map(([key]) => key),
     ...(launch !== undefined ? { launch } : {}),
   };
 }

@@ -1,7 +1,8 @@
 // `repack-atlas dev` (T9, docs/PRD.md §7.1/§7.2): argv → supervisor +
-// Studio composition. This is the interactive-but-demo-grade runner: no
-// wizard — start what the workspace declares (an explicit
-// `command`, or the react-native start argv Atlas builds from `root`),
+// Studio composition. Start what the workspace declares (an explicit
+// `command`, or the react-native start argv Atlas builds from `root`), chosen
+// by flags or, on a TTY without `--apps`, by the interactive wizard
+// (`dev-wizard.ts`; its answers feed the same plan inputs as the flags),
 // prefix its logs, probe ports for readiness, serve the read-only Studio
 // over the live graph, and shut everything down in order.
 //
@@ -20,6 +21,7 @@ import {
   createManifestSource,
   createNodeProcessRunner,
   createNodeProjectFs,
+  createPrompts,
   createReactNativeCliResolver,
   createWorkspaceConfigReader,
 } from '../adapters/index.js';
@@ -41,6 +43,7 @@ import {
   DEV_PLATFORMS,
   formatPlanTable,
   toPlanEventApps,
+  type DevPlanEntry,
   type DevPlanEventApp,
   type DevPlatform,
 } from '../runner/plan.js';
@@ -48,6 +51,7 @@ import {
   formatLaunchLine,
   toPlanEventLaunch,
   type DevPlanEventLaunch,
+  type LaunchPlan,
 } from '../runner/launch-plan.js';
 import {
   allocatePorts,
@@ -55,7 +59,9 @@ import {
   describeReassignments,
   PORT_CONFLICT_HINT,
 } from '../runner/ports.js';
+import { type PromptPort } from '../core/index.js';
 import { lastValue, parseArgs, type ArgSpec } from './args.js';
+import { runDevWizard, shouldRunWizard } from './dev-wizard.js';
 import { DEV_HELP } from './help.js';
 
 const EXIT_CLEAN = 0;
@@ -68,6 +74,7 @@ export const DEV_SPEC: ArgSpec = {
   booleanFlags: [
     'json',
     'ci',
+    'no-interactive',
     'no-studio',
     'dry-run',
     'auto-ports',
@@ -105,6 +112,35 @@ export interface DevIo {
   writeErr(text: string): void;
 }
 
+/** The terminal facts and prompt factory the wizard gate depends on. */
+export interface DevEnv {
+  stdoutIsTTY: boolean;
+  stdinIsTTY: boolean;
+  createPrompts(): Promise<PromptPort>;
+}
+
+const processDevEnv = (): DevEnv => ({
+  stdoutIsTTY: Boolean(process.stdout.isTTY),
+  stdinIsTTY: Boolean(process.stdin.isTTY),
+  createPrompts: () => createPrompts(),
+});
+
+/** Launch needs exactly one platform (there is no `run-all`). */
+const LAUNCH_NEEDS_PLATFORM =
+  'dev: --launch needs a single platform: pass --platform ios or --platform android (or drop --launch to serve only)';
+
+/** The `{event:'plan'}` line shared by the dry-run and the live path. */
+function planEvent(
+  entries: DevPlanEntry[],
+  launch: LaunchPlan | undefined
+): DevEvent {
+  return {
+    event: 'plan',
+    apps: toPlanEventApps(entries),
+    ...(launch !== undefined ? { launch: toPlanEventLaunch(launch) } : {}),
+  };
+}
+
 /** Platform opener for `v`/`o`; best-effort, never fails the session. */
 function openInBrowser(
   url: string,
@@ -140,6 +176,7 @@ interface DryRunInput {
   platform: DevPlatform | undefined;
   standalone: string | undefined;
   launch: { device?: string } | undefined;
+  ports: Record<string, number> | undefined;
   autoPorts: boolean;
   json: boolean;
   io: DevIo;
@@ -172,6 +209,7 @@ async function runDryRun(input: DryRunInput): Promise<number> {
     ...(input.platform !== undefined ? { platform: input.platform } : {}),
     ...(input.standalone !== undefined ? { standalone: input.standalone } : {}),
     ...(input.launch !== undefined ? { launch: input.launch } : {}),
+    ...(input.ports !== undefined ? { ports: input.ports } : {}),
   });
   if (!plan.ok) {
     for (const reason of plan.reasons) io.writeErr(`dev: ${reason}`);
@@ -187,13 +225,7 @@ async function runDryRun(input: DryRunInput): Promise<number> {
   const shown = allocation.ok
     ? applyAssignments(plan.entries, allocation.assignments)
     : plan.entries;
-  emit({
-    event: 'plan',
-    apps: toPlanEventApps(shown),
-    ...(plan.launch !== undefined
-      ? { launch: toPlanEventLaunch(plan.launch) }
-      : {}),
-  });
+  emit(planEvent(shown, plan.launch));
   if (!input.json) {
     io.writeOut(formatPlanTable(shown));
     if (plan.launch !== undefined) io.writeOut(formatLaunchLine(plan.launch));
@@ -259,7 +291,8 @@ function reportLaunch(
 
 export async function runDevCommand(
   argv: string[],
-  io: DevIo
+  io: DevIo,
+  env: DevEnv = processDevEnv()
 ): Promise<number> {
   const parsed = parseArgs(argv, DEV_SPEC);
   if (parsed.flags.has('help')) {
@@ -336,28 +369,33 @@ export async function runDevCommand(
   // Upstream parity: launching needs exactly one platform (there is no
   // `run-all`), and the two launch flags are opposites. Both are usage errors
   // before anything is read or spawned. Without `--launch` nothing launches
-  // (the wizard asks on a TTY in a later slice); `--device` alone is ignored.
+  // unless the wizard asks and the user agrees; `--device` alone is ignored.
   const wantLaunch = parsed.flags.has('launch');
   if (wantLaunch && parsed.flags.has('no-launch')) {
     io.writeErr('dev: --launch and --no-launch cannot be combined');
     return EXIT_NO_ANSWER;
   }
   if (wantLaunch && platform === undefined) {
-    io.writeErr(
-      'dev: --launch needs a single platform: pass --platform ios or --platform android (or drop --launch to serve only)'
-    );
+    io.writeErr(LAUNCH_NEEDS_PLATFORM);
     return EXIT_NO_ANSWER;
   }
+  const appsFlag = lastValue(parsed, 'apps');
+  const wizard = shouldRunWizard({
+    hasApps: appsFlag !== undefined,
+    noInteractive: parsed.flags.has('no-interactive') || ci,
+    json,
+    stdoutIsTTY: env.stdoutIsTTY,
+    stdinIsTTY: env.stdinIsTTY,
+  });
   const device = lastValue(parsed, 'device');
-  if (device !== undefined && !wantLaunch) {
+  if (device !== undefined && !wantLaunch && !wizard) {
     io.writeErr('dev: warning  --device is ignored without --launch');
   }
-  const launch = wantLaunch
+  let launch: { device?: string } | undefined = wantLaunch
     ? { ...(device !== undefined ? { device } : {}) }
     : undefined;
 
-  const appsFlag = lastValue(parsed, 'apps');
-  const appNames =
+  let appNames =
     appsFlag !== undefined
       ? appsFlag
           .split(',')
@@ -375,6 +413,58 @@ export async function runDevCommand(
   const manifestSource = createManifestSource(fs);
   const reactNativeCli = createReactNativeCliResolver();
 
+  // Wizard: an input source only. Its answers replace the flag values of the
+  // same inputs, then everything below is the one shared path.
+  let portOverrides: Record<string, number> | undefined;
+  if (wizard) {
+    const first = await loadDevPlan({
+      workspaceDir: workspace,
+      configReader,
+      manifestSource,
+      fs,
+      reactNativeCli,
+      ...(hostPort !== undefined ? { hostPort } : {}),
+      ...(platform !== undefined ? { platform } : {}),
+      ...(standalone !== undefined ? { standalone } : {}),
+    });
+    if (!first.ok) {
+      for (const reason of first.reasons) io.writeErr(`dev: ${reason}`);
+      return EXIT_NO_ANSWER;
+    }
+    const prompts = await env.createPrompts();
+    let outcome;
+    try {
+      outcome = await runDevWizard(prompts, {
+        entries: first.entries,
+        standaloneRemotes: first.standaloneRemotes,
+        ...(platform !== undefined ? { platform } : {}),
+        ...(wantLaunch
+          ? { launch: true }
+          : parsed.flags.has('no-launch')
+            ? { launch: false }
+            : {}),
+      });
+    } finally {
+      prompts.close();
+    }
+    // Cancel is a clean no-op, not a failure: nothing was spawned.
+    if (outcome.status === 'cancelled') return EXIT_CLEAN;
+    const { answers } = outcome;
+    appNames = answers.apps;
+    platform = answers.platform;
+    standalone = answers.standalone ?? standalone;
+    portOverrides = answers.ports;
+    if (answers.launch !== undefined) {
+      launch = answers.launch
+        ? { ...(device !== undefined ? { device } : {}) }
+        : undefined;
+    }
+    if (launch !== undefined && platform === undefined) {
+      io.writeErr(LAUNCH_NEEDS_PLATFORM);
+      return EXIT_NO_ANSWER;
+    }
+  }
+
   if (parsed.flags.has('dry-run')) {
     return runDryRun({
       workspace,
@@ -383,6 +473,7 @@ export async function runDevCommand(
       platform,
       standalone,
       launch,
+      ports: portOverrides,
       autoPorts,
       json,
       io,
@@ -410,6 +501,7 @@ export async function runDevCommand(
     ...(platform !== undefined ? { platform } : {}),
     ...(standalone !== undefined ? { standalone } : {}),
     ...(launch !== undefined ? { launch } : {}),
+    ...(portOverrides !== undefined ? { ports: portOverrides } : {}),
   });
   if (!plan.ok) {
     for (const reason of plan.reasons) io.writeErr(`dev: ${reason}`);
@@ -421,13 +513,7 @@ export async function runDevCommand(
     for (const note of plan.reassignments) io.writeErr(`dev: ${note}`);
   }
   // The plan event carries the final (allocated) ports, auto ones included.
-  emit({
-    event: 'plan',
-    apps: toPlanEventApps(plan.entries),
-    ...(plan.launch !== undefined
-      ? { launch: toPlanEventLaunch(plan.launch) }
-      : {}),
-  });
+  emit(planEvent(plan.entries, plan.launch));
 
   // 2. Studio before spawning: its bind failure must not orphan children.
   const supervisorRef: { current: ReturnType<typeof createDevSupervisor> | null } =

@@ -89,6 +89,9 @@ export interface BuildDevPlanInput {
    * declared remote with `standalone: true` (else the plan fails) and joins
    * the session even when `--apps` omitted it, as upstream #1467 does. */
   standalone?: string;
+  /** Per-app port overrides by config key (the wizard's answers, already
+   * validated 1-65535). They beat the declared port and `hostPort`. */
+  ports?: Readonly<Record<string, number>>;
 }
 
 /**
@@ -238,9 +241,10 @@ export function buildDevPlan(input: BuildDevPlanInput): BuildDevPlanResult {
       launch,
       cwd,
       declaredPort:
-        entry.role === 'host'
+        input.ports?.[entry.key] ??
+        (entry.role === 'host'
           ? (input.hostPort ?? entry.port ?? HOST_DEFAULT_PORT)
-          : (entry.port ?? null),
+          : (entry.port ?? null)),
       ...(root !== undefined ? { root } : {}),
       ...(input.platform !== undefined ? { platform: input.platform } : {}),
       ...(input.standalone === entry.key ? { standalone: true as const } : {}),

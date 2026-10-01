@@ -46,6 +46,15 @@ check will be closed.
    claim passed. A claimed check without observed output is a failed check.
 10. **English artifacts.** All code, comments, docs, UI copy and commits in
     English. Every skill the project needs lives in this repo.
+11. **No runtime dependencies, one exception.** Atlas ships without runtime
+    `dependencies`; the CLI is a thin adapter and argv parsing, Studio and the
+    runner use the Node standard library only. The single exception is
+    `@clack/prompts` (`^0.9.1`, the range upstream Re.Pack uses) for the
+    `dev` wizard: it gives wizard UX parity with Re.Pack's federation dev
+    runner. It stays confined behind the core-owned `PromptPort`
+    (`src/adapters/prompts-clack.ts`), is loaded by dynamic import, and falls
+    back to a `node:readline` adapter when the import fails. Do not add
+    another runtime dependency without updating this rule.
 
 Full rationale: `docs/PRD.md` (§6 architecture, §10 multi-agent setup, §14
 conventions).

@@ -107,7 +107,15 @@ Usage
                    [--auto-ports] [--platform <ios|android>]
                    [--standalone <remote>] [--launch | --no-launch]
                    [--device <id>] [--studio-port <n>] [--no-studio]
-                   [--ci] [--dry-run] [--json]
+                   [--no-interactive] [--ci] [--dry-run] [--json]
+
+On a terminal (stdin and stdout are TTYs) without --apps, --no-interactive,
+--ci or --json, a wizard asks which remotes to run, the platform (ios,
+android or all), whether to launch the app (single platform only), each
+app's port and, for remotes with "standalone": true, standalone mode. Its
+answers feed the same plan as the flags (--dry-run still shows the result).
+Ctrl-C at any question exits 0 with nothing started. Without a TTY (CI,
+pipes) it never prompts: the session is host + every remote, as the flags say.
 
 An app with a "root" starts through the argv Atlas builds, like upstream
 Re.Pack's federation dev runner: node <the app's own react-native CLI>
@@ -165,7 +173,10 @@ Options
   --studio-port <n>    Studio port (0 = ephemeral; default: first free from
                        8099)
   --no-studio          Do not serve the Studio
-  --ci                 No key handling even on a TTY (browser never opens)
+  --no-interactive     Never prompt: skip the wizard and use the flags (host +
+                       every remote by default)
+  --ci                 No key handling even on a TTY (browser never opens);
+                       implies --no-interactive
   --dry-run            Print the plan (app, role, port or auto, effective
                        command line, cwd)
                        and exit: nothing spawns, no Studio. Declared ports

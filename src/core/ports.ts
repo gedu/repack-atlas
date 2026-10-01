@@ -210,3 +210,49 @@ export interface ReactNativeCliResolver {
   /** Resolve `react-native`'s CLI script as the app at `appRoot` would. */
   resolve(appRoot: string): ReactNativeCliResult;
 }
+
+// --- PromptPort --------------------------------------------------------------------
+//
+// The interactive `dev` wizard asks questions through this port so the flow
+// never knows whether a prompt library or plain readline answers them. Library
+// agnostic on purpose: a cancelled prompt (Ctrl-C, closed stdin) is a typed
+// result, never a library sentinel or a thrown error.
+
+export interface PromptOption {
+  value: string;
+  label: string;
+}
+
+export type PromptResult<T> =
+  | { status: 'ok'; value: T }
+  | { status: 'cancelled' };
+
+export interface PromptPort {
+  /** Zero or more of `options`; `initialValues` are pre-selected. */
+  multiselect(question: {
+    message: string;
+    options: PromptOption[];
+    initialValues?: string[];
+  }): Promise<PromptResult<string[]>>;
+  /** Exactly one of `options` (its `value`). */
+  select(question: {
+    message: string;
+    options: PromptOption[];
+    initialValue?: string;
+  }): Promise<PromptResult<string>>;
+  confirm(question: {
+    message: string;
+    initialValue?: boolean;
+  }): Promise<PromptResult<boolean>>;
+  /** Free text; `validate` returns an error message or `undefined` when fine. */
+  text(question: {
+    message: string;
+    validate?(value: string): string | undefined;
+  }): Promise<PromptResult<string>>;
+  /** An informational line between questions. */
+  note(message: string): void;
+  /** Announce that the user walked away (printed once by the caller). */
+  cancel(message: string): void;
+  /** Release the input stream. Idempotent. */
+  close(): void;
+}

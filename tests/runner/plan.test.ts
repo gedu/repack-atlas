@@ -371,3 +371,33 @@ describe('--platform / --standalone in the plan', () => {
     assert.match(table, /^solo\s+remote \(standalone\)\s+auto\s+android\s+run solo/m);
   });
 });
+
+describe('buildDevPlan port overrides (wizard answers)', () => {
+  const ports = (overrides: Record<string, number>, hostPort?: number) => {
+    const result = ok(
+      buildDevPlan({
+        config: CONFIG,
+        configDir: CONFIG_DIR,
+        hostName: 'host_app',
+        ports: overrides,
+        ...(hostPort !== undefined ? { hostPort } : {}),
+      })
+    );
+    return Object.fromEntries(
+      result.entries.map((entry) => [entry.key, entry.declaredPort])
+    );
+  };
+
+  it('beats the declared port, --port and the 8081 default; auto stays auto', () => {
+    assert.deepEqual(ports({ host: 9000, zeta: 9100 }, 8500), {
+      host: 9000,
+      zeta: 9100,
+      alpha: null,
+    });
+    assert.deepEqual(ports({}, 8500), { host: 8500, zeta: 9001, alpha: null });
+  });
+
+  it('gives an auto remote the port the user named', () => {
+    assert.equal(ports({ alpha: 9200 }).alpha, 9200);
+  });
+});
