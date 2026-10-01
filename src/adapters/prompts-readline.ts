@@ -102,15 +102,24 @@ export function createReadlinePrompts(
         for (;;) {
           const answer = (
             await reader.question(
-              `${question.message} (comma-separated, empty = ${initial.length > 0 ? initial.join(', ') : 'none'}; options: ${names}): `
+              `${question.message} (comma-separated, ${initial.length > 0 ? `empty = ${initial.join(', ')}; ` : ''}options: ${names}): `
             )
           ).trim();
-          if (answer === '') return { status: 'ok', value: initial };
+          if (answer === '') {
+            // An empty line takes the preselection; with none to take, re-ask.
+            if (initial.length > 0) return { status: 'ok', value: initial };
+            out.write(`Select at least one option: ${names}\n`);
+            continue;
+          }
           const picked = answer
             .split(',')
             .map((name) => name.trim())
             .filter((name) => name !== '')
             .map((name) => matchOption(question.options, name));
+          if (picked.length === 0) {
+            out.write(`Select at least one option: ${names}\n`);
+            continue;
+          }
           if (picked.every((option) => option !== undefined)) {
             const values = picked.map((option) => option!.value);
             return { status: 'ok', value: [...new Set(values)] };

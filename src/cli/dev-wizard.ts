@@ -106,15 +106,19 @@ export async function runDevWizard(
     selected = answer.value;
   }
 
-  // 2. Platform.
+  // 2. Platform. An explicit `--launch` needs a single platform (there is no
+  // `run-all`), so "all" is not offered then: the answer stays valid by
+  // construction instead of failing after the last prompt.
   const platformAnswer = await prompts.select({
     message: 'Which app platform are you running?',
     options: [
       { value: 'ios', label: 'iOS' },
       { value: 'android', label: 'Android' },
-      { value: 'all', label: 'All / decide later' },
+      ...(context.launch === true
+        ? []
+        : [{ value: 'all', label: 'All / decide later' }]),
     ],
-    initialValue: context.platform ?? 'all',
+    initialValue: context.platform ?? (context.launch === true ? 'ios' : 'all'),
   });
   if (platformAnswer.status === 'cancelled') return cancelled();
   const platform = DEV_PLATFORMS.find(

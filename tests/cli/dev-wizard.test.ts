@@ -173,18 +173,56 @@ describe('runDevWizard', () => {
 
   it('preselects the --platform flag and "all" otherwise', async () => {
     const seen: Array<string | undefined> = [];
-    const prompts = fakePrompts([['alpha'], 'ios', true, true, true, true]);
-    const select = prompts.select.bind(prompts);
-    prompts.select = (question) => {
-      seen.push(question.initialValue);
-      return select(question);
+    const spy = (prompts: ReturnType<typeof fakePrompts>) => {
+      const select = prompts.select.bind(prompts);
+      prompts.select = (question) => {
+        seen.push(question.initialValue);
+        return select(question);
+      };
+      return prompts;
     };
-    await runDevWizard(prompts, { ...CONTEXT, platform: 'android' });
-    await runDevWizard(fakePrompts(['all', true, true]), {
+    await runDevWizard(
+      spy(fakePrompts([['alpha'], 'ios', true, true, true, true])),
+      { ...CONTEXT, platform: 'android' }
+    );
+    await runDevWizard(spy(fakePrompts(['all', true, true])), {
       entries: [entry('host', 'host', 8081)],
       standaloneRemotes: [],
     });
-    assert.deepEqual(seen, ['android']);
+    assert.deepEqual(seen, ['android', 'all']);
+  });
+
+  it('preselects every remote in the multiselect', async () => {
+    let initial: string[] | undefined;
+    const prompts = fakePrompts([['alpha'], 'all', true, true, true]);
+    const multiselect = prompts.multiselect.bind(prompts);
+    prompts.multiselect = (question) => {
+      initial = question.initialValues;
+      return multiselect(question);
+    };
+    await runDevWizard(prompts, CONTEXT);
+    assert.deepEqual(initial, ['alpha', 'beta']);
+  });
+
+  it('does not offer "all" when --launch is set', async () => {
+    let values: string[] = [];
+    let initial: string | undefined;
+    const prompts = fakePrompts([['alpha'], 'ios', true, true, true]);
+    const select = prompts.select.bind(prompts);
+    prompts.select = (question) => {
+      values = question.options.map((option) => option.value);
+      initial = question.initialValue;
+      return select(question);
+    };
+    const outcome = await runDevWizard(prompts, {
+      ...CONTEXT,
+      launch: true,
+      platform: 'ios',
+    });
+    assert.deepEqual(values, ['ios', 'android']);
+    assert.equal(initial, 'ios');
+    assert.equal(completed(outcome).launch, true);
+    assert.equal(completed(outcome).platform, 'ios');
   });
 
   // A cancel at step N: the previous steps were asked, nothing after, and the

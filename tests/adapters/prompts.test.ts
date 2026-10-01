@@ -85,6 +85,21 @@ describe('readline prompts (piped stdin)', () => {
     prompts.close();
   });
 
+  it('rejects an empty multiselect and re-asks until something is picked', async () => {
+    const io = piped('\n,\nbeta\n');
+    const prompts = createReadlinePrompts({ input: io.stdin, output: io.stdout });
+    const options = [
+      { value: 'alpha', label: 'alpha' },
+      { value: 'beta', label: 'beta' },
+    ];
+    assert.deepEqual(await prompts.multiselect({ message: 'Remotes?', options }), {
+      status: 'ok',
+      value: ['beta'],
+    });
+    assert.equal(io.output().match(/Select at least one option/g)?.length, 2);
+    prompts.close();
+  });
+
   it('treats EOF as a cancel, before and between questions', async () => {
     const io = piped('y\n');
     const prompts = createReadlinePrompts({ input: io.stdin, output: io.stdout });

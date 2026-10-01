@@ -174,13 +174,16 @@ describe('dev wizard gate', () => {
     assert.match(run.err, /--standalone names an unknown remote/);
   });
 
-  it('keeps --launch honest when the wizard picks "all" (exit 2)', async () => {
+  it('never offers "all" under --launch, so the plan stays valid', async () => {
     const host = String(await freePort());
     const run = await dev(
       ['--workspace', WORKSPACE, '--port', host, '--platform', 'ios', '--launch', '--dry-run'],
-      [['mini_auth'], 'all', true, true]
+      [['mini_auth'], 'ios', true, true]
     );
-    assert.equal(run.code, 2);
-    assert.match(run.err, /--launch needs a single platform/);
+    // The wizard answers are accepted as is: the run only stops later, at the
+    // launch target's react-native CLI, which the fixture app does not install.
+    assert.doesNotMatch(run.err, /--launch needs a single platform/);
+    assert.match(run.err, /cannot resolve the "react-native" package/);
+    assert.equal(run.prompts.remaining(), 0);
   });
 });
