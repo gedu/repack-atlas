@@ -1,14 +1,13 @@
 # Demo runbook — repack-atlas on super-app-showcase
 
 A step-by-step guide for demoing repack-atlas to another developer using the
-super-app-showcase workspace. The doctor, manifest and Studio numbers below
-were verified against the real workspace; the "verified findings" are the
-actual numbers from the demo run, not projections. The `dev` commands changed
-after that run (the wizard, `--dry-run`, `--launch`, and Atlas-built commands
-instead of `pnpm --filter <app> start`). Each is marked **not yet re-verified
-on the showcase** until someone runs it there. The repo's tests cover them on
-`fixtures/workspace` (stub bundlers and a stub `react-native` CLI), never
-against the real showcase.
+super-app-showcase workspace. The doctor, manifest, Studio and `dev` numbers
+below were run against the real workspace (`atlas-demo` branch, Re.Pack 5.3.0);
+the "verified" figures are the actual numbers from those runs, not
+projections. Two items were never run there and stay marked **not yet
+re-verified on the showcase**: `dev --launch --platform ios` (needs a
+simulator) and `init` output without `command`. The repo's tests cover them on
+`fixtures/workspace` (stub bundlers and a stub `react-native` CLI).
 
 What the demo proves: a doctor, a graph, a supervised dev runner and a
 read-only Studio working on a real multi-app Re.Pack Module Federation
@@ -64,14 +63,14 @@ Two checkouts side by side:
      marked `versionConfidence: "heuristic"` in
      `.repack-atlas/introspection.json`; a string value is read as the
      `requiredVersion`, and an array of package names works too;
-   - `repack-federation.json` at the showcase root with the host + 3 remotes,
-     file manifest refs, ports and, in the version this runbook was verified
-     with, an explicit `command` per app (`pnpm --filter <name> start`). A
-     `command` is an override and still works; delete it (with `root` set) to
-     let Atlas build `node <app's react-native CLI> start --bundler rspack
-     --port <n> --no-interactive` itself. That default needs `react-native`
-     installed in each app root, which is true for the showcase packages, but
-     the switch is **not yet re-verified on the showcase**.
+   - `repack-federation.json` at the showcase root with the host + 3 remotes:
+     `root`, `port` and the file manifest ref per app, and no `command`.
+     Drop the `command` overrides (or keep them; a `command` is run verbatim
+     as an override, and earlier runs of this demo used
+     `pnpm --filter <name> start`). Without it Atlas builds each app's start
+     command itself, which needs `react-native` installed in each app root,
+     true for the showcase packages. Verified: with the `command` fields
+     removed from host and every remote, `dev` ran all four apps.
 3. Install and warm up:
 
    ```bash
@@ -80,19 +79,25 @@ Two checkouts side by side:
    ```
 
 4. Port map. The ports come from the workspace config; ask Atlas instead of
-   keeping a table by hand (**not yet re-verified on the showcase**; the
-   ports below are the ones recorded in the last verified run):
+   keeping a table by hand:
 
    ```bash
    node ../repack-atlas/dist/cli.js dev --dry-run --no-interactive
    ```
 
-   | app      | port |
-   |----------|------|
-   | host     | 8081 |
-   | trading  | 9001 |
-   | wallet   | 9002 |
-   | auth     | 9003 |
+   Verified output on the showcase (cwd shown relative to the showcase root):
+
+   ```
+   app      role    port  command                                                            cwd
+   host     host    8081  node_modules/.bin/react-native start --port 8081 --no-interactive  packages/host
+   trading  remote  9001  node_modules/.bin/react-native start --port 9001 --no-interactive  packages/trading
+   wallet   remote  9002  node_modules/.bin/react-native start --port 9002 --no-interactive  packages/wallet
+   auth     remote  9003  node_modules/.bin/react-native start --port 9003 --no-interactive  packages/auth
+   ```
+
+   There is no `--bundler` in the command: Re.Pack 5.3.0's `start` does not
+   declare it, so Atlas omits it. Each app's `react-native.config.js` picks
+   rspack instead.
 
    `--dry-run` prints each app's port and effective command line and spawns
    nothing. The host defaults to 8081 and a busy port exits 1 (add
@@ -104,6 +109,15 @@ Gotchas to know before you present:
   `file:../../../repack-atlas` from `packages/<app>`, not from the root.
 - pnpm **snapshots** `file:` deps. After any `pnpm build` in repack-atlas,
   re-run `pnpm install` in the showcase or the apps keep the old dist.
+- Atlas spawns each app's `node_modules/.bin/react-native` shim, not
+  `node <cli.js>`. Under pnpm the shim sets the `NODE_PATH` that lets the RN
+  CLI find its platform plugins; without it `start` fails with
+  `Unrecognized platform: ios` or `Cannot find module
+  '@react-native/community-cli-plugin'`.
+- `start` options are feature-detected per app. Re.Pack 5.x does not declare
+  `--bundler` or `--standalone`, so Atlas leaves them out and the app's
+  `react-native.config.js` decides. Asking for `--standalone` on 5.x exits 2
+  with the reason.
 - Production bundles (`--dev false`) fail without a `code-signing.pem`
   (CodeSigningPlugin). Demo everything in dev mode.
 - `repack-atlas init` discovers apps from the workspace globs
@@ -121,21 +135,28 @@ Gotchas to know before you present:
 
 ## 1. Beat one: the manifest exists and is reachable
 
-Start one app through Atlas and show the manifest the plugin emits:
+Start one app through Atlas and show the manifest the plugin emits (run the
+`curl` from a second terminal while the first keeps the app up):
 
 ```bash
 node ../repack-atlas/dist/cli.js dev --apps auth --no-studio --no-interactive
 curl -s http://localhost:9003/repack-federation-manifest.json | head -20
 ```
 
-(Starting the app through `dev --apps auth` is **not yet re-verified on the
-showcase**; with the hand-written `command` it runs the same
-`pnpm --filter auth start` the verified run used. Running the wizard
-(`repack-atlas dev`) and picking only `auth` gives the same session.)
+Verified output of the supervisor (the manifest answered within about a
+second of `ready`):
 
-Expected (verified with the app started by `pnpm --filter auth start`): HTTP 200 and a manifest with `manifestVersion: 1`,
+```
+dev: supervising 1 app(s) (auth:9003)
+dev: auth → starting (port 9003)
+dev: auth → ready (port 9003)
+dev: auth → stopped (port 9003)
+```
+
+Expected from the `curl`: HTTP 200 and a manifest with `manifestVersion: 1`,
 `id: "auth"`, `metaData.type: "remote"`, the shared array with real resolved
-versions (react 19.2.8, react-native 0.86.2, …). The file also exists at
+versions (react 19.2.8, react-native 0.86.2, @bottom-tabs/react-navigation
+1.4.0, …). The file also exists at
 `packages/auth/repack-federation-manifest.json` (`writeToDisk: true`) and
 is gitignored. Edit + save a file under `packages/auth/src/` and show the
 manifest mtime update on rebuild — the manifest is live, not a build-time
@@ -242,15 +263,31 @@ node ../repack-atlas/dist/cli.js dev --dry-run --platform ios --no-interactive
 node ../repack-atlas/dist/cli.js dev --launch --platform ios
 ```
 
-**Not yet re-verified on the showcase**: the wizard, `--dry-run` and
-`--launch` are covered by tests on `fixtures/workspace` (stub bundlers, and for
-`--launch` a stub `react-native` CLI), and were never run against the real
-showcase or a simulator. The plain `dev` run below is what the earlier
-verification covered, before the wizard existed.
+Verified on the showcase: the wizard (`dev --dry-run` under a pseudo-terminal,
+pressing Enter at every prompt) and the full `dev --json --no-interactive`
+session below. The prompts came in this order:
 
-Verified event flow (from that earlier run): four apps `starting` →
-`ready` within ~20s (host 8081, trading 9001, wallet 9002, auth 9003), Studio at
-`http://127.0.0.1:8099/`.
+1. "Which remotes to run?" (trading, wallet, auth preselected)
+2. "Which app platform are you running?" (All / decide later)
+3. The note "Launch skipped: launching the app needs a single platform (ios
+   or android)."
+4. "Use port 8081 for host?" (Yes), then one per app
+
+The run ended with the same plan table as above and exit 0. A narrow
+pseudo-terminal wraps the clack output, so record the GIF in a real terminal
+window.
+
+**Not yet re-verified on the showcase**: `--launch --platform ios`. It needs a
+simulator, and is covered only by tests on `fixtures/workspace` with a stub
+`react-native` CLI.
+
+Verified event flow (`repack-atlas dev --json --no-interactive`): a `studio`
+event with `http://127.0.0.1:8099/`, then `starting` for host, trading,
+wallet and auth, then all four `ready` about 3s after start on a warm cache
+(host 8081, trading 9001, wallet 9002, auth 9003). The auth manifest answered
+200. `GET http://127.0.0.1:8099/api/graph` returned the 5 edges. SIGINT
+produced `{event:'exit',code:0}` and freed every port. (The earlier ~20s
+figure came from starting each app with `pnpm --filter <name> start`.)
 
 For the GIF, record:
 
