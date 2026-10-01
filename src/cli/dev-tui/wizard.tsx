@@ -1,0 +1,361 @@
+/** @jsxImportSource react */
+// Ink-rendered `PromptPort` for the interactive `dev` wizard (G5,
+// "wizard-in-TUI"): the dashboard's visual language (pink 38;5;213 / Re.Pack
+// green, dim help lines) answering the wizard's questions on the NORMAL
+// screen. The alt screen belongs to the dashboard, which mounts later — the
+// wizard must not take it, or the banner and the plan table would be wiped.
+//
+// Rule 11 exception (b): this file IS the ink/react render layer, so `dev.ts`
+// dynamic-imports exactly this module and only when the TUI path is live;
+// `--json`/`--ci`/non-TTY never load ink or react. The fence
+// (tests/cli/dev-tui-seam.test.ts) locks dev.ts free of static ink/react
+// imports. The interaction logic is NOT here: it is the pure machine in
+// `wizard-model.ts`, asserted without a terminal; what lives here is the
+// viewport, the keystroke routing, and one ink session's terminal hygiene.
+//
+// Terminal hygiene contract (dev.ts's "stdin must be clean before ink takes
+// it" comment is why this matters):
+// - ONE session for the whole wizard, mounted with the first question and
+//   unmounted by `close()` (idempotent). ink hides the cursor while it renders
+//   and shows it again on unmount; `close()` writes the show-cursor decseq
+//   itself as well, so a hidden cursor can never outlive the wizard.
+// - ink's `useInput` owns raw mode (it refs stdin and restores it on unmount);
+//   `close()` additionally puts raw mode off and pauses stdin.
+// - Ctrl-C and Esc cancel the live question; the quit is sticky in the
+//   controller, so a keystroke pressed a beat early is not swallowed.
+// - `note`/`cancel` go through the live session while mounted (one column,
+//   recaps and notes in order) and straight to stdout when not.
+
+import { Box, Static, Text, render, useInput } from 'ink';
+import { useEffect, useState } from 'react';
+import type { Instance } from 'ink';
+import type { PromptPort, PromptResult } from '../../core/index.js';
+import {
+  createWizardController,
+  helpText,
+  type WizardController,
+  type WizardField,
+  type WizardLine,
+  type WizardRequest,
+  type WizardState,
+} from './wizard-model.js';
+
+// ---------------------------------------------------------------------------
+// Visual language
+// ---------------------------------------------------------------------------
+
+/** The banner's pink, as an ink color token (app.tsx's `color={...}` idiom). */
+export const PINK = 'ansi256(213)';
+
+// Hand-rolled SGR subset for the lines written OUTSIDE ink (banner.ts is the
+// precedent: rule 11 keeps a color library out, and one runtime-built ESC
+// constant keeps the idiom uniform across the TUI code).
+const ESC = String.fromCharCode(0x1b);
+const SGR = {
+  reset: '[0m',
+  dim: '[2m',
+  green: '[32m',
+} as const;
+
+function paint(codes: string, text: string): string {
+  return `${ESC}${codes}${text}${ESC}${SGR.reset}`;
+}
+
+// Markers reuse the dashboard's glyph vocabulary rather than inventing one:
+// `●` is the starting/bundling dot (model.ts STATUS_PRESENTATION) and `✓` the
+// ready one, so "a question is live" and "a question is answered" read the
+// same way in both screens. `▍` is the roster's selection bar, `›` the F12
+// input caret (app.tsx). All three already render in the dashboard.
+/** Live-question marker (pink). */
+export const PROMPT_GLYPH = '●';
+/** Settled-answer marker (green). */
+export const DONE_GLYPH = '✓';
+/** Focused-row marker. */
+export const CURSOR_GLYPH = '▍';
+/** Typed-input caret. */
+export const INPUT_CARET = '› ';
+/** Multiselect boxes: ascii, so no font support is assumed. */
+export const CHECKED = '[x]';
+export const UNCHECKED = '[ ]';
+/** The two answers a confirm draws (the live one is bold + accent). */
+export const CONFIRM_ANSWERS: readonly { label: string; value: boolean }[] = [
+  { label: 'yes', value: true },
+  { label: 'no', value: false },
+];
+
+// ---------------------------------------------------------------------------
+// View
+// ---------------------------------------------------------------------------
+
+export interface WizardAppProps {
+  controller: WizardController;
+  /** false renders with zero escape bytes (the banner's color/no-color split). */
+  color: boolean;
+}
+
+/** One durable line above the live question. */
+export function WizardLineView({
+  line,
+  color,
+}: {
+  line: WizardLine;
+  color: boolean;
+}) {
+  if (line.tone === 'recap') {
+    return (
+      <Text {...(color ? { color: 'green' } : { dimColor: true })}>
+        {`${DONE_GLYPH} ${line.text}`}
+      </Text>
+    );
+  }
+  if (line.tone === 'cancel') {
+    return (
+      <Text {...(color ? { color: 'green' } : { dimColor: true })}>
+        {line.text}
+      </Text>
+    );
+  }
+  return <Text dimColor>{line.text}</Text>;
+}
+
+/** The live question: message, options (or the typed draft), error, key help. */
+export function WizardFieldView({
+  field,
+  color,
+}: {
+  field: WizardField;
+  color: boolean;
+}) {
+  // `exactOptionalPropertyTypes` forbids a `color?: string | undefined`
+  // spread, so the accent arrives as a whole props object or nothing.
+  const accent = (on: boolean): { color: string } | Record<string, never> =>
+    on && color ? { color: PINK } : {};
+  return (
+    <Box flexDirection="column">
+      <Box>
+        <Text {...accent(true)} bold>
+          {PROMPT_GLYPH}
+        </Text>
+        <Text bold>{` ${field.message}`}</Text>
+      </Box>
+      {field.options.map((option, index) => {
+        const focused = index === field.cursor;
+        const box =
+          field.kind === 'multiselect'
+            ? field.selected.includes(option.value)
+              ? CHECKED
+              : UNCHECKED
+            : undefined;
+        return (
+          <Box key={option.value}>
+            <Text {...accent(focused)}>{focused ? CURSOR_GLYPH : ' '}</Text>
+            {box === undefined ? null : <Text dimColor>{`${box} `}</Text>}
+            <Text {...(focused ? { bold: true } : {})} {...accent(focused)}>
+              {option.label}
+            </Text>
+          </Box>
+        );
+      })}
+      {/* A confirm has no option rows: the two answers are drawn here, so the
+          bold+accent one is what `y`/`n` and space select. */}
+      {field.kind === 'confirm' ? (
+        <Box>
+          <Text>{' '}</Text>
+          {CONFIRM_ANSWERS.map((answer) => (
+            <Text
+              key={answer.label}
+              {...(answer.value === field.confirmed ? { bold: true } : {})}
+              {...accent(answer.value === field.confirmed)}
+            >
+              {`${answer.label}  `}
+            </Text>
+          ))}
+        </Box>
+      ) : null}
+      {field.kind === 'text' ? (
+        <Box>
+          <Text {...accent(true)}>{INPUT_CARET}</Text>
+          <Text>{field.draft}</Text>
+        </Box>
+      ) : null}
+      {field.error === undefined ? null : (
+        <Text {...(color ? { color: 'yellow' } : { dimColor: true })}>
+          {field.error}
+        </Text>
+      )}
+      <Text dimColor>{`  ${helpText(field)}`}</Text>
+    </Box>
+  );
+}
+
+/** The wizard viewport: settled lines (printed once) + the live question. */
+export function WizardApp({ controller, color }: WizardAppProps) {
+  const [state, setState] = useState<WizardState>(controller.state);
+  useEffect(() => {
+    const onChange = (): void => setState(controller.state());
+    // Re-read on mount: the first question opens before ink's effects run, so
+    // the state captured by useState may already be stale.
+    setState(controller.state());
+    return controller.subscribe(onChange);
+  }, [controller]);
+  useInput((input, key) => {
+    controller.handleKey(input, key);
+  });
+  return (
+    <Box flexDirection="column">
+      <Static items={[...state.lines]}>
+        {(line) => <WizardLineView key={line.id} line={line} color={color} />}
+      </Static>
+      {state.field === null ? null : (
+        <WizardFieldView field={state.field} color={color} />
+      )}
+    </Box>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Port
+// ---------------------------------------------------------------------------
+
+export interface TuiPromptPortOptions {
+  /** Render stream (defaults to `process.stdout`). */
+  stdout?: NodeJS.WriteStream;
+  /** Input stream (defaults to `process.stdin`). */
+  stdin?: NodeJS.ReadStream;
+  /** false renders plain (NO_COLOR); defaults to the NO_COLOR convention. */
+  color?: boolean;
+}
+
+/** Show-cursor decseq: ink already writes it on teardown; this is the belt. */
+const SHOW_CURSOR = `${ESC}[?25h`;
+
+/**
+ * The `PromptPort` the dev wizard uses when the ink dashboard will mount. One
+ * ink session spans the whole wizard; `close()` ends it and leaves stdin
+ * raw-mode-off and paused so the dashboard can take the terminal over clean.
+ */
+export function createTuiPromptPort(
+  options: TuiPromptPortOptions = {}
+): PromptPort {
+  const stdout = options.stdout ?? process.stdout;
+  const stdin = options.stdin ?? process.stdin;
+  const color = options.color ?? process.env.NO_COLOR === undefined;
+  const controller = createWizardController();
+  let instance: Instance | null = null;
+  let closed = false;
+
+  /** Mount on the first question: from then on the wizard owns the screen. */
+  const mount = (): void => {
+    if (instance !== null || closed) return;
+    instance = render(<WizardApp controller={controller} color={color} />, {
+      stdout,
+      stdin,
+      // Ctrl-C must reach the controller (a cancel), never kill the process.
+      exitOnCtrlC: false,
+      // Nothing here logs; a patched console would be state to unwind on a
+      // path the caller may abort.
+      patchConsole: false,
+    });
+    // Nobody awaits the exit promise: swallow it so a render failure can never
+    // surface as an unhandled rejection on top of the wizard's own error path.
+    void instance.waitUntilExit().catch(() => undefined);
+  };
+
+  // Trailing comma on the type parameter: in a .tsx file `<T>` alone parses as JSX.
+  const ask = async <T,>(
+    request: WizardRequest
+  ): Promise<PromptResult<T>> => {
+    if (closed) return { status: 'cancelled' };
+    // A Ctrl-C before this question already decided it: answer cancelled
+    // without taking the screen again.
+    if (controller.quitting()) return { status: 'cancelled' };
+    // Mount BEFORE awaiting: the session renders the question the controller
+    // is about to open (the state it reads on mount already carries it).
+    const opened = controller.ask(request);
+    mount();
+    const answer = await opened;
+    return answer.status === 'ok'
+      ? { status: 'ok', value: answer.value as T }
+      : { status: 'cancelled' };
+  };
+
+  /** One durable line: through the session when mounted, plain stdout after. */
+  const line = (text: string, tone: 'note' | 'cancel'): void => {
+    if (instance !== null) {
+      if (tone === 'note') controller.note(text);
+      else controller.cancelLine(text);
+      return;
+    }
+    stdout.write(
+      color
+        ? `${paint(tone === 'note' ? SGR.dim : SGR.green, text)}\n`
+        : `${text}\n`
+    );
+  };
+
+  const close = (): void => {
+    if (closed) return;
+    closed = true;
+    // A question still open means the caller is leaving without an answer:
+    // cancel it so no wizard promise dangles.
+    controller.quit();
+    const current = instance;
+    instance = null;
+    if (current !== null) current.unmount();
+    // ink's teardown shows the cursor and drops raw mode already; both writes
+    // below are the belt-and-braces half of the balance, and stdin must end
+    // PAUSED for the dashboard's own takeover.
+    stdout.write(SHOW_CURSOR);
+    try {
+      if (stdin.isTTY === true) {
+        stdin.setRawMode(false);
+        stdin.pause();
+      }
+    } catch {
+      /* stdin is gone too */
+    }
+  };
+
+  return {
+    multiselect: (question) =>
+      ask<string[]>({
+        kind: 'multiselect',
+        message: question.message,
+        options: question.options,
+        ...(question.initialValues !== undefined
+          ? { initialValues: question.initialValues }
+          : {}),
+        ...(question.emptyHint !== undefined
+          ? { emptyHint: question.emptyHint }
+          : {}),
+      }),
+    select: (question) =>
+      ask<string>({
+        kind: 'select',
+        message: question.message,
+        options: question.options,
+        ...(question.initialValue !== undefined
+          ? { initialValue: question.initialValue }
+          : {}),
+      }),
+    confirm: (question) =>
+      ask<boolean>({
+        kind: 'confirm',
+        message: question.message,
+        ...(question.initialValue !== undefined
+          ? { initialValue: question.initialValue }
+          : {}),
+      }),
+    text: (question) =>
+      ask<string>({
+        kind: 'text',
+        message: question.message,
+        ...(question.validate !== undefined
+          ? { validate: question.validate }
+          : {}),
+      }),
+    note: (message) => void line(message, 'note'),
+    cancel: (message) => void line(message, 'cancel'),
+    close,
+  };
+}

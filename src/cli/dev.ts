@@ -142,6 +142,12 @@ export interface DevEnv {
   stdoutIsTTY: boolean;
   stdinIsTTY: boolean;
   createPrompts(): Promise<PromptPort>;
+  /**
+   * Streams the ink wizard port renders to and reads keys from, when the TUI
+   * prompt path is live (G5). Absent means the process streams — the real
+   * terminal. Exists so the seam's TUI branch is testable without a pty.
+   */
+  promptStreams?: { stdin: NodeJS.ReadStream; stdout: NodeJS.WriteStream };
 }
 
 const processDevEnv = (): DevEnv => ({
@@ -335,6 +341,37 @@ async function mountDevTui(
     const reason = error instanceof Error ? error.message : String(error);
     io.writeErr(`dev: TUI unavailable (${reason}); using plain output`);
     return null;
+  }
+}
+
+/**
+ * Picks the wizard's `PromptPort` (G5). When the ink dashboard will mount, the
+ * questions get the ink-rendered port so the wizard and the dashboard speak the
+ * same visual language; the module and its ink/react imports are loaded ONLY
+ * there (rule 11 exception (b)). A render-layer failure degrades to the
+ * clack/readline prompts instead of killing the session — the same rule the
+ * dashboard mount follows — because the wizard itself has no reason to fail
+ * when the pretty renderer does.
+ */
+async function createWizardPrompts(
+  tuiWillMount: boolean,
+  env: DevEnv
+): Promise<PromptPort> {
+  if (!tuiWillMount) return env.createPrompts();
+  try {
+    const { createTuiPromptPort } = await import('./dev-tui/wizard.js');
+    const streams = env.promptStreams;
+    return createTuiPromptPort(
+      streams === undefined
+        ? {}
+        : { stdin: streams.stdin, stdout: streams.stdout }
+    );
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    process.stderr.write(
+      `dev: wizard TUI prompts unavailable (${reason}); using plain prompts\n`
+    );
+    return env.createPrompts();
   }
 }
 
@@ -623,6 +660,16 @@ export async function runDevCommand(
     if (json) io.writeOut(JSON.stringify(event));
   };
 
+  // One ink session for the whole human session, two screens: the wizard
+  // prompts render on the NORMAL screen (below the G4 banner), the dashboard
+  // takes the alt screen later. Both mount on the SAME condition, computed
+  // once here and reused at the dashboard gate below, so the two can never
+  // disagree about who owns the terminal. `env.stdoutIsTTY` (not process) and
+  // the `process.stdin.isTTY` the dashboard gate already used keep the gate
+  // injectable exactly as before.
+  const tuiCondition =
+    !ci && !json && Boolean(process.stdin.isTTY) && env.stdoutIsTTY;
+
   const processRunner = createNodeProcessRunner();
   const fs = createNodeProjectFs();
   const configReader = createWorkspaceConfigReader(fs);
@@ -647,7 +694,15 @@ export async function runDevCommand(
       for (const reason of first.reasons) io.writeErr(`dev: ${reason}`);
       return EXIT_NO_ANSWER;
     }
-    const prompts = await env.createPrompts();
+    // G5 "wizard-in-TUI": when the dashboard WILL mount, the questions get the
+    // ink prompt port — the dashboard's visual language on the NORMAL screen,
+    // one session for the whole wizard (dynamic import: ink/react stay off
+    // every machine path, rule 11 exception (b)). Anything else keeps the
+    // clack/readline prompts exactly as before. Like the dashboard mount, a
+    // render-layer failure degrades instead of killing the session: the wizard
+    // still asks the same questions through `env.createPrompts()`. The wizard
+    // flow, its answers, and everything downstream are identical either way.
+    const prompts = await createWizardPrompts(tuiCondition, env);
     let outcome;
     try {
       outcome = await runDevWizard(prompts, {
@@ -778,11 +833,12 @@ export async function runDevCommand(
   // as the key handling (`interactive`: no --ci, no --json, TTY stdin) PLUS
   // TTY stdout, reached only on the live plan path after the wizard closed
   // and the plan/warnings/studio-URL lines printed. `env.stdoutIsTTY` (not
-  // process) keeps the gate injectable for tests. The roster mirrors
-  // `plan.apps` in plan order (buildDevPlan puts the host first); rows
-  // answer to key AND graph name, which is what the supervisor emits.
-  const tuiModel =
-    !ci && !json && Boolean(process.stdin.isTTY) && env.stdoutIsTTY
+  // process) keeps the gate injectable for tests. G5 hoisted the expression to
+  // `tuiCondition` above so the wizard's prompt port and the dashboard are
+  // decided by ONE condition. The roster mirrors `plan.apps` in plan order
+  // (buildDevPlan puts the host first); rows answer to key AND graph name,
+  // which is what the supervisor emits.
+  const tuiModel = tuiCondition
       ? createDevTuiModel({
           apps: plan.apps.map(
             (app): DevTuiRosterEntry => ({
