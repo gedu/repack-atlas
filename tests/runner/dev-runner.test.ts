@@ -13,6 +13,7 @@
 import assert from 'node:assert/strict';
 import { spawn, type ChildProcess } from 'node:child_process';
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -961,6 +962,7 @@ if (args[0] && args[0].startsWith('run-')) {
   // the \`launch-mode\` file says: 'fail' exits 1, 'hang' lingers until killed.
   const fs = require('fs');
   fs.appendFileSync('launch.log', JSON.stringify(args) + '\\n');
+  fs.appendFileSync('launch.env', String(process.env.ATLAS_SHIM_RAN) + '\\n');
   console.log('launch-stub ' + JSON.stringify(args));
   const mode = fs.existsSync('launch-mode') ? fs.readFileSync('launch-mode', 'utf8').trim() : '';
   if (mode === 'fail') {
@@ -991,7 +993,7 @@ for (const arg of args.slice(1)) {
   }
 }
 const port = Number(args[args.indexOf('--port') + 1]);
-console.log('rn-stub ' + JSON.stringify({ args, cwd: process.cwd() }));
+console.log('rn-stub ' + JSON.stringify({ args, cwd: process.cwd(), shim: process.env.ATLAS_SHIM_RAN || null }));
 require('net').createServer().listen(port, '127.0.0.1');
 process.on('SIGINT', () => process.exit(0));
 process.on('SIGTERM', () => process.exit(0));
@@ -1026,6 +1028,8 @@ function makeApp(
     rn?: boolean;
     configFiles?: string[];
     repack?: 'repack5' | 'pr1467';
+    /** Also install `node_modules/.bin/react-native` (like pnpm/npm do). */
+    shim?: boolean;
   } = {}
 ): string {
   const root = path.join(workspace, dir);
@@ -1050,6 +1054,16 @@ function makeApp(
       JSON.stringify({ name: 'react-native', bin: { 'react-native': './cli.js' } })
     );
     writeFileSync(path.join(pkg, 'cli.js'), STUB_RN_CLI);
+    if (options.shim === true) {
+      // Like pnpm's shim: sets up the environment, then runs the real script.
+      const bin = path.join(root, 'node_modules', '.bin');
+      mkdirSync(bin, { recursive: true });
+      writeFileSync(
+        path.join(bin, 'react-native'),
+        `#!/bin/sh\nexport ATLAS_SHIM_RAN=1\nexec "${process.execPath}" "${path.join(pkg, 'cli.js')}" "$@"\n`
+      );
+      chmodSync(path.join(bin, 'react-native'), 0o755);
+    }
   }
   return root;
 }
@@ -1092,6 +1106,43 @@ describe('dev default argv (root without command)', () => {
     const line = s.lines.find((l) => l.startsWith('[host] rn-stub '))!;
     const seen = JSON.parse(line.slice('[host] rn-stub '.length)) as { args: string[] };
     assert.deepEqual(seen.args, ['start', '--port', String(port), '--no-interactive']);
+    s.child.kill('SIGINT');
+    assert.equal((await s.exited).code, 0);
+  });
+
+  it('prefers the app\'s .bin/react-native shim (its environment reaches the CLI)', async () => {
+    const port = await freePort();
+    const dir = workspaceWith(
+      { host: { manifest: './h.json', root: './apps/host' }, remotes: {} },
+      (d) => makeApp(d, 'apps/host', { repack: 'repack5', shim: true })
+    );
+    const s = await session(['--ci', '--json', '--no-studio', '--port', String(port)], dir);
+    await s.waitForStatus('host', 'ready');
+    const plan = s.events.find((e) => e.event === 'plan')!;
+    assert.equal(
+      plan.apps![0]!.command,
+      `node_modules/.bin/react-native start --port ${port} --no-interactive`
+    );
+    const line = s.lines.find((l) => l.startsWith('[host] rn-stub '))!;
+    const seen = JSON.parse(line.slice('[host] rn-stub '.length)) as { args: string[]; shim: string | null };
+    assert.deepEqual(seen.args, ['start', '--port', String(port), '--no-interactive']);
+    assert.equal(seen.shim, '1', 'the shim ran and exported its environment');
+    s.child.kill('SIGINT');
+    assert.equal((await s.exited).code, 0);
+  });
+
+  it('without a shim (npm/yarn layouts) it falls back to `node <cli.js>`', async () => {
+    const port = await freePort();
+    const dir = workspaceWith(
+      { host: { manifest: './h.json', root: './apps/host' }, remotes: {} },
+      (d) => makeApp(d, 'apps/host', { repack: 'repack5' })
+    );
+    const s = await session(['--ci', '--json', '--no-studio', '--port', String(port)], dir);
+    await s.waitForStatus('host', 'ready');
+    const plan = s.events.find((e) => e.event === 'plan')!;
+    assert.match(plan.apps![0]!.command, /^node node_modules\/react-native\/cli\.js start /);
+    const line = s.lines.find((l) => l.startsWith('[host] rn-stub '))!;
+    assert.equal((JSON.parse(line.slice('[host] rn-stub '.length)) as { shim: unknown }).shim, null);
     s.child.kill('SIGINT');
     assert.equal((await s.exited).code, 0);
   });
@@ -1610,6 +1661,28 @@ describe('dev --launch', () => {
   }
 
   const base = async () => ['--ci', '--json', '--no-studio', '--port', String(await freePort())];
+
+  it('--launch runs run-<platform> through the shim when the target has one', async () => {
+    const dir = workspaceWith(
+      { host: { manifest: './h.json', root: './apps/host' }, remotes: {} },
+      (d) => makeApp(d, 'apps/host', { shim: true })
+    );
+    const s = await session(
+      [...(await base()), '--platform', 'ios', '--launch'],
+      dir
+    );
+    await s.waitForEvent((e) => e.event === 'launch' && e.status === 'exited');
+    assert.deepEqual(launchLog(dir, 'host'), [['run-ios', '--no-packager']]);
+    assert.equal(
+      readFileSync(path.join(dir, 'apps', 'host', 'launch.env'), 'utf8').trim(),
+      '1',
+      'the one-shot ran through the shim'
+    );
+    const plan = s.events.find((e) => e.event === 'plan')!;
+    assert.equal(plan.launch!.command, 'node_modules/.bin/react-native run-ios --no-packager');
+    s.child.kill('SIGINT');
+    assert.equal((await s.exited).code, 0);
+  });
 
   it('--launch --platform ios spawns run-ios --no-packager exactly once, after the host is ready', async () => {
     const dir = rooted();

@@ -45,6 +45,16 @@ returns the declared long flags.
 - `--standalone` on a start that lacks it: plan error, exit 2, nothing spawned.
 - The detected bundler is still reported (`bundler` on the `plan` event apps).
 
+## Running the CLI: shim first
+
+The resolver also returns the app's `node_modules/.bin/react-native` shim
+(`.cmd` plus a shell on win32). Atlas spawns the shim directly for `start` and
+`run-<platform>`: pnpm's shim exports `NODE_PATH`, without which
+`node <cli.js>` cannot find the platform plugins (`Unrecognized platform`,
+`Cannot find module '@react-native/community-cli-plugin'`). Only without a shim
+does it fall back to `node <cli.js>`. Plans show
+`node_modules/.bin/react-native start ...` relative to the app root.
+
 ## Hard rules
 
 - Exit codes: `0` clean (also a wizard cancel) · `1` port conflict or an app errored · `2` could not answer. Keep `1` and `2` distinguishable.

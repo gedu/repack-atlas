@@ -584,9 +584,14 @@ export async function runDevCommand(
   // The launch fires once, on the target's first `ready`; a failure is only
   // ever reported (see `reportLaunch`), never the session's exit code.
   if (plan.launch !== undefined) {
-    const { file, args, cwd } = plan.launch;
+    const { file, args, cwd, shell } = plan.launch;
     supervisor.onFirstReady(plan.launch.triggerKey, () =>
-      supervisor.spawnOneShot('launch', { file, args, cwd })
+      supervisor.spawnOneShot('launch', {
+        file,
+        args,
+        cwd,
+        ...(shell === true ? { shell } : {}),
+      })
     );
   }
 

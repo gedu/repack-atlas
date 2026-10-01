@@ -11,6 +11,7 @@ import {
   type FederationConfig,
 } from '../core/index.js';
 import {
+  cliInvocation,
   declaresStartOption,
   describeLaunch,
   type DevLaunch,
@@ -225,8 +226,7 @@ export function buildDevPlan(input: BuildDevPlanInput): BuildDevPlanResult {
       }
       launch = {
         kind: 'argv',
-        file: process.execPath,
-        cli: toolchain.cli,
+        ...cliInvocation(toolchain),
         bundler: toolchain.bundler,
         ...(toolchain.startOptions !== undefined
           ? { startOptions: toolchain.startOptions }

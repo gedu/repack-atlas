@@ -21,6 +21,8 @@ export type ToolchainResolution =
       ok: true;
       bundler: Bundler;
       cli: string;
+      /** The app's `.bin/react-native` shim, when it has one. */
+      shim?: string;
       /** Options the app's `start` declares; absent = undetermined. */
       startOptions?: readonly string[];
       /** Why `startOptions` is absent. */
@@ -106,6 +108,7 @@ export async function resolveToolchains(
       ok: true,
       bundler,
       cli: cli.cli,
+      ...(cli.shim !== undefined ? { shim: cli.shim } : {}),
       ...(inspected.status === 'ok'
         ? { startOptions: inspected.options }
         : { startOptionsNote: inspected.message }),

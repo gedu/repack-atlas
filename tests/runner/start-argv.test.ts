@@ -4,6 +4,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
+  cliInvocation,
   describeLaunch,
   detectBundler,
   startArgs,
@@ -168,6 +169,33 @@ describe('startArgs', () => {
 
   it('a null port is display-only (`<auto>`)', () => {
     assert.ok(startArgs(launch(), null).includes('<auto>'));
+  });
+});
+
+describe('cliInvocation / shim launches', () => {
+  it('prefers the shim; a .cmd shim needs a shell; no shim falls back to node', () => {
+    assert.deepEqual(cliInvocation({ cli: '/c.js', shim: '/a/.bin/react-native' }), {
+      file: '/a/.bin/react-native',
+    });
+    assert.deepEqual(cliInvocation({ cli: '/c.js', shim: 'C:\\a\\.bin\\react-native.cmd' }), {
+      file: 'C:\\a\\.bin\\react-native.cmd',
+      shell: true,
+    });
+    assert.deepEqual(cliInvocation({ cli: '/c.js' }), {
+      file: process.execPath,
+      cli: '/c.js',
+    });
+  });
+
+  it('a shim launch passes no script and shows the shim relative to cwd', () => {
+    const { cli: _cli, ...shimmed } = launch({
+      file: '/ws/apps/host/node_modules/.bin/react-native',
+    });
+    assert.deepEqual(startArgs(shimmed, 8081).slice(0, 2), ['start', '--bundler']);
+    assert.equal(
+      describeLaunch(shimmed, 8081, '/ws/apps/host'),
+      'node_modules/.bin/react-native start --bundler rspack --port 8081 --no-interactive'
+    );
   });
 });
 

@@ -118,7 +118,8 @@ Ctrl-C at any question exits 0 with nothing started. Without a TTY (CI,
 pipes) it never prompts: the session is host + every remote, as the flags say.
 
 An app with a "root" starts through the argv Atlas builds, like upstream
-Re.Pack's federation dev runner: node <the app's own react-native CLI>
+Re.Pack's federation dev runner: the app's own node_modules/.bin/react-native
+(node <its react-native CLI> when there is no shim)
 start [--bundler <rspack|webpack>] [--config <path>] --port <n>
 --no-interactive, run without a shell and with the app root as cwd. The CLI
 is resolved from each app's own root (missing = exit 2 naming the app). Only

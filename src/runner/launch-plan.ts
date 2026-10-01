@@ -15,7 +15,7 @@
 
 import type { ReactNativeCliResult } from '../core/index.js';
 import type { DevPlanEntry, DevPlatform } from './plan.js';
-import { describeArgv } from './start-argv.js';
+import { cliInvocation, describeArgv, describeShim } from './start-argv.js';
 
 /** The one-shot `run-<platform>` child, in the supervisor's spawn shape. */
 export interface LaunchPlan {
@@ -23,10 +23,15 @@ export interface LaunchPlan {
   triggerKey: string;
   /** Graph node name of that app (what the plan shows). */
   app: string;
-  /** Always `process.execPath` (PATH is never consulted). */
+  /** The target's `.bin/react-native` shim, else `process.execPath` (PATH is
+   * never consulted). */
   file: string;
-  /** `[<target root's react-native cli>, run-<platform>, --no-packager, ...]`. */
+  /** `[<cli script if node>, run-<platform>, --no-packager, ...]`. */
   args: string[];
+  /** Run through a shell (a Windows `.cmd` shim). */
+  shell?: boolean;
+  /** True when `file` is the shim (display only). */
+  viaShim?: true;
   /** The target root. */
   cwd: string;
 }
@@ -72,14 +77,17 @@ export function buildLaunchPlan(
       reason: `--launch: ${target.key}: ${cli.message} (app root ${target.root})`,
     };
   }
+  const invocation = cliInvocation(cli);
   return {
     ok: true,
     launch: {
       triggerKey: target.key,
       app: target.name,
-      file: process.execPath,
+      file: invocation.file,
+      ...(invocation.shell === true ? { shell: true } : {}),
+      ...(invocation.cli === undefined ? { viaShim: true as const } : {}),
       args: [
-        cli.cli,
+        ...(invocation.cli !== undefined ? [invocation.cli] : []),
         `run-${input.platform}`,
         '--no-packager',
         ...(input.device !== undefined ? ['--device', input.device] : []),
@@ -99,7 +107,10 @@ export interface DevPlanEventLaunch {
 export function toPlanEventLaunch(launch: LaunchPlan): DevPlanEventLaunch {
   return {
     app: launch.app,
-    command: describeArgv(launch.args, launch.cwd),
+    command:
+      launch.viaShim === true
+        ? describeShim(launch.file, launch.args, launch.cwd)
+        : describeArgv(launch.args, launch.cwd),
     cwd: launch.cwd,
   };
 }

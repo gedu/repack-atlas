@@ -314,7 +314,7 @@ import behind a core-owned `PromptPort`; when it cannot load, a `node:readline`
 adapter takes over. It is the only runtime dependency (AGENTS.md rule 11).
 
 **What runs.** Each app with a `root` starts through an argv Atlas builds:
-`node <the app's react-native CLI> start [--bundler <rspack|webpack>] [--config
+the app's `node_modules/.bin/react-native` shim (pnpm's shim sets the `NODE_PATH` the CLI needs; without a shim, `node <the app's react-native CLI>`) `start [--bundler <rspack|webpack>] [--config
 <path>] --port <n> --no-interactive [--platform <p>] [--standalone]`, with the
 app root as cwd and no shell. The CLI is resolved from each app's own root, so
 `react-native` must be installed there. The bundler comes from the `config` file

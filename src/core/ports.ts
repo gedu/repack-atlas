@@ -199,6 +199,13 @@ export type ReactNativeCliResult =
       status: 'ok';
       /** Absolute path of the CLI script (`bin.react-native`). */
       cli: string;
+      /**
+       * The package manager's `node_modules/.bin/react-native` shim, when
+       * one exists. Running it (not `node <cli>`) keeps the environment the
+       * shim sets up, e.g. pnpm's `NODE_PATH`, without which the CLI cannot
+       * find its platform plugins in a pnpm workspace.
+       */
+      shim?: string;
     }
   | {
       status: 'failed';

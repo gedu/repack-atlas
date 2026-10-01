@@ -351,6 +351,8 @@ export interface OneShotSpec {
   file: string;
   args: string[];
   cwd: string;
+  /** Run through a shell (a Windows `.cmd` shim). */
+  shell?: boolean;
 }
 
 export interface DevSupervisorOptions extends SupervisorEvents {
@@ -449,7 +451,7 @@ export function createDevSupervisor(options: DevSupervisorOptions) {
             args: startArgs(launch, app.plan.port),
             cwd: app.plan.cwd,
             env: envFor(app.plan),
-            shell: false,
+            shell: launch.shell === true,
           }
     );
     app.handle = handle;
@@ -524,7 +526,7 @@ export function createDevSupervisor(options: DevSupervisorOptions) {
           file: spec.file,
           args: spec.args,
           cwd: spec.cwd,
-          shell: false,
+          shell: spec.shell === true,
         });
       } catch {
         options.onOneShot?.(name, {

@@ -56,15 +56,45 @@ export function detectBundler(input: DetectBundlerInput): Bundler {
   return 'rspack';
 }
 
+/** Executable shape of a resolved react-native CLI (shim preferred). */
+export interface CliInvocation {
+  file: string;
+  /** Script to pass as first argument when running through `node`. */
+  cli?: string;
+  shell?: boolean;
+}
+
+/**
+ * Prefer the app's package-manager shim (it exports the environment the CLI
+ * needs, e.g. pnpm's NODE_PATH); fall back to `node <cli.js>` when the layout
+ * has no shim. A Windows `.cmd` shim needs a shell.
+ */
+export function cliInvocation(resolved: {
+  cli: string;
+  shim?: string;
+}): CliInvocation {
+  if (resolved.shim === undefined) {
+    return { file: process.execPath, cli: resolved.cli };
+  }
+  return {
+    file: resolved.shim,
+    ...(resolved.shim.toLowerCase().endsWith('.cmd') ? { shell: true } : {}),
+  };
+}
+
 /** How the plan starts one app: a verbatim shell command or a built argv. */
 export type DevLaunch =
   | { kind: 'command'; command: string }
   | {
       kind: 'argv';
-      /** Executable; always `process.execPath` (PATH is never consulted). */
+      /** Executable: the app's `.bin/react-native` shim when it has one, else
+       * `process.execPath` (PATH is never consulted). */
       file: string;
-      /** Resolved `react-native` CLI script of THIS app. */
-      cli: string;
+      /** Resolved `react-native` CLI script of THIS app; present only when
+       * `file` is `node` (no shim), then it is the first argument. */
+      cli?: string;
+      /** Run through a shell (a Windows `.cmd` shim). */
+      shell?: boolean;
       /** Detected bundler: always shown, passed as `--bundler` only when the
        * installed `start` declares it (Re.Pack 5.x picks it from the app's
        * react-native config instead). */
@@ -109,7 +139,7 @@ export function startArgs(
   port: number | null
 ): string[] {
   const has = (flag: string): boolean => declaresStartOption(launch, flag);
-  const args = [launch.cli, 'start'];
+  const args = launch.cli !== undefined ? [launch.cli, 'start'] : ['start'];
   if (has('--bundler')) args.push('--bundler', launch.bundler);
   if (launch.config !== undefined && has('--config')) {
     args.push('--config', launch.config);
@@ -124,6 +154,24 @@ export function startArgs(
     args.push('--standalone');
   }
   return args;
+}
+
+/**
+ * Readable form of a shim launch: the shim path relative to `cwd` when it
+ * lives below it (`node_modules/.bin/react-native start ...`), absolute
+ * otherwise (a hoisted workspace-root shim).
+ */
+export function describeShim(
+  file: string,
+  args: readonly string[],
+  cwd: string
+): string {
+  const relative = path.relative(cwd, file);
+  const shown =
+    relative !== '' && !relative.startsWith('..') && !path.isAbsolute(relative)
+      ? relative.split(path.sep).join('/')
+      : file;
+  return [shown, ...args].map(quote).join(' ');
 }
 
 const quote = (part: string): string =>
@@ -155,5 +203,8 @@ export function describeLaunch(
   cwd: string
 ): string {
   if (launch.kind === 'command') return launch.command;
-  return describeArgv(startArgs(launch, port), cwd);
+  const args = startArgs(launch, port);
+  return launch.cli !== undefined
+    ? describeArgv(args, cwd)
+    : describeShim(launch.file, args, cwd);
 }

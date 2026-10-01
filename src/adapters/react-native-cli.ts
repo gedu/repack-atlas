@@ -120,6 +120,23 @@ function inspectStartOptions(root: string): StartOptionsResult {
   }
 }
 
+/**
+ * The `.bin/react-native` shim the app's package manager installed, found the
+ * way Node finds packages (the app's `node_modules`, then each parent's).
+ * Windows shims are `.cmd` files.
+ */
+function findBinShim(appRoot: string): string | undefined {
+  const name = process.platform === 'win32' ? 'react-native.cmd' : 'react-native';
+  let dir = path.resolve(appRoot);
+  for (;;) {
+    const candidate = path.join(dir, 'node_modules', '.bin', name);
+    if (existsSync(candidate)) return candidate;
+    const parent = path.dirname(dir);
+    if (parent === dir) return undefined;
+    dir = parent;
+  }
+}
+
 export function createReactNativeCliResolver(): ReactNativeCliResolver {
   return {
     resolve(appRoot: string): ReactNativeCliResult {
@@ -160,7 +177,12 @@ export function createReactNativeCliResolver(): ReactNativeCliResolver {
             '"bin.react-native" script — it cannot be used to start an app',
         };
       }
-      return { status: 'ok', cli: path.resolve(packageDir, bin) };
+      const shim = findBinShim(appRoot);
+      return {
+        status: 'ok',
+        cli: path.resolve(packageDir, bin),
+        ...(shim !== undefined ? { shim } : {}),
+      };
     },
     startOptions: inspectStartOptions,
   };

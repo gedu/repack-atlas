@@ -88,6 +88,25 @@ describe('createReactNativeCliResolver', () => {
     assert.equal(result.status, 'failed');
   });
 
+  it('reports the app\'s .bin/react-native shim when one exists, walking up like Node', (t) => {
+    if (process.platform === 'win32') return t.skip('posix shim name');
+    const workspace = path.join(root, 'shimmed');
+    const cli = rnPackage(path.join(workspace, 'node_modules', 'react-native'), {
+      'react-native': './cli.js',
+    });
+    const app = path.join(workspace, 'apps', 'a');
+    mkdirSync(app, { recursive: true });
+    assert.deepEqual(resolver.resolve(app), { status: 'ok', cli }, 'no shim yet');
+    const bin = path.join(app, 'node_modules', '.bin');
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(path.join(bin, 'react-native'), '#!/bin/sh\n');
+    assert.deepEqual(resolver.resolve(app), {
+      status: 'ok',
+      cli,
+      shim: path.join(bin, 'react-native'),
+    });
+  });
+
   it('a missing package fails naming the app root', () => {
     const app = path.join(root, 'missing');
     mkdirSync(app, { recursive: true });

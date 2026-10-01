@@ -134,8 +134,9 @@ unless you pass `--auto-ports`. `repack-atlas dev --help` has every detail and
 
 What each app runs is decided per app in `repack-federation.json`:
 
-- `root`: the app directory. By default Atlas runs `node <the app's
-  react-native CLI> start [--bundler <rspack|webpack>] --port <n>` from there,
+- `root`: the app directory. By default Atlas runs the app's own
+  `node_modules/.bin/react-native` shim (`node <react-native CLI>` when there is
+  no shim) with `start [--bundler <rspack|webpack>] --port <n>` from there,
   so `react-native` must be installed in each app root. One app without it
   fails the whole run (exit `2`). `--bundler` and `--standalone` are passed only
   when the app's installed `start` command declares them (read from its

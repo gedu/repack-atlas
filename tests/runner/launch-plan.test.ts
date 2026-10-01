@@ -46,6 +46,25 @@ function build(
   });
 }
 
+describe('buildLaunchPlan with a .bin shim', () => {
+  it('runs the shim directly and shows it relative to the root', () => {
+    const result = build([entry('host')], {
+      resolveCli: (root) => ({
+        status: 'ok',
+        cli: `${root}/node_modules/react-native/cli.js`,
+        shim: `${root}/node_modules/.bin/react-native`,
+      }),
+    });
+    assert.ok(result.ok);
+    assert.equal(result.launch.file, '/ws/apps/host/node_modules/.bin/react-native');
+    assert.deepEqual(result.launch.args, ['run-ios', '--no-packager']);
+    assert.equal(
+      toPlanEventLaunch(result.launch).command,
+      'node_modules/.bin/react-native run-ios --no-packager'
+    );
+  });
+});
+
 describe('buildLaunchPlan', () => {
   it('targets the host: its own cli, run-<platform> --no-packager, cwd = root', () => {
     const result = build([entry('host'), entry('a')]);
