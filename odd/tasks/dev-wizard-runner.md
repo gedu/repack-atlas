@@ -53,7 +53,7 @@ part of the plan and must exist.
 - [x] T5 Launch: `--launch/--no-launch/--device`, one-shot
       `run-<platform> --no-packager` on the target's first ready, `[launch]`
       prefix, exactly once, killed on shutdown.
-- [ ] T6 Wizard: `PromptPort`, clack via dynamic import, readline fallback;
+- [x] T6 Wizard: `PromptPort`, clack via dynamic import, readline fallback;
       steps remotes → platform → launch → ports → standalone; gate and cancel.
 - [ ] T7 Docs: PRD §7.1 and related lines, README dev section, demo runbook
       (wizard instead of `pnpm --filter`), DEV_HELP, AGENTS.md dependency rule,
@@ -167,6 +167,24 @@ branch merges to main once at the end.
   (`dev.ts:424-430`); `dev.ts:250-256`; misplaced toolchain test
   (`launch-plan.test.ts:158-179`).
 
+- T6 done on `feat/dev-wizard-runner-t6`, commit `6861aef`
+  (`feat(dev): add interactive wizard for remotes, platform, ports and
+  launch`), 1465 authored lines (31 lockfile). `@clack/prompts ^0.9.1` behind
+  `PromptPort` with readline fallback; AGENTS.md hard rule 11 names the
+  exception. Wording copied from upstream. Gate: no `--apps`, not
+  `--no-interactive`/`--ci`/`--json`, TTY on stdin and stdout; wizard also
+  runs with `--dry-run` (upstream parity). Deviations: auto-port apps get an
+  "automatic free port?" question; choosing "all" clears `--platform`;
+  remotes question skipped when there are none. Checks: full chain green,
+  515/515; pseudo-TTY smoke by writer (cancel + Enter-through); parent spot
+  check wizard + gate + prompts tests (32/32). Native review: medium
+  (slice budget), granted, 1 lens, approved, acknowledged.
+- Carried into T7 (fix commit): `--launch` + wizard "all" fails only after
+  all prompts (`dev-wizard.ts:109-117`); readline multiselect accepts an empty
+  selection (`prompts-readline.ts:108`); preselect-all unasserted in tests
+  (`dev-wizard.test.ts:174-188`). The first-pass plan exits 2 on a toolchain
+  failure of any app before the wizard shows (document it).
+
 ## Next step
 
-T6 (wizard), stacked on `feat/dev-wizard-runner-t5`.
+T7 (wizard fixes + docs), stacked on `feat/dev-wizard-runner-t6`.
