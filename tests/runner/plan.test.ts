@@ -512,3 +512,56 @@ describe('buildDevPlan: flags the installed start does not declare', () => {
     ok(plan(undefined, { platform: 'ios', config: 'r.js' }));
   });
 });
+
+describe('plan event ports', () => {
+  const base = {
+    key: 'alpha',
+    name: 'alpha',
+    role: 'remote' as const,
+    launch: { kind: 'command' as const, command: 'run alpha' },
+    cwd: '/ws',
+  };
+
+  it('shows the declared port, or null for auto, before allocation', () => {
+    const [declared, auto] = toPlanEventApps([
+      { ...base, declaredPort: 9001 },
+      { ...base, key: 'beta', declaredPort: null },
+    ]);
+    assert.equal(declared!.port, 9001);
+    assert.equal(auto!.port, null);
+  });
+
+  it('shows the allocated port once allocation settled on one', () => {
+    const [moved] = toPlanEventApps([
+      { ...base, declaredPort: 9001, allocatedPort: 50_001, reassignedFrom: 9001 },
+    ]);
+    assert.equal(moved!.port, 50_001);
+    assert.equal(moved!.reassignedFrom, 9001);
+  });
+});
+
+describe('plan warnings', () => {
+  it('carries a guessed bundler from the toolchain as a warning, not a failure', () => {
+    const config: FederationConfig = {
+      host: { manifest: './m/host.json', root: './apps/host' },
+      remotes: {},
+    };
+    const result = buildDevPlan({
+      config,
+      configDir: CONFIG_DIR,
+      hostName: 'host_app',
+      toolchains: {
+        [toolchainKey('/ws/apps/host')]: {
+          ok: true,
+          bundler: 'rspack',
+          cli: '/ws/apps/host/cli.js',
+          bundlerNote: 'could not list the app root; assuming rspack',
+        },
+      },
+    });
+    assert.ok(result.ok);
+    assert.deepEqual(result.warnings, [
+      { key: 'host', message: 'could not list the app root; assuming rspack' },
+    ]);
+  });
+});

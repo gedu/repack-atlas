@@ -23,6 +23,9 @@ export type ToolchainResolution =
       cli: string;
       /** The app's `.bin/react-native` shim, when it has one. */
       shim?: string;
+      /** Set when the bundler is a guess: the app root could not be listed,
+       * so rspack (Re.Pack's default) was assumed. */
+      bundlerNote?: string;
       /** Options the app's `start` declares; absent = undetermined. */
       startOptions?: readonly string[];
       /** Why `startOptions` is absent. */
@@ -53,6 +56,10 @@ async function listConfigFiles(fs: ProjectFs, root: string): Promise<string[]> {
   );
 }
 
+/** Whether the `config` field's file name alone decides the bundler. */
+const configNamesBundler = (config: string | undefined): boolean =>
+  config !== undefined && /^(rspack|webpack)/.test(path.basename(config));
+
 export interface ToolchainTarget {
   /** Absolute app root. */
   root: string;
@@ -74,10 +81,13 @@ export async function resolveToolchains(
     // Apps with the same root and config resolve once.
     if (key in resolved) continue;
     let files: string[] = [];
+    let listingFailure: string | undefined;
     try {
       files = await listConfigFiles(deps.fs, target.root);
-    } catch {
-      // An unreadable root lists nothing: detection falls back to rspack.
+    } catch (error) {
+      // An unreadable root lists nothing: detection falls back to rspack, and
+      // says so (unless the `config` field already decides the bundler).
+      listingFailure = String(error);
     }
     const bundler = detectBundler({
       files,
@@ -109,6 +119,11 @@ export async function resolveToolchains(
       bundler,
       cli: cli.cli,
       ...(cli.shim !== undefined ? { shim: cli.shim } : {}),
+      ...(listingFailure !== undefined && !configNamesBundler(target.config)
+        ? {
+            bundlerNote: `could not list the app root to detect its bundler (${listingFailure}); assuming rspack, Re.Pack's default`,
+          }
+        : {}),
       ...(inspected.status === 'ok'
         ? { startOptions: inspected.options }
         : { startOptionsNote: inspected.message }),

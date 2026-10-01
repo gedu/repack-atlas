@@ -37,6 +37,7 @@ import {
   resolveDevPlan,
   type DevAppPlan,
   type DevPlanResult,
+  type DevPlanWarning,
   type DevSkippedApp,
 } from '../runner/supervisor.js';
 import {
@@ -49,6 +50,7 @@ import {
 } from '../runner/plan.js';
 import {
   formatLaunchLine,
+  LAUNCH_NEEDS_PLATFORM_REASON,
   toPlanEventLaunch,
   type DevPlanEventLaunch,
   type LaunchPlan,
@@ -126,8 +128,7 @@ const processDevEnv = (): DevEnv => ({
 });
 
 /** Launch needs exactly one platform (there is no `run-all`). */
-const LAUNCH_NEEDS_PLATFORM =
-  'dev: --launch needs a single platform: pass --platform ios or --platform android (or drop --launch to serve only)';
+const LAUNCH_NEEDS_PLATFORM = `dev: ${LAUNCH_NEEDS_PLATFORM_REASON}`;
 
 /** The `{event:'plan'}` line shared by the dry-run and the live path. */
 function planEvent(
@@ -166,6 +167,13 @@ function openInBrowser(
 function warnSkipped(skipped: DevSkippedApp[], io: DevIo): void {
   for (const skip of skipped) {
     io.writeErr(`dev: warning  ${skip.key}: ${skip.reason}`);
+  }
+}
+
+/** Same note for assumptions made on apps that do run (e.g. a guessed bundler). */
+function warnAssumptions(warnings: DevPlanWarning[], io: DevIo): void {
+  for (const warning of warnings) {
+    io.writeErr(`dev: warning  ${warning.key}: ${warning.message}`);
   }
 }
 
@@ -216,6 +224,7 @@ async function runDryRun(input: DryRunInput): Promise<number> {
     return EXIT_NO_ANSWER;
   }
   warnSkipped(plan.skipped, io);
+  warnAssumptions(plan.warnings, io);
 
   const allocation = await allocatePorts(plan.entries, input.processRunner, {
     autoPorts: input.autoPorts,
@@ -247,6 +256,9 @@ async function runDryRun(input: DryRunInput): Promise<number> {
   return code;
 }
 
+/** Signal the `--json` launch event carries for a child that never spawned. */
+const SPAWN_ERROR_JSON_SIGNAL = 'spawn-error';
+
 /**
  * Report the `--launch` one-shot. Non-zero exit and spawn errors are loud on
  * stderr (and as a `--json` event) but the session continues: servers keep serving and
@@ -268,6 +280,18 @@ function reportLaunch(
     if (!json) io.writeOut(`dev: ${name} → started`);
     return;
   }
+  if (result.status === 'spawn-failed') {
+    // The `--json` contract keeps reporting a failed spawn as an exit with
+    // this signal (additive-only events), whatever the supervisor's shape.
+    emit({
+      event: 'launch',
+      status: 'exited',
+      code: null,
+      signal: SPAWN_ERROR_JSON_SIGNAL,
+    });
+    io.writeErr(`dev: ${name} could not be spawned; the session keeps serving`);
+    return;
+  }
   emit({
     event: 'launch',
     status: 'exited',
@@ -282,9 +306,7 @@ function reportLaunch(
     const how =
       result.code !== null
         ? `exited with code ${result.code}`
-        : result.signal === 'spawn-error'
-          ? 'could not be spawned'
-          : `was killed (${result.signal ?? 'unknown signal'})`;
+        : `was killed (${result.signal ?? 'unknown signal'})`;
     io.writeErr(`dev: ${name} ${how}; the session keeps serving`);
   }
 }
@@ -509,6 +531,7 @@ export async function runDevCommand(
     return plan.portConflict ? EXIT_FOUND_ERRORS : EXIT_NO_ANSWER;
   }
   warnSkipped(plan.skipped, io);
+  warnAssumptions(plan.warnings, io);
   if (!json) {
     for (const note of plan.reassignments) io.writeErr(`dev: ${note}`);
   }

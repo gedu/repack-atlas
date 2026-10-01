@@ -41,8 +41,13 @@ export interface DevPlanEntry {
   /** Directory the app runs in: the config directory for a `command`, the
    * app root for a built argv. */
   cwd: string;
-  /** Declared TCP port (host: `--port` > config > 8081); `null` = runner picks. */
+  /** The port the plan asks for (wizard/`--port` > config > host default
+   * 8081); `null` = the runner picks one. Never rewritten after planning. */
   declaredPort: number | null;
+  /** The port allocation settled on (`applyAssignments`, never the plan
+   * builder); absent before allocation, and for an auto app a dry-run does
+   * not resolve. */
+  allocatedPort?: number;
   /** The busy port `--auto-ports` moved this app away from (set by
    * `applyAssignments`, never by the plan builder). */
   reassignedFrom?: number;
@@ -65,6 +70,12 @@ export interface DevSkippedApp {
   reason: string;
 }
 
+/** A heads-up about an app that still runs: something was assumed. */
+export interface DevPlanWarning {
+  key: string;
+  message: string;
+}
+
 export type BuildDevPlanResult =
   | { ok: false; reasons: string[] }
   | {
@@ -72,6 +83,7 @@ export type BuildDevPlanResult =
       configDir: string;
       entries: DevPlanEntry[];
       skipped: DevSkippedApp[];
+      warnings: DevPlanWarning[];
     };
 
 export interface BuildDevPlanInput {
@@ -179,6 +191,7 @@ export function buildDevPlan(input: BuildDevPlanInput): BuildDevPlanResult {
 
   const entries: DevPlanEntry[] = [];
   const skipped: DevSkippedApp[] = [];
+  const warnings: DevPlanWarning[] = [];
   const reasons: string[] = [];
 
   for (const entry of selected) {
@@ -241,6 +254,9 @@ export function buildDevPlan(input: BuildDevPlanInput): BuildDevPlanResult {
         ...(input.standalone === entry.key ? { standalone: true } : {}),
       };
       cwd = appRoot;
+      if (toolchain.bundlerNote !== undefined) {
+        warnings.push({ key: entry.key, message: toolchain.bundlerNote });
+      }
       const dropped: Array<[string, string]> = [];
       if (entry.config !== undefined) {
         dropped.push(['--config', `the "config" field (${entry.config})`]);
@@ -295,7 +311,7 @@ export function buildDevPlan(input: BuildDevPlanInput): BuildDevPlanResult {
   }
 
   if (reasons.length > 0) return { ok: false, reasons };
-  return { ok: true, configDir, entries, skipped };
+  return { ok: true, configDir, entries, skipped, warnings };
 }
 
 /** One app of the `{event:'plan'}` line; `port: null` means auto. */
@@ -320,19 +336,24 @@ export interface DevPlanEventApp {
 
 /** Project plan entries to the stable `--json` / table shape. */
 export function toPlanEventApps(entries: DevPlanEntry[]): DevPlanEventApp[] {
-  return entries.map((entry) => ({
-    app: entry.name,
-    role: entry.role,
-    port: entry.declaredPort,
-    command: describeLaunch(entry.launch, entry.declaredPort, entry.cwd),
-    cwd: entry.cwd,
-    ...(entry.reassignedFrom !== undefined
-      ? { reassignedFrom: entry.reassignedFrom }
-      : {}),
-    ...(entry.platform !== undefined ? { platform: entry.platform } : {}),
-    ...(entry.standalone === true ? { standalone: true as const } : {}),
-    ...(entry.launch.kind === 'argv' ? { bundler: entry.launch.bundler } : {}),
-  }));
+  return entries.map((entry) => {
+    // The event's `port` is the allocated one when there is one, else the
+    // declared one (`null` = auto).
+    const port = entry.allocatedPort ?? entry.declaredPort;
+    return {
+      app: entry.name,
+      role: entry.role,
+      port,
+      command: describeLaunch(entry.launch, port, entry.cwd),
+      cwd: entry.cwd,
+      ...(entry.reassignedFrom !== undefined
+        ? { reassignedFrom: entry.reassignedFrom }
+        : {}),
+      ...(entry.platform !== undefined ? { platform: entry.platform } : {}),
+      ...(entry.standalone === true ? { standalone: true as const } : {}),
+      ...(entry.launch.kind === 'argv' ? { bundler: entry.launch.bundler } : {}),
+    };
+  });
 }
 
 /**

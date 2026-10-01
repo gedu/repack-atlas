@@ -140,7 +140,10 @@ export async function allocatePorts(
     : { ok: true, assignments };
 }
 
-/** Plan entries with the allocated ports written back (for the plan event/table). */
+/**
+ * Plan entries with the allocated ports recorded as `allocatedPort` (for the
+ * plan event/table); `declaredPort` keeps meaning "what the plan asked for".
+ */
 export function applyAssignments(
   entries: DevPlanEntry[],
   assignments: PortAssignment[]
@@ -151,7 +154,7 @@ export function applyAssignments(
     if (!assignment) return entry;
     return {
       ...entry,
-      declaredPort: assignment.port,
+      ...(assignment.port !== null ? { allocatedPort: assignment.port } : {}),
       ...(assignment.requested !== undefined
         ? { reassignedFrom: assignment.requested }
         : {}),
