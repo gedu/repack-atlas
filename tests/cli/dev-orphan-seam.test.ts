@@ -434,7 +434,10 @@ describe('DevEnv.createProcessRunner seam', () => {
     );
     assert.match(
       hostQuestion!,
-      /\(in use: node /,
+      // The middle-eliding formatter drops the redundant leading `node ` on an
+      // over-cap line and keeps the tail, so the surviving evidence that the
+      // probe worked is the owner's own argv tail, not the leading `node `.
+      /\(in use: .*cli\.js start --port /,
       `dev.ts must hand the wizard a working probe, got: ${hostQuestion}`
     );
   });

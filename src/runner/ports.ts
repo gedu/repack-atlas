@@ -226,10 +226,57 @@ export function describeReassignments(assignments: PortAssignment[]): string[] {
 export const PORT_CONFLICT_HINT =
   'free the port(s), pass --port for the host, or use --auto-ports to reassign busy ports';
 
-/** One line, capped: an owner command as shown inside a question or note. */
-export function formatOwnerCommand(command: string, maxLength = 100): string {
+/**
+ * Below this cap there is no room for both ends of a path, so the formatter
+ * falls back to plain head-elision (what small-cap callers always asked for).
+ */
+const MIDDLE_ELISION_MIN_CAP = 40;
+/** Room enough to identify a process: an executable plus its trailing flags. */
+const MIN_TAIL_KEEP = 24;
+
+/**
+ * One line, capped: an owner command as shown inside a question or note.
+ *
+ * The cap is the contract (the result never exceeds `maxLength` and an
+ * elision is always marked with `...`). What changed is WHERE it elides: what
+ * identifies an owner is the END of its argv (`…/packages/host/…/cli.js start
+ * --port 8081`), so an over-cap line keeps a short head and a long tail and
+ * drops the middle. Before that, two cheap shortenings are tried in order —
+ * `$HOME` → `~`, then a redundant leading `node ` — each of which can bring
+ * the line under the cap with nothing elided at all. A command that already
+ * fits comes back untouched (whitespace-collapsed), byte for byte.
+ */
+export function formatOwnerCommand(
+  command: string,
+  maxLength = 100,
+  env: { HOME?: string } = process.env
+): string {
   const collapsed = command.replace(/\s+/g, ' ').trim();
-  return collapsed.length > maxLength
-    ? `${collapsed.slice(0, maxLength - 3)}...`
-    : collapsed;
+  if (collapsed.length <= maxLength) return collapsed;
+
+  const home = env.HOME;
+  let text = collapsed;
+  if (home !== undefined && home !== '' && text.includes(home)) {
+    text = text.split(home).join('~');
+  }
+  if (text.length <= maxLength) return text;
+  if (text.startsWith('node ')) {
+    text = text.slice('node '.length);
+  }
+  if (text.length <= maxLength) return text;
+
+  const budget = maxLength - 3;
+  if (maxLength < MIDDLE_ELISION_MIN_CAP || budget < MIN_TAIL_KEEP * 2) {
+    return `${text.slice(0, budget)}...`;
+  }
+  // Head-weighted up to the point where it stops paying off: the head must
+  // reach the workspace/project segment (`~/Documents/CK/super-app-showcase/`)
+  // because that is what says WHICH session owns the port, and the tail keeps
+  // the executable plus its flags (`…/cli.js start --port 8081`). The break
+  // lands on a `/` boundary when one is near, so the visible head is whole
+  // path segments and never half a directory name.
+  const window = Math.floor((budget * 3) / 5);
+  const breakAt = text.lastIndexOf('/', window);
+  const head = breakAt >= 8 ? breakAt + 1 : window;
+  return `${text.slice(0, head)}...${text.slice(text.length - (budget - head))}`;
 }

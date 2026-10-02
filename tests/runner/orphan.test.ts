@@ -189,8 +189,18 @@ describe('killQuestion / describeKill', () => {
       8081,
       orphan(4242, { command: 'z'.repeat(300) })
     );
-    assert.match(question, /z{97}\.\.\.\)\. Kill it\?$/);
+    // The cap (100 chars) and the visible `...` marker are the contract this
+    // question relies on. Where the elision lands moved to the middle with
+    // the formatter; what this question claims about the cap is unchanged.
+    // Middle-elision: the marker sits between a head and a tail of the argv.
+    assert.match(question, /z+\.\.\.z+\)\. Kill it\?$/, 'capped with a visible marker');
     assert.ok(question.length < 300, 'the capped line never grows with argv');
+    assert.ok(
+      question.length <=
+        'Port 8081 is held by an orphaned dev server of this workspace (pid 4242: ) Kill it?'.length +
+          101,
+      'the command inside the question stays within the cap'
+    );
   });
   it('describeKill states the port and pid, nothing more than was done', () => {
     assert.equal(

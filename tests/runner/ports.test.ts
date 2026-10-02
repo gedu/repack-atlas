@@ -233,16 +233,106 @@ describe('formatOwnerCommand', () => {
     const command = 'node cli.js start --port 8081';
     assert.equal(formatOwnerCommand(command), command);
   });
-  it('caps at maxLength with a trailing ellipsis inside the cap', () => {
+  it('caps at maxLength with an ellipsis inside the cap', () => {
     const long = 'x'.repeat(250);
     const formatted = formatOwnerCommand(long);
     assert.equal(formatted.length, 100, 'the cap is the CONTRACT of a question line');
-    assert.ok(formatted.endsWith('...'));
-    assert.equal(formatted, `${'x'.repeat(97)}...`);
+    assert.ok(formatted.includes('...'), 'the elision is marked');
   });
   it('honours a custom cap', () => {
     const formatted = formatOwnerCommand('abcdefghij', 7);
     assert.equal(formatted, 'abcd...');
+  });
+});
+
+// Middle-elision (the #58 follow-up, D2). What identifies an owner command is
+// its END (`…/packages/host/…/cli.js start --port 8081`); end-elision threw
+// exactly that away, so every busy-port note read `node /Users/eduardo/Docum…`.
+// The cap stays the contract — only the elision site moves.
+describe('formatOwnerCommand middle-elision', () => {
+  const home = '/Users/tester';
+  const env = { HOME: home } as const;
+
+  const showcaseCommand = (port: number): string =>
+    `node ${home}/Documents/CK/super-app-showcase/packages/host/node_modules/@react-native/community-cli-plugin/dist/bin/cli.js start --port ${port}`;
+
+  it('elides the middle so the distinguishing tail survives', () => {
+    const command = showcaseCommand(8081);
+    assert.ok(command.length > 100, 'the fixture is actually over the cap');
+    const formatted = formatOwnerCommand(command, 100, env);
+    assert.ok(formatted.length <= 100, 'the cap still holds');
+    assert.ok(formatted.includes('...'), 'the elision is marked');
+    assert.ok(
+      formatted.endsWith('cli.js start --port 8081'),
+      `the tail must survive, got: ${formatted}`
+    );
+    assert.ok(
+      formatted.includes('super-app-showcase'),
+      `the head must reach the workspace segment, got: ${formatted}`
+    );
+    assert.ok(
+      !formatted.includes('packages/host/node_modules'),
+      'the middle (host path into node_modules) is what got dropped'
+    );
+  });
+
+  it('shortens $HOME to ~ before measuring', () => {
+    const formatted = formatOwnerCommand(showcaseCommand(8081), 100, env);
+    assert.ok(formatted.startsWith('~/'), `~ replaces home, got: ${formatted}`);
+    assert.ok(!formatted.includes(home), 'the raw home path is gone');
+  });
+
+  it('drops the redundant leading `node ` only when the line is over the cap', () => {
+    const shortened = formatOwnerCommand(showcaseCommand(8081), 100, env);
+    assert.ok(
+      !shortened.startsWith('node '),
+      `the leading executable is redundant with the tail, got: ${shortened}`
+    );
+    assert.ok(
+      shortened.includes('cli.js start'),
+      'dropping `node ` must not cost the tail'
+    );
+    // A within-cap command keeps its text: no shortening, no dropping. This is
+    // the orphan killQuestion contract and it stays byte-identical.
+    assert.equal(
+      formatOwnerCommand('node /ws/apps/host/cli.js start', 100, env),
+      'node /ws/apps/host/cli.js start'
+    );
+  });
+
+  it('still collapses whitespace and trims when nothing is shortened', () => {
+    assert.equal(
+      formatOwnerCommand('node   /ws/apps/host/   cli.js start', 100, env),
+      'node /ws/apps/host/ cli.js start'
+    );
+  });
+
+  it('leaves a command with no $HOME prefix alone apart from the elision', () => {
+    const command = `/opt/other/${'a'.repeat(120)} start`;
+    const formatted = formatOwnerCommand(command, 100, env);
+    assert.ok(
+      formatted.startsWith('/opt/other/'),
+      `absolute head kept, got: ${formatted}`
+    );
+    assert.ok(formatted.endsWith('start'), 'the tail survives without a home prefix');
+  });
+
+  it('falls back to head-only elision when the cap cannot hold both ends', () => {
+    // A cap of 6 leaves the marker plus 3 characters, so no tail can survive;
+    // what still holds is the cap contract: length and a visible marker.
+    const formatted = formatOwnerCommand('node /a/b/cli.js start', 6, env);
+    assert.equal(formatted.length, 6);
+    assert.ok(formatted.endsWith('...'));
+  });
+
+  it('a command that already fits comes back untouched (no shortening at all)', () => {
+    // Within the cap the text is byte-for-byte what it was (collapsed only):
+    // `~` shortening and the `node ` drop exist to BUY room under the cap,
+    // never to restyle a line that already fits (orphan killQuestion parity).
+    assert.equal(
+      formatOwnerCommand(`node ${home}/apps/host/cli.js start`, 100, env),
+      `node ${home}/apps/host/cli.js start`
+    );
   });
 });
 
