@@ -326,6 +326,29 @@ describe('wizard model: controller keystrokes', () => {
     );
   });
 
+  // Review suggestion (a): `pending` is one slot, so a second ask while one
+  // is live must answer cancelled immediately instead of orphaning the
+  // first promise forever. The port is sequential-by-construction today;
+  // this locks the guard for any future caller bug.
+  it('answers a second concurrent ask as cancelled, keeping the live one', async () => {
+    const controller = createWizardController();
+    const first = controller.ask(multiselectRequest());
+    const second = await settled(controller.ask(multiselectRequest()));
+    assert.deepEqual(second, { status: 'cancelled' });
+    assert.equal(
+      controller.state().field?.kind,
+      'multiselect',
+      'the live question stays untouched'
+    );
+    controller.handleKey('', { return: true });
+    const answered = await settled(first);
+    assert.equal(
+      (answered as { status: string }).status,
+      'ok',
+      'the first question still answers normally'
+    );
+  });
+
   it('toggles with space and answers y/n on a confirm', async () => {
     const controller = createWizardController();
     const remotes = controller.ask(multiselectRequest());

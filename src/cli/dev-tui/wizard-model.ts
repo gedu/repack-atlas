@@ -370,6 +370,12 @@ export function createWizardController(): WizardController {
       // A Ctrl-C pressed while nothing was asked still means "I'm out", and
       // must not hang: the next question answers cancelled instead.
       if (quitRequested) return Promise.resolve({ status: 'cancelled' });
+      // One live question at a time: `pending` is a single slot, so a second
+      // concurrent ask would orphan the first promise forever. The port is
+      // sequential-by-construction today (the wizard awaits each answer), so
+      // this guard only answers the caller bug — immediately cancelled, with
+      // the live question untouched — instead of hanging both.
+      if (pending !== null) return Promise.resolve({ status: 'cancelled' });
       return new Promise<PromptResult<WizardValue>>((resolve) => {
         const field = openField(request);
         pending = { field, resolve };

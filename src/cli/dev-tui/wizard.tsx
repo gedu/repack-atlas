@@ -301,7 +301,15 @@ export function createTuiPromptPort(
     controller.quit();
     const current = instance;
     instance = null;
-    if (current !== null) current.unmount();
+    // A pathological ink teardown must not skip the terminal-restore below:
+    // the cursor/raw-mode/pause cleanup is the whole point of close(), and
+    // the dashboard mounts right after — a throw here would leave the human
+    // with a hidden cursor and raw mode on.
+    try {
+      current?.unmount();
+    } catch {
+      /* ink's own cleanup failed; the belt-and-braces writes below still run */
+    }
     // ink's teardown shows the cursor and drops raw mode already; both writes
     // below are the belt-and-braces half of the balance, and stdin must end
     // PAUSED for the dashboard's own takeover.
