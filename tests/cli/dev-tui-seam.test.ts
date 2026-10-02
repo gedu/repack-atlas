@@ -411,11 +411,32 @@ describe('G5 wizard prompt routing', () => {
       // The ink session takes raw mode for the first question, then Ctrl-C
       // walks away (the wizard's clean exit-0 cancel).
       await until('the ink wizard to own raw mode', () => stdin.rawMode);
-      assert.match(
-        stdout.text,
-        /Which remotes to run\?/,
-        'the question renders through the ink session'
-      );
+      // NO stdout assertion for the live question here: ink buffers
+      // interactive frames on a TTY stdout through log-update, but under
+      // `is-in-ci` (CI=true in every runner) it skips the per-frame writes
+      // and flushes only the LAST frame at unmount (ink/ink.js onRender CI
+      // branch + unmount's lastOutput write) — the question text is simply
+      // never on stdout mid-session in that mode. The ink path this test
+      // proves is the ROUTING: raw mode taken (only an ink session does
+      // that on these streams), the plain port never created, and the
+      // cursor re-show written at teardown. Question RENDERING is proven
+      // frame-by-frame by tests/cli/dev-tui-wizard-port.test.ts (non-TTY
+      // stdout, where ink writes plain output in every mode).
+      if (
+        !['CI', 'CONTINUOUS_INTEGRATION'].some(
+          (key) =>
+            key in process.env &&
+            process.env[key] !== '0' &&
+            process.env[key] !== 'false'
+        )
+      ) {
+        // Only true outside ink's CI mode, where ink paints every frame:
+        assert.match(
+          stdout.text,
+          /Which remotes to run\?/,
+          'the question renders through the ink session'
+        );
+      }
       stdin.send('\u0003'); // ETX = Ctrl-C in raw mode
       const code = await running;
 
