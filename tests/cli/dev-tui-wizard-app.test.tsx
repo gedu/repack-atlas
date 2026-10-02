@@ -283,6 +283,18 @@ describe('dev tui wizard view', () => {
         /╭[\s\S]*✓ Which remotes to run\?/,
         'the panel and its recap survive the wizard closing'
       );
+      // Real-PTY check (2026-10-02): when the last question settled, the only
+      // blank line was the question's gap and it vanished with the question —
+      // the `dev:` error lines landed flush under the box bottom. The panel
+      // must own its trailing blank line so what follows stays separated.
+      const closedLines = afterClose.split('\n');
+      const bottom = closedLines.findIndex((l) => l.startsWith('╰'));
+      assert.ok(bottom >= 0, 'the box closed line is in the final frame');
+      assert.equal(
+        (closedLines[bottom + 1] ?? 'x').trim(),
+        '',
+        'a blank line follows the panel even with no live question, so the dev: lines that come after land one row below the box'
+      );
     }
     app.cleanup();
   });

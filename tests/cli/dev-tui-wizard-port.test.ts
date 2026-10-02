@@ -138,6 +138,16 @@ describe('tui prompt port: terminal hygiene', () => {
     assert.equal(stdin.rawMode, false, 'raw mode must be OFF after close');
     assert.equal(stdin.paused, true, 'stdin must end paused for the dashboard');
     assert.match(stdout.text, /\[\?25h/, 'the cursor must be shown again');
+    // Separation from what the caller prints next (the `dev:` conflict lines):
+    // close() ends the standing frame with a blank row, so the error block
+    // never lands flush under it (real-PTY check, 2026-10-02).
+    const esc = String.fromCharCode(0x1b);
+    const lastCursor = stdout.text.lastIndexOf(`${esc}[?25h`);
+    assert.match(
+      stdout.text.slice(lastCursor + `${esc}[?25h`.length),
+      /^\n/,
+      'close must leave a blank line after the last ink frame'
+    );
   });
 
   it('leaves the settled answer on screen through the session', async () => {

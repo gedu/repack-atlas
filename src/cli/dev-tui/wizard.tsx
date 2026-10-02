@@ -234,9 +234,13 @@ export function WizardApp({ controller, color }: WizardAppProps) {
           ))}
         </Box>
       ) : null}
-      {/* The vertical gap is its own line, not a margin, so it survives the
-          final frame when the wizard closes with no live question left. */}
-      {hasPanel && state.field !== null ? <Text>{' '}</Text> : null}
+      {/* The panel OWNS its trailing blank line — its own line, not a margin
+          and not a property of the live question. A real-PTY check caught the
+          version that only spaced while a question was live: the wizard dying
+          on a port conflict leaves no live question, the gap vanished with
+          it, and the `dev:` error lines landed flush under the box bottom —
+          the exact squash this panel exists to fix. */}
+      {hasPanel ? <Text>{' '}</Text> : null}
       {state.field === null ? null : (
         <WizardFieldView field={state.field} color={color} />
       )}
@@ -345,6 +349,12 @@ export function createTuiPromptPort(
     // below are the belt-and-braces half of the balance, and stdin must end
     // PAUSED for the dashboard's own takeover.
     stdout.write(SHOW_CURSOR);
+    // The frame ink leaves standing ends wherever the last frame ended — with
+    // the live question when the wizard died mid-flow (a real PTY showed the
+    // `dev:` conflict lines landing flush under it). One blank line HERE puts
+    // whatever the caller prints next below the standing frame; on the clean
+    // path it is a single empty row before the plan lines, which reads fine.
+    if (current !== null) stdout.write('\n');
     try {
       if (stdin.isTTY === true) {
         stdin.setRawMode(false);
