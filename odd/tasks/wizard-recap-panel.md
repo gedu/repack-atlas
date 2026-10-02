@@ -88,7 +88,7 @@ line assertions are new frame assertions that fail before the change.
 - Branch `feat/live-session-port-choice` from `d7fe4bc` (= origin/main after
   #59, #60, #63). Worktree
   `../repack-atlas-worktrees/live-session-port-choice`.
-- WU1 `3beb43f`; WU2 sha recorded immediately below. No push, no PR (user rule).
+- WU1 `3beb43f`; WU2 `82d1393`. No push, no PR (user rule).
 - `<Static>` replaced by a live bordered Box: measurement (ink 6.8, fake
   non-TTY stdout) shows ink's teardown leaves the final frame standing, so the
   panel survives close exactly as Static's output did. Frame assertions that
