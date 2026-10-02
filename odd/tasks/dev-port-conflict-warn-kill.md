@@ -74,8 +74,32 @@ TDD mode: not explicitly enabled for this project; repo convention =
 node:test suites alongside behavior.
 
 ## Evidence
-(blocked on implementation)
+- T1–T3 landed as three work units on feat/dev-port-ux (stacked on
+  feat/dev-tui @ e776221): `8891d4a` owner probe (ports types +
+  port-owner.ts adapter + parsers), `3f5f9d0` wizard "(in use: …)" note,
+  `e4835f0` orphan kill flow + dev.ts gate + seam tests.
+- First delegated writer died mid-run (empty result, nothing committed);
+  parent verified + fixed its tree (one unused import), then a fresh
+  test-writer completed the suite and committed all three units.
+- Observed: pnpm build/typecheck/lint exit 0; `pnpm test` **794/794**
+  (baseline 738 + 56 new); pnpm check:commits OK.
+- Native review (medium, 1924 lines, base e776221): consented, single
+  review-reliability lens, **APPROVED**, acknowledged, authority burned
+  (lineage review-ec139f207a433c42). Reviewed boundary = e4835f0.
+- Non-blocking follow-ups (recorded in review-followups, not fixed here):
+  1. WARNING — partial-kill stale error: if several orphans are killed but
+     one port never frees, earlier kill notes are dropped and the OLD
+     "port X busy" lines print for ports already freed (misleading once;
+     next run works). src/runner/orphan.ts.
+  2. SUGGESTION — runCommand subscribe outside try/catch: a throwing
+     handle hangs until the 2s timeout instead of settling immediately.
+     src/adapters/port-owner.ts.
+- Env note: an untracked tests/tmpbench/bench.test.ts (+ stuck tsx from a
+  dead session) hung the suite mid-run; moved to
+  /tmp/opencode/preserved/tmpbench, not deleted.
 
 ## Next step
-Delegate T1+T2+T3 to one bounded writer; parent spot-checks, commits per
-work unit, then native review assess on the slice.
+T1–T4 done; feature closed pending user smoke: trigger a real orphan (kill
+-9 the Atlas dev parent) and re-run `dev` on the showcase → wizard shows
+"(in use: …)" and the offer kills the orphan, retries, goes live. Delivery
+(push/PR against feat/dev-tui) is user-owned.

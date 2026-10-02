@@ -52,3 +52,19 @@ Mode: off (no project/session TDD config). Runner: `pnpm test`.
 - Evidence: build, typecheck, lint ok; `pnpm test` 343/343; `pnpm test:e2e`
   12 passed; runner suite 5/5 consecutive runs (6 pass each);
   `commit-check --range main..HEAD` ok.
+
+## Orphan-kill review follow-ups (2026-10-02, lineage review-ec139f207a433c42)
+
+Approved review of `feat/dev-port-ux` (e776221..e4835f0) left two
+non-blocking items — separate later work, never a reason to re-review:
+
+- WARNING `R3-partial-kill-stale-error` (src/runner/orphan.ts:105-116):
+  when several orphans are killed but one port never frees within
+  `waitFreeTimeoutMs`, the earlier kill notes are dropped and the stale
+  "port X is already busy" lines print for ports already freed. The next
+  run works; the one-time message misleads. Fix shape: report the killed
+  notes even when landing on `unavailable`.
+- SUGGESTION `R3-runcommand-subscribe-no-guard` (src/adapters/port-owner.ts:
+  54-57): `subscribeToStdout` runs outside the try/catch around
+  `runner.start`; a throwing handle resolves only via the 2s timeout. Move
+  the subscribe inside the guard.
