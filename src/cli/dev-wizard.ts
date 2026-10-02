@@ -12,6 +12,10 @@ import {
   type DevPlanEntry,
   type DevPlatform,
 } from '../runner/plan.js';
+import {
+  formatOwnerCommand,
+  type PortOwnerInfo,
+} from '../runner/ports.js';
 
 export const WIZARD_CANCELLED_LINE = 'Session cancelled.';
 
@@ -55,6 +59,17 @@ export interface WizardContext {
   platform?: DevPlatform;
   /** An explicit `--launch` / `--no-launch`: used as is, never re-asked. */
   launch?: boolean;
+  /**
+   * Optional busy/owner probe for the port questions (ODD
+   * dev-port-conflict-warn-kill A): when the default of a question is busy,
+   * the question says so (naming the owner when the OS can). Injected so
+   * tests fake it; ABSENT (machine paths, and every caller predating this)
+   * means no probing — the questions stay byte-identical. A probe that
+   * throws counts as "busy, owner unknown"; `null` means free.
+   */
+  portOwner?: (
+    port: number
+  ) => Promise<{ busy: boolean; owner: PortOwnerInfo | null }>;
 }
 
 /** Plan inputs the answers produce; each overrides its flag counterpart. */
@@ -143,16 +158,37 @@ export async function runDevWizard(
   }
 
   // 4. Ports for every app in the session. An app without a declared port is
-  // `auto` (the runner picks a free one) unless the user names one.
+  // `auto` (the runner picks a free one) unless the user names one. With a
+  // probe in the context, a busy default is named in the question itself
+  // (ODD dev-port-conflict-warn-kill A): the user learns it here, not after
+  // the last question. Keeping a busy answer stays allowed — the allocator
+  // still decides (`--auto-ports` may move it).
   const ports: Record<string, number> = {};
   for (const entry of context.entries) {
     if (entry.role === 'remote' && !selected.includes(entry.key)) continue;
     const declared = entry.declaredPort;
+    let inUse = '';
+    if (declared !== null && context.portOwner !== undefined) {
+      let busy = false;
+      let owner: PortOwnerInfo | null = null;
+      try {
+        const probed = await context.portOwner(declared);
+        busy = probed.busy;
+        owner = probed.owner;
+      } catch {
+        busy = true; // a probe that cannot answer cannot vouch for freeness
+      }
+      if (busy) {
+        inUse = owner
+          ? ` (in use: ${formatOwnerCommand(owner.command)})`
+          : ' (in use)';
+      }
+    }
     const keep = await prompts.confirm({
       message:
         declared === null
           ? `Let ${entry.name} use an automatic free port?`
-          : `Use port ${declared} for ${entry.name}?`,
+          : `Use port ${declared} for ${entry.name}?${inUse}`,
       initialValue: true,
     });
     if (keep.status === 'cancelled') return cancelled();
