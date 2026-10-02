@@ -16,6 +16,42 @@ export interface PortProbe {
   findFreePort(): Promise<number>;
 }
 
+/**
+ * The process listening on a port, as `ps` reports it (owner probe, ODD
+ * dev-port-conflict-warn-kill T1). `ppid === 1` means the process was
+ * reparented — the orphan signature the dev runner offers to clean up.
+ */
+export interface PortOwnerInfo {
+  pid: number;
+  ppid: number;
+  /** Full command line (argv, not just the executable). */
+  command: string;
+}
+
+/**
+ * The "who holds this port?" question, kept OUT of `PortProbe` on purpose:
+ * busy/free probing works everywhere, owner lookup may degrade to unknown
+ * (Windows, no `lsof`, another user's process) and every caller must handle
+ * `null` as "busy, owner unknown" — never a guess.
+ */
+export interface PortOwnerProbe {
+  portOwner(port: number): Promise<PortOwnerInfo | null>;
+}
+
+/**
+ * SIGTERM one pid the human flow explicitly confirmed killing (an orphan of
+ * THIS workspace — see `orphanCandidate`). Returns whether the signal was
+ * delivered; "already gone" counts as false and simply falls through to the
+ * old error path. Wrapped (wrapper rule 3) so tests fake it instead of
+ * signalling real processes.
+ */
+export interface ProcessTerminator {
+  terminate(pid: number): boolean;
+}
+
+/** Everything the human orphan flow needs from the OS side. */
+export type PortOwnership = PortOwnerProbe & ProcessTerminator;
+
 export interface PortAssignment {
   key: string;
   /** `null` only for unmanaged remotes of a dry-run (shown as `auto`). */
@@ -35,7 +71,14 @@ export interface AllocatePortsOptions {
 
 export type PortAllocation =
   | { ok: true; assignments: PortAssignment[] }
-  | { ok: false; conflicts: string[] };
+  | {
+      ok: false;
+      conflicts: string[];
+      /** Additive (ODD dev-port-conflict-warn-kill): the subset of conflicts
+       * caused by a BUSY declared port — the only ones the human-path orphan
+       * flow can act on. Absent when none. */
+      busyPorts?: number[];
+    };
 
 const MAX_FREE_PORT_TRIES = 10;
 
@@ -50,6 +93,8 @@ export async function allocatePorts(
 ): Promise<PortAllocation> {
   const assignments: PortAssignment[] = [];
   const conflicts: string[] = [];
+  /** Declared ports found busy that ended the allocation (owner-flow input). */
+  const busyPorts: number[] = [];
   // Ports already promised to an app; a fresh "free" port must avoid them.
   const taken = new Set(
     entries.flatMap((entry) =>
@@ -132,11 +177,16 @@ export async function allocatePorts(
       conflicts.push(
         `port ${entry.declaredPort} declared by ${entry.key} is already busy`
       );
+      busyPorts.push(entry.declaredPort);
     }
   }
 
   return conflicts.length > 0
-    ? { ok: false, conflicts }
+    ? {
+        ok: false,
+        conflicts,
+        ...(busyPorts.length > 0 ? { busyPorts } : {}),
+      }
     : { ok: true, assignments };
 }
 
@@ -175,3 +225,11 @@ export function describeReassignments(assignments: PortAssignment[]): string[] {
 /** Appended after a conflict report so the way out is always named. */
 export const PORT_CONFLICT_HINT =
   'free the port(s), pass --port for the host, or use --auto-ports to reassign busy ports';
+
+/** One line, capped: an owner command as shown inside a question or note. */
+export function formatOwnerCommand(command: string, maxLength = 100): string {
+  const collapsed = command.replace(/\s+/g, ' ').trim();
+  return collapsed.length > maxLength
+    ? `${collapsed.slice(0, maxLength - 3)}...`
+    : collapsed;
+}
