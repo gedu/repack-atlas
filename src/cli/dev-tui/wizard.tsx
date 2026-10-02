@@ -26,7 +26,7 @@
 // - `note`/`cancel` go through the live session while mounted (one column,
 //   recaps and notes in order) and straight to stdout when not.
 
-import { Box, Static, Text, render, useInput } from 'ink';
+import { Box, Text, render, useInput } from 'ink';
 import { useEffect, useState } from 'react';
 import type { Instance } from 'ink';
 import type { PromptPort, PromptResult } from '../../core/index.js';
@@ -188,7 +188,24 @@ export function WizardFieldView({
   );
 }
 
-/** The wizard viewport: settled lines (printed once) + the live question. */
+/**
+ * The wizard viewport: the settled-summary panel + the live question.
+ *
+ * The settled lines live in a dim rounded panel (the dashboard's border
+ * idiom), NOT in ink's `<Static>`: a Static block prints one bare line per
+ * settled question as it happens, which cannot be framed as one summary, and
+ * the recap block is what the human reads AFTER the wizard dies on a port
+ * conflict. A live Box gives the box, and measurement (ink 6.8) shows it
+ * survives `unmount()` exactly like Static did — ink's teardown flushes the
+ * final frame and only ever clears the PREVIOUS one — so nothing is lost by
+ * the switch. One blank line separates the panel from the live question, and
+ * stays there when the wizard closes, splitting the panel from the `dev:`
+ * error lines that follow.
+ *
+ * `alignItems="flex-start"` hugs the box to the widest settled line instead
+ * of spanning the screen; long `(in use: …)` recaps still reflow inside it at
+ * any width (measured at 100 and 60 columns).
+ */
 export function WizardApp({ controller, color }: WizardAppProps) {
   const [state, setState] = useState<WizardState>(controller.state);
   useEffect(() => {
@@ -201,11 +218,25 @@ export function WizardApp({ controller, color }: WizardAppProps) {
   useInput((input, key) => {
     controller.handleKey(input, key);
   });
+  const hasPanel = state.lines.length > 0;
   return (
-    <Box flexDirection="column">
-      <Static items={[...state.lines]}>
-        {(line) => <WizardLineView key={line.id} line={line} color={color} />}
-      </Static>
+    <Box flexDirection="column" alignItems="flex-start">
+      {hasPanel ? (
+        <Box
+          flexDirection="column"
+          borderStyle="round"
+          borderColor="gray"
+          borderDimColor
+          paddingLeft={1}
+        >
+          {state.lines.map((line) => (
+            <WizardLineView key={line.id} line={line} color={color} />
+          ))}
+        </Box>
+      ) : null}
+      {/* The vertical gap is its own line, not a margin, so it survives the
+          final frame when the wizard closes with no live question left. */}
+      {hasPanel && state.field !== null ? <Text>{' '}</Text> : null}
       {state.field === null ? null : (
         <WizardFieldView field={state.field} color={color} />
       )}
