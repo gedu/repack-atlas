@@ -46,15 +46,19 @@ check will be closed.
    claim passed. A claimed check without observed output is a failed check.
 10. **English artifacts.** All code, comments, docs, UI copy and commits in
     English. Every skill the project needs lives in this repo.
-11. **No runtime dependencies, one exception.** Atlas ships without runtime
+11. **No runtime dependencies, two exceptions.** Atlas ships without runtime
     `dependencies`; the CLI is a thin adapter and argv parsing, Studio and the
-    runner use the Node standard library only. The single exception is
-    `@clack/prompts` (`^0.9.1`, the range upstream Re.Pack uses) for the
-    `dev` wizard: it gives wizard UX parity with Re.Pack's federation dev
-    runner. It stays confined behind the core-owned `PromptPort`
-    (`src/adapters/prompts-clack.ts`), is loaded by dynamic import, and falls
-    back to a `node:readline` adapter when the import fails. Do not add
-    another runtime dependency without updating this rule.
+    runner use the Node standard library only. Exception (a): `@clack/prompts`
+    (`^0.9.1`, the range upstream Re.Pack uses) for the `dev` wizard: it gives
+    wizard UX parity with Re.Pack's federation dev runner. It stays confined
+    behind the core-owned `PromptPort` (`src/adapters/prompts-clack.ts`), is
+    loaded by dynamic import, and falls back to a `node:readline` adapter when
+    the import fails. Exception (b): `ink` + `react` for the interactive `dev`
+    TUI dashboard only (`src/cli/dev-tui/**`), lazy-loaded via dynamic import
+    so non-interactive paths (`--json`, `--ci`, non-TTY) never import them;
+    the TUI renders only for a human at a TTY and machine output paths must
+    not import them. Do not add another runtime dependency without updating
+    this rule.
 
 Full rationale: `docs/PRD.md` (§6 architecture, §10 multi-agent setup, §14
 conventions).
@@ -92,6 +96,8 @@ above; CONTRIBUTING.md maps each CI step to its command.
 src/
 ├── cli.ts               # `repack-atlas` bin: argv → adapters+core → exit code
 ├── cli/                 # bin internals: arg parser, help, doctor plan, init plan
+│   └── dev-tui/         # ink dashboard for interactive dev: pure view-model
+│                        #   (model.ts) + ink app (app.tsx); interactive TTY only
 ├── core/                # bundler-agnostic domain: manifest schema types,
 │                        #   findings model, buildFederationGraph (core/graph.ts),
 │                        #   cycle detection, shared-drift analysis, ports

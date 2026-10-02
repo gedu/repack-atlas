@@ -5,7 +5,6 @@
 // owns the process exit code (AGENTS.md rule 6: 0 clean · 1 bad answer ·
 // 2 could not answer; 1 and 2 must stay distinguishable).
 
-import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import {
   doctorExitCode,
@@ -38,18 +37,12 @@ import {
   initPlanToJson,
   writeInitConfig,
 } from './cli/init.js';
+// G4: the version reader is shared with the dev banner (src/cli/version.ts);
+// `--version` behavior is exactly as before.
+import { readVersion } from './cli/version.js';
 
 const EXIT_CLEAN = 0;
 const EXIT_NO_ANSWER = 2;
-
-const packageJsonUrl = new URL('../package.json', import.meta.url);
-
-async function readVersion(): Promise<string> {
-  const { version } = JSON.parse(await readFile(packageJsonUrl, 'utf8')) as {
-    version: string;
-  };
-  return version;
-}
 
 /** Shared composition: the one ProjectFs instance every adapter shares. */
 function compose() {

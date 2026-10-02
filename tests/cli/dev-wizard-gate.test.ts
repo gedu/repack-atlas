@@ -157,7 +157,15 @@ describe('dev wizard gate', () => {
         script
       );
       assert.equal(run.code, 0);
-      assert.equal(run.out, '');
+      // G4: this harness simulates a human TTY (stdoutIsTTY true — what the
+      // wizard itself requires), so the startup banner now precedes the
+      // wizard. Cancel must still print NOTHING after the banner: no plan,
+      // no diagnostics, nothing on stderr.
+      assert.ok(
+        run.out === '' || run.out.includes('repack-atlas'),
+        `unexpected stdout: ${run.out}`
+      );
+      assert.doesNotMatch(run.out, /host|plan|launch|supervising/);
       assert.equal(run.err, '');
       assert.deepEqual(run.prompts.cancels, ['Session cancelled.']);
       assert.equal(run.prompts.closed, 1);

@@ -133,6 +133,14 @@ export interface ProcessHandle {
   /** Stream callback for line-wise consumers (runner log panes). */
   subscribeToStdout(listener: (chunk: string) => void): () => void;
   subscribeToStderr(listener: (chunk: string) => void): () => void;
+  /**
+   * Write raw bytes to the child's stdin (the dev TUI's typed-input path).
+   * OPTIONAL: implementations whose children have no writable stdin (and
+   * every fake built before this existed) simply do not provide it.
+   * Returns `false` when the child has no writable stdin — callers must
+   * treat `false` as "the bytes did not go anywhere", never assume receipt.
+   */
+  writeStdin?(data: string): boolean;
   /** Resolves once the child exits; never rejects. */
   waitForExit(): Promise<{ code: number | null; signal: string | null }>;
   /** Send a raw signal to the child (not its group). */
