@@ -11,6 +11,7 @@ import {
 } from '../../src/cli/dev-wizard.js';
 import type { FederationConfig } from '../../src/core/index.js';
 import { buildDevPlan, type DevPlanEntry } from '../../src/runner/plan.js';
+import type { PortOwnerInfo } from '../../src/runner/ports.js';
 import { CANCEL, fakePrompts, type ScriptedAnswer } from './fake-prompts.js';
 
 const entry = (
@@ -300,6 +301,122 @@ describe('runDevWizard', () => {
       assert.deepEqual(outcome, { status: 'cancelled' });
       assert.equal(prompts.asked.length, index + 1);
       assert.deepEqual(prompts.cancels, ['Session cancelled.']);
+    });
+  });
+
+  // ODD dev-port-conflict-warn-kill A: with a probe in the context, a busy
+  // DEFAULT is named inside its own question — the user learns it here, not
+  // after the last answer. Without a probe (every machine path and every
+  // caller predating this), the questions stay byte-identical.
+  describe('the port question warns about a busy default (A)', () => {
+    // Host declares 8081; beta is `auto` (null): the probe only ever runs
+    // for a DECLARED default, never for an automatic port.
+    const ONE_HOST = (): Partial<WizardContext> => ({
+      entries: [entry('host', 'host', 8081), entry('beta', 'remote', null)],
+      standaloneRemotes: [],
+    });
+    // Remotes multiselect (beta), platform, launch-no, host port kept, beta auto kept.
+    const ANSWERS: ScriptedAnswer[] = [['beta'], 'ios', false, true, true];
+
+    const busy = (command: string) => ({
+      busy: true as const,
+      owner: { pid: 4242, ppid: 1, command } satisfies PortOwnerInfo,
+    });
+
+    function portProbe(
+      result: { busy: boolean; owner: PortOwnerInfo | null } | 'throw'
+    ) {
+      const ports: number[] = [];
+      const portOwner = async (port: number) => {
+        ports.push(port);
+        if (result === 'throw') throw new Error('probe exploded');
+        return result;
+      };
+      return { portOwner, ports };
+    }
+
+    it('names the owner command when the probe says busy with an owner', async () => {
+      const { portOwner, ports } = portProbe(
+        busy(
+          'node /ws/apps/host/node_modules/react-native/cli.js start --port 8081'
+        )
+      );
+      const { prompts, outcome } = await run(ANSWERS, {
+        ...ONE_HOST(),
+        portOwner,
+      });
+      assert.deepEqual(ports, [8081], 'the declared default is probed');
+      assert.ok(
+        prompts.asked.includes(
+          'confirm: Use port 8081 for host_app? (in use: node /ws/apps/host/node_modules/react-native/cli.js start --port 8081)'
+        ),
+        `the question carries the trimmed owner command, asked: ${prompts.asked}`
+      );
+      // Keeping a busy default stays ALLOWED: the allocator still decides
+      // (--auto-ports may move it), the wizard never blocks on busy.
+      assert.equal(completed(outcome).ports!.host, 8081);
+    });
+
+    it('says "(in use)" without a command when the owner is unknown', async () => {
+      const { portOwner } = portProbe({ busy: true, owner: null });
+      const { prompts } = await run(ANSWERS, { ...ONE_HOST(), portOwner });
+      assert.ok(
+        prompts.asked.includes(
+          'confirm: Use port 8081 for host_app? (in use)'
+        ),
+        `busy with no owner degrades to the bare note, asked: ${prompts.asked}`
+      );
+    });
+
+    it('treats a probe that throws as busy with no owner', async () => {
+      const { portOwner } = portProbe('throw');
+      const { prompts } = await run(ANSWERS, { ...ONE_HOST(), portOwner });
+      assert.ok(
+        prompts.asked.includes(
+          'confirm: Use port 8081 for host_app? (in use)'
+        ),
+        'a probe that cannot answer cannot vouch for freeness'
+      );
+    });
+
+    it('asks the byte-identical question when the default is free', async () => {
+      const { portOwner } = portProbe({ busy: false, owner: null });
+      const { prompts } = await run(ANSWERS, { ...ONE_HOST(), portOwner });
+      assert.ok(
+        prompts.asked.includes('confirm: Use port 8081 for host_app?'),
+        'a free default shows no note at all'
+      );
+    });
+
+    it('never probes an auto (null-port) app', async () => {
+      const { portOwner, ports } = portProbe(busy('whatever'));
+      await run(ANSWERS, { ...ONE_HOST(), portOwner });
+      assert.deepEqual(ports, [8081], 'only the declared default is probed');
+    });
+
+    it("caps the command at formatOwnerCommand's limit with an ellipsis", async () => {
+      const { portOwner } = portProbe(busy(`start ${'y'.repeat(200)}`));
+      const { prompts } = await run(ANSWERS, { ...ONE_HOST(), portOwner });
+      const question = prompts.asked.find((q) => q.includes('(in use: '))!;
+      assert.match(question, /\.\.\)$/, 'the capped command ends with the ellipsis');
+      // The cap contract itself lives in formatOwnerCommand's own tests; the
+      // question must simply never carry the raw 200+ char line.
+      assert.ok(
+        question.length <
+          'confirm: Use port 8081 for host_app? (in use: )'.length + 101,
+        `the in-use note stays capped, got ${question.length} chars`
+      );
+    });
+
+    it('without a portOwner in the context the questions stay byte-identical', async () => {
+      // Byte-identical parity: the same run through the plain context (no
+      // probe) asks the exact pre-feature question — the machine-path contract.
+      const { prompts, outcome } = await run(ANSWERS, ONE_HOST());
+      assert.ok(
+        prompts.asked.includes('confirm: Use port 8081 for host_app?'),
+        `no probe, no suffix — machine-path parity, asked: ${prompts.asked}`
+      );
+      assert.equal(completed(outcome).ports!.host, 8081);
     });
   });
 });

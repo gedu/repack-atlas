@@ -7,6 +7,7 @@ import {
   allocatePorts,
   applyAssignments,
   describeReassignments,
+  formatOwnerCommand,
   type PortProbe,
 } from '../../src/runner/ports.js';
 
@@ -70,6 +71,9 @@ describe('allocatePorts', () => {
         'port 8081 declared by host is already busy',
         'port 8082 declared by a is already busy',
       ],
+      // Additive (ODD dev-port-conflict-warn-kill): the busy declared ports,
+      // in plan order — the input the human-path orphan flow acts on.
+      busyPorts: [8081, 8082],
     });
     assert.deepEqual(asked, [8081, 8082], 'every declared port was probed');
   });
@@ -165,6 +169,83 @@ describe('allocatePorts', () => {
   });
 });
 
+// ODD dev-port-conflict-warn-kill: busyPorts is the additive field the
+// human-path orphan flow keys on, so its shape contract needs its own tests.
+describe('allocatePorts busyPorts (orphan-flow input)', () => {
+  it('is ABSENT when a conflict is not caused by a busy declared port', async () => {
+    // Duplicate-declared ports only: nothing was found busy, so the orphan
+    // flow must see no busyPorts at all (the caller gates on them).
+    const dup = [entry('host', 8082), entry('a', 8082)];
+    const { fake } = probe([]);
+    const result = await allocatePorts(dup, fake, {
+      autoPorts: false,
+      resolveAuto: true,
+    });
+    assert.ok(!result.ok);
+    assert.equal('busyPorts' in result, false, 'no busy port, no busyPorts key');
+  });
+
+  it('is ABSENT from an ok allocation', async () => {
+    const { fake } = probe([]);
+    const result = await allocatePorts(ENTRIES, fake, {
+      autoPorts: false,
+      resolveAuto: true,
+    });
+    assert.ok(result.ok);
+    assert.equal('busyPorts' in result, false);
+  });
+
+  it('lists a port a throwing probe could not vouch for (busy is the honest answer)', async () => {
+    const throwing: PortProbe = {
+      async isPortBusy() {
+        throw new Error('probe exploded');
+      },
+      async findFreePort() {
+        return 50_001;
+      },
+    };
+    const result = await allocatePorts([entry('host', 8081)], throwing, {
+      autoPorts: false,
+      resolveAuto: true,
+    });
+    assert.ok(!result.ok);
+    assert.deepEqual(result.busyPorts, [8081]);
+  });
+
+  it('is absent under --auto-ports (a reassignment is not a conflict)', async () => {
+    const { fake } = probe([8081]);
+    const result = await allocatePorts(ENTRIES, fake, {
+      autoPorts: true,
+      resolveAuto: true,
+    });
+    assert.ok(result.ok);
+  });
+});
+
+describe('formatOwnerCommand', () => {
+  it('collapses runs of whitespace and trims', () => {
+    assert.equal(
+      formatOwnerCommand('  node   /ws/apps/host/cli.js   start  '),
+      'node /ws/apps/host/cli.js start'
+    );
+  });
+  it('leaves a command within the cap untouched', () => {
+    const command = 'node cli.js start --port 8081';
+    assert.equal(formatOwnerCommand(command), command);
+  });
+  it('caps at maxLength with a trailing ellipsis inside the cap', () => {
+    const long = 'x'.repeat(250);
+    const formatted = formatOwnerCommand(long);
+    assert.equal(formatted.length, 100, 'the cap is the CONTRACT of a question line');
+    assert.ok(formatted.endsWith('...'));
+    assert.equal(formatted, `${'x'.repeat(97)}...`);
+  });
+  it('honours a custom cap', () => {
+    const formatted = formatOwnerCommand('abcdefghij', 7);
+    assert.equal(formatted, 'abcd...');
+  });
+});
+
 describe('duplicate declared ports', () => {
   const dup = [entry('host', 8081), entry('a', 8082), entry('b', 8082)];
 
@@ -192,6 +273,9 @@ describe('duplicate declared ports', () => {
         'port 8081 declared by host is already busy',
         'port 8082 is declared by both a and b',
       ],
+      // Only the BUSY declared port is a kill candidate; the duplicate-declared
+      // conflict is not a busy port, so it stays out of busyPorts.
+      busyPorts: [8081],
     });
   });
 

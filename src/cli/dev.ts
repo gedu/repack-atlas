@@ -28,6 +28,7 @@
 import {
   createManifestSource,
   createNodeProcessRunner,
+  type NodeProcessRunner,
   createNodeProjectFs,
   createPrompts,
   createReactNativeCliResolver,
@@ -69,6 +70,7 @@ import {
   describeReassignments,
   PORT_CONFLICT_HINT,
 } from '../runner/ports.js';
+import { offerOrphanKills } from '../runner/orphan.js';
 import { type PromptPort } from '../core/index.js';
 // The TUI view-model is PURE (no ink/react — model.ts holds the promise), so
 // importing it statically keeps rule 11 exception (b) intact: only the ink
@@ -148,6 +150,12 @@ export interface DevEnv {
    * terminal. Exists so the seam's TUI branch is testable without a pty.
    */
   promptStreams?: { stdin: NodeJS.ReadStream; stdout: NodeJS.WriteStream };
+  /**
+   * The ProcessRunner (+ port-ownership) factory. Injectable so the orphan
+   * flow is testable with a fake probe instead of a real lsof/ps spawn;
+   * absent means the real node runner.
+   */
+  createProcessRunner?(): NodeProcessRunner;
 }
 
 const processDevEnv = (): DevEnv => ({
@@ -676,7 +684,8 @@ export async function runDevCommand(
   const tuiCondition =
     !ci && !json && Boolean(process.stdin.isTTY) && env.stdoutIsTTY;
 
-  const processRunner = createNodeProcessRunner();
+  const processRunner =
+    env.createProcessRunner?.() ?? createNodeProcessRunner();
   const fs = createNodeProjectFs();
   const configReader = createWorkspaceConfigReader(fs);
   const manifestSource = createManifestSource(fs);
@@ -720,6 +729,16 @@ export async function runDevCommand(
           : parsed.flags.has('no-launch')
             ? { launch: false }
             : {}),
+        // A (ODD dev-port-conflict-warn-kill): the wizard is human-interactive
+        // by gate, so the busy/owner probe rides along — a busy default is
+        // named inside its question instead of after the last one.
+        portOwner: async (port) => {
+          if (!(await processRunner.isPortBusy(port))) {
+            return { busy: false, owner: null };
+          }
+          const owner = await processRunner.portOwner(port).catch(() => null);
+          return { busy: true, owner };
+        },
       });
     } finally {
       prompts.close();
@@ -765,7 +784,7 @@ export async function runDevCommand(
 
   // 1. Plan. Nothing spawns before the whole plan resolves (upstream rule:
   // a port conflict fails naming the app, never a half-started session).
-  const plan = await resolveDevPlan({
+  const planOptions = {
     workspaceDir: workspace,
     configReader,
     manifestSource,
@@ -779,7 +798,48 @@ export async function runDevCommand(
     ...(standalone !== undefined ? { standalone } : {}),
     ...(launch !== undefined ? { launch } : {}),
     ...(portOverrides !== undefined ? { ports: portOverrides } : {}),
-  });
+  } as const;
+  let plan = await resolveDevPlan(planOptions);
+  // C (ODD dev-port-conflict-warn-kill): HUMAN interactive path only. When
+  // the plan failed on busy ports, resolve each conflicting port's owner and
+  // offer to kill it ONLY when it is provably an orphaned dev server of THIS
+  // workspace (see src/runner/orphan.ts). Every kill then lands on a single
+  // retry of the plan; any other shape (no offer possible, a decline, a port
+  // that stayed busy, --json/--ci/non-TTY) keeps today's error path byte for
+  // byte: same conflict lines, same exit codes.
+  if (
+    !plan.ok &&
+    plan.portConflict &&
+    !json &&
+    !ci &&
+    env.stdoutIsTTY &&
+    env.stdinIsTTY &&
+    plan.busyPorts !== undefined &&
+    plan.appDirs !== undefined
+  ) {
+    // Same prompt routing as the wizard: the ink port when the dashboard
+    // will/does mount, clack/readline otherwise — one visual language for
+    // every human question.
+    const prompts = await createWizardPrompts(tuiCondition, env);
+    let outcome;
+    try {
+      outcome = await offerOrphanKills({
+        busyPorts: plan.busyPorts,
+        appDirs: plan.appDirs,
+        ownership: processRunner,
+        probe: processRunner,
+        prompts,
+      });
+    } finally {
+      prompts.close();
+    }
+    if (outcome.status === 'killed') {
+      // Only the success path adds lines; a decline or a stuck port prints
+      // exactly what it printed before this feature existed.
+      for (const note of outcome.notes) io.writeErr(`dev: ${note}`);
+      plan = await resolveDevPlan(planOptions);
+    }
+  }
   if (!plan.ok) {
     for (const reason of plan.reasons) io.writeErr(`dev: ${reason}`);
     // Busy ports ran-and-found-errors (1, dry-run parity); the rest is 2.

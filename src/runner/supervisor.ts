@@ -137,6 +137,14 @@ export type DevPlanResult =
       reasons: string[];
       /** Set when the plan failed only on busy ports (exit 1, not 2). */
       portConflict?: true;
+      /** Additive (ODD dev-port-conflict-warn-kill): the busy declared ports
+       * behind a `portConflict` — the human path's orphan flow resolves the
+       * owner of exactly these. Absent on every other failure. */
+      busyPorts?: number[];
+      /** Additive: absolute app dirs of this workspace (entry roots; the
+       * cwd of argv-launched apps without one). Input for the orphan
+       * matcher, alongside `busyPorts`. */
+      appDirs?: string[];
     }
   | {
       ok: true;
@@ -303,10 +311,32 @@ export async function resolveDevPlan(
     resolveAuto: true,
   });
   if (!allocation.ok) {
+    if (!allocation.busyPorts) {
+      return {
+        ok: false,
+        reasons: [...allocation.conflicts, PORT_CONFLICT_HINT],
+        portConflict: true,
+      };
+    }
+    // App dirs of THIS workspace: an argv-launched app's own root (a command
+    // app's cwd is the config dir, which proves nothing about the owner).
+    const appDirs = [
+      ...new Set(
+        loaded.entries.flatMap((entry) =>
+          entry.root !== undefined
+            ? [entry.root]
+            : entry.launch.kind === 'argv'
+              ? [entry.cwd]
+              : []
+        )
+      ),
+    ];
     return {
       ok: false,
       reasons: [...allocation.conflicts, PORT_CONFLICT_HINT],
       portConflict: true,
+      busyPorts: allocation.busyPorts,
+      appDirs,
     };
   }
 

@@ -322,3 +322,41 @@ alt-screen); #6 multi-terminal ❌ (only Ghostty smoke so far); #7 pure logic �
   balloon banner + ink wizard + dashboard, on Ghostty AND one of
   iTerm2/tmux (the #6 multi-terminal gap from the rules audit is still
   open — no G-item covers it yet).
+
+## Fifth round (user, 2026-10-02) — deaf-dashboard fix + F13 + wizard hardening
+- [x] S1 — Deaf dashboard fix: user Ghostty smoke after G5 reported arrows /
+      j/k / q dead in the dashboard ("hang" was mostly this). Root cause
+      proven in a real pty before touching code (Swift openpty harness +
+      instrumented ink: 5/5 ink input events inside the wizard, 0 after the
+      alt-screen takeover). The wizard's close() + dev.ts gate leave
+      process.stdin PAUSED; ink 6.8 only ref()+setRawMode+
+      addListener('readable') and never resume() → a paused stream never
+      emits 'readable' → useInput got ZERO events. Fix @ `6220211`:
+      process.stdin.resume() in mountDevTui before render(), symmetric
+      pause in the finally (else-if tuiWillMount — resume() re-refs the TTY
+      handle, so teardown MUST park stdin again or the process won't exit).
+      Static-fence test added in dev-tui-seam.test.ts. The SGR
+      arrow/mouse-collision suspicion was RULED OUT with evidence.
+      ink-testing-library cannot see this bug class (fake streams) — pty
+      reproduction is the only reliable detector.
+- [x] F13 — Click-to-select: sidebar row click selects that app, landed @
+      `fc06fd0` via parseClickEvents button-0 press, mouseOn-gated, row r →
+      listRows[r-1]; footer updated. 67 lines + tests.
+- [x] S2 — Wizard hardening (the two native-review SUGGESTIONS from the
+      b5565a7 review): ask() concurrent-call guard + close() try/catch
+      around unmount, landed @ `e776221`. `pnpm test` 738/738 observed.
+- [x] S3 — Post-fix claims: (a) #3 hang/flicker NOT reproduced post-fix —
+      140s stress, 0 event-loop lag, q always cleaned up. Flicker source
+      identified (ink 6.8 fullscreen clearTerminal + full repaint per frame
+      because app.tsx renders height={rows}); mitigation NOT implemented,
+      optional. (b) Native review of the 192-line slice (base `1e048c6`,
+      after a full-branch START refused lens_context_budget_exceeded at
+      7027 lines): consented, review-reliability APPROVED with 0 findings,
+      acknowledged, authority burned (lineage review-8ca99ee960ed55ad).
+      Reviewed boundary = HEAD `e776221`.
+
+### Next step
+- User re-smoke in Ghostty: arrows + j/k + click select on the deaf
+  dashboard (the S1 fix), plus one non-Ghostty terminal (iTerm2/tmux) to
+  close the #6 gap. Then push/PR decision (user-owned; branch is 23
+  commits ahead of main, unpushed).

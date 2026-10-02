@@ -22,6 +22,8 @@ import type {
   ProcessRunner,
   SpawnSpec,
 } from '../core/ports.js';
+import type { PortOwnership } from '../runner/ports.js';
+import { createNodePortOwnership } from './port-owner.js';
 
 const TCP_CONNECT_TIMEOUT_MS = 150;
 const STATUS_PROBE_TIMEOUT_MS = 150;
@@ -77,8 +79,11 @@ function createLineSplitter(emit: (line: string) => void) {
   };
 }
 
-export function createNodeProcessRunner(): ProcessRunner {
-  return {
+/** The node ProcessRunner plus the composed port-ownership capability. */
+export type NodeProcessRunner = ProcessRunner & PortOwnership;
+
+export function createNodeProcessRunner(): NodeProcessRunner {
+  const runner: ProcessRunner = {
     start(spec: SpawnSpec): ProcessHandle {
       const stdoutListeners = new Set<(chunk: string) => void>();
       const stderrListeners = new Set<(chunk: string) => void>();
@@ -243,4 +248,7 @@ export function createNodeProcessRunner(): ProcessRunner {
       });
     },
   };
+  // Owner lookup + confirmed-orphan SIGTERM ride the same runner (ODD
+  // dev-port-conflict-warn-kill T1): one object answers every port question.
+  return { ...runner, ...createNodePortOwnership(runner) };
 }
