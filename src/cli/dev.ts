@@ -313,6 +313,12 @@ async function mountDevTui(
     // Alt screen before render: ink's first frame lands on the scratch
     // screen. exitOnCtrlC:false keeps Ctrl-C flowing to onQuit.
     process.stdout.write(ALT_SCREEN_ENTER);
+    // The wizard's close() and the gate below leave stdin PAUSED (ink refs it
+    // but never RESUMES it, and a paused stream never fires 'readable', so
+    // ink's input pipeline would sit deaf no matter what its listener is
+    // wired to). Resuming here is what makes the dashboard live; the
+    // `finally` in runDevCommand parks it again once the session is done.
+    process.stdin.resume();
     try {
       const instance = render(
         createElement(DevTuiApp, {
@@ -1045,6 +1051,11 @@ export async function runDevCommand(
         process.stdin.setRawMode(false);
         process.stdin.pause();
         process.stdin.removeListener('data', onKeydata);
+      } else if (tuiWillMount) {
+        // mountDevTui RESUMED stdin for ink's input pipeline; park it again
+        // so a resumed TTY handle cannot keep the process alive after the
+        // dashboard unmounted (ink unrefs its listener, resume() re-refs).
+        process.stdin.pause();
       }
       process.removeListener('SIGINT', onSigint);
       process.removeListener('SIGTERM', onSigterm);

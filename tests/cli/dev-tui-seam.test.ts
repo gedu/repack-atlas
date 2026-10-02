@@ -145,6 +145,34 @@ describe('dev TUI seam: rule 11 static-import fence', () => {
     assert.doesNotMatch(bannerSource, /\bimport\('(ink|react)'\)/);
   });
 
+  // S1 (static, honest): ink refs stdin but NEVER resumes it, and a paused
+  // stream never fires 'readable' — so the dashboard MUST resume stdin
+  // before render() or the whole keymap sits deaf (the real-pty smoke that
+  // motivated this: zero ink input events after the wizard handed over,
+  // arrows/j/k/q all dead). A regex is weak, but it locks the fix in place
+  // at exactly one spot: between the alt-screen enter and render().
+  it('dev.ts resumes stdin before the dashboard render (S1)', () => {
+    const enter = devSource.indexOf('ALT_SCREEN_ENTER)');
+    const render = devSource.indexOf(
+      'const instance = render(',
+      enter
+    );
+    assert.ok(enter > 0 && render > enter, 'mountDevTui must write the alt screen then render');
+    const between = devSource.slice(enter, render);
+    assert.match(
+      between,
+      /process\.stdin\.resume\(\)/,
+      'mountDevTui must resume the wizard-paused stdin before ink renders'
+    );
+    // And the teardown parks it again, or the resumed TTY handle would keep
+    // the process alive after the session ends.
+    assert.match(
+      devSource.slice(render),
+      /else if \(tuiWillMount\) \{[\s\S]{0,400}?process\.stdin\.pause\(\);/,
+      'the finally must park the resumed stdin again'
+    );
+  });
+
   it('model.ts stays pure: no ink/react import, static or dynamic', () => {
     const modelSource = readFileSync(
       path.join(repoRoot, 'src', 'cli', 'dev-tui', 'model.ts'),
