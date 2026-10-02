@@ -161,3 +161,35 @@ session is rebasing.
     dep-status check rejects the local `node_modules` symlink, so `tsc` and
     `tsx` were invoked from `./node_modules/.bin` directly.
 - Commit: `ca094da` `feat(dev): add a render probe for the dev dashboard`.
+- Native review: lineage `review-f33dc1d79832875b`, tier medium, lens
+  `review-reliability`, **approved** and acknowledged (authority burned,
+  receipt `gentle-ai.review-acknowledged/v1`, consumed revision
+  `sha256:d76bc818…`). Delivery followed ordinary repository policy; the
+  review grants it no extra authority.
+
+## Follow-ups from the review (non-blocking, not done here)
+
+The approved receipt stands; these six were all `informational` and opened no
+correction, so they are later work, never a reason to re-run review here:
+
+Receipt `R3-001`…`R3-006` reported only id/lens/severity/disposition and a
+location (lines 76-108, 85-89, 97-101, 103-106, 182-185, 209-213), no finding
+text. The four notes below are those locations read back into the code, so
+treat them as the reasonable reading, not a transcript of the reviewer.
+- `parseArgv`: `Number('')` and `Number(' 7 ')` are not what they look like —
+  `--lines ""` becomes `0` (caught), but `--sizes a,b` filters to `[]` and is
+  caught only by the width check, while a partial list silently drops a size.
+  Report which value was rejected instead of exiting quietly.
+- `stdoutBytesWritten()` returns `0` when the property is absent, which would
+  silently report 0 B/frame instead of failing. Prefer an explicit "unavailable"
+  over a plausible zero in a probe whose whole job is the number.
+- `collectRenderTimes.mean()` returns `NaN` when nothing painted, which prints
+  as `NaN` in the table. A painted-frame-count of 0 is exactly the case where a
+  probe should say "nothing was measured" loudly.
+- Spacing vs the renderer's throttle is the whole method: if `--spacing` drops
+  below the renderer's own frame throttle, frames coalesce and the table
+  silently lies. Consider warning when `--spacing` looks too small rather than
+  trusting the caller to keep the default.
+
+The dashboard `patchConsole` asymmetry (real in code, measured impact ≈ 0) is a
+separate consistency nit, unrelated to this probe.
