@@ -167,6 +167,14 @@ session is rebasing.
   `sha256:d76bc818…`). Delivery followed ordinary repository policy; the
   review grants it no extra authority.
 
+## Follow-up opened
+
+Tracked as https://github.com/gedu/repack-atlas/issues/64: whether the ink 6
+fullscreen repaint is worth acting on, with the numbers above, the conditions
+that should reopen it, and the open questions (ink 7 spike, whether this probe
+gets merged as a standing tool). No fix is scheduled; nothing here blocks
+anything.
+
 ## Follow-ups from the review (non-blocking, not done here)
 
 The approved receipt stands; these six were all `informational` and opened no
