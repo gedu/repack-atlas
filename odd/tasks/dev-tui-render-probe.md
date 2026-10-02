@@ -146,4 +146,18 @@ session is rebasing.
 - Worktree: `forks/wt-tui-perf`, branch `chore/dev-tui-render-probe` from
   `origin/main` (d7fe4bc). `node_modules` is a local symlink, excluded via
   `.git/info/exclude`, never committed.
-- T1 + T2: `tools/tui-perf.mjs` + this file. Commit recorded below.
+- T1 + T2: `tools/tui-perf.mjs` + this file, one work-unit commit.
+- Evidence observed on this branch:
+  - `node --check tools/tui-perf.mjs` OK; `--help` prints.
+  - `eslint tools/tui-perf.mjs` and `eslint .`: clean (the probe imports
+    `Buffer`/`performance`/`setTimeout` from `node:` builtins instead of
+    widening the shared `atlas/scripts` globals block).
+  - `tsc -p tsconfig.test.json --noEmit`: OK.
+  - `node:test` full suite: **794 passed, 0 failed** (15.8 s).
+  - `node scripts/commit-check.mjs --range origin/main..HEAD`: OK.
+  - PTY probe run: `2.14 ms` painted frame at 200 lines; `4525 B/frame
+    (174 B/row)` at 80x26 vs `9069 B/frame (171 B/row)` at 160x53.
+  - `pnpm build` / `pnpm test` were NOT usable in this worktree: pnpm's
+    dep-status check rejects the local `node_modules` symlink, so `tsc` and
+    `tsx` were invoked from `./node_modules/.bin` directly.
+- Commit: `ca094da` `feat(dev): add a render probe for the dev dashboard`.
