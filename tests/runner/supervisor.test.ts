@@ -1,8 +1,20 @@
 // Supervisor unit tests over a fake ProcessRunner: the one-shot (launch)
-// child must stay supervised whatever its reporting hook does.
+// child must stay supervised whatever its reporting hook does. Plus the
+// resolveDevPlan conflict-shape contract (ODD dev-port-conflict-warn-kill)
+// over real adapters on a throwaway config dir: the human orphan flow keys
+// on exactly the busyPorts/appDirs fields a conflict carries.
 
 import assert from 'node:assert/strict';
-import { describe, it } from 'node:test';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { after, describe, it } from 'node:test';
+import {
+  createManifestSource,
+  createNodeProjectFs,
+  createReactNativeCliResolver,
+  createWorkspaceConfigReader,
+} from '../../src/adapters/index.js';
 import type {
   ProcessHandle,
   ProcessRunner,
@@ -12,6 +24,7 @@ import {
   createDevSupervisor,
   type DevAppPlan,
   type DevPlanResult,
+  resolveDevPlan,
   type OneShotEvent,
   type OneShotSpec,
 } from '../../src/runner/supervisor.js';
@@ -186,6 +199,112 @@ describe('spawnOneShot', () => {
     } finally {
       process.off('unhandledRejection', onRejection);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// resolveDevPlan: the additive conflict shape the human orphan flow consumes
+// ---------------------------------------------------------------------------
+
+const conflictDirs: string[] = [];
+after(() => {
+  for (const dir of conflictDirs) rmSync(dir, { recursive: true, force: true });
+});
+
+/**
+ * A throwaway config dir: `host` declares `root` AND a `command` (so no
+ * toolchain resolution runs yet the entry still carries an app dir), the
+ * remote declares only a command (a command app's cwd proves nothing about a
+ * port owner, so it must NOT seed appDirs). `busy` ports answer busy.
+ */
+async function conflictPlan(busy: number[]) {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'atlas-conflict-'));
+  conflictDirs.push(dir);
+  const appRoot = path.join(dir, 'apps', 'host');
+  mkdirSync(appRoot, { recursive: true });
+  writeFileSync(
+    path.join(dir, 'repack-federation.json'),
+    JSON.stringify({
+      host: {
+        manifest: './h.json',
+        root: './apps/host',
+        port: busy[0],
+        command: 'true',
+      },
+      remotes: {
+        a: { manifest: './a.json', port: busy[1], command: 'true' },
+      },
+    })
+  );
+  const fs = createNodeProjectFs();
+  const result = await resolveDevPlan({
+    workspaceDir: dir,
+    configReader: createWorkspaceConfigReader(fs),
+    manifestSource: createManifestSource(fs),
+    reactNativeCli: createReactNativeCliResolver(),
+    fs,
+    processRunner: {
+      start: () => {
+        throw new Error('the plan phase never spawns');
+      },
+      isPortBusy: async (port: number) => busy.includes(port),
+      findFreePort: async () => 50_000,
+    },
+    autoPorts: false,
+  });
+  return { dir, result };
+}
+
+describe('resolveDevPlan conflict shape (orphan-flow input)', () => {
+  it('a busy-port conflict carries busyPorts in plan order and appDirs of root/argv apps only', async () => {
+    const { dir, result } = await conflictPlan([8081, 8082]);
+    assert.equal(result.ok, false);
+    assert.ok(!result.ok && result.portConflict === true);
+    assert.deepEqual(result.busyPorts, [8081, 8082]);
+    assert.deepEqual(
+      result.appDirs,
+      [path.join(dir, 'apps', 'host')],
+      'only the root-declaring app seeds an app dir; the command-only remote does not'
+    );
+    // reasons keep the old contract byte-for-byte (conflicts + the hint).
+    assert.match(result.reasons.join('\n'), /port 8081 declared by host is already busy/);
+    assert.match(result.reasons.join('\n'), /port 8082 declared by a is already busy/);
+    assert.match(result.reasons.at(-1)!, /--auto-ports/);
+  });
+
+  it('a duplicate-declared conflict (nothing busy) carries NO busyPorts/appDirs keys', async () => {
+    // Same port declared by both apps, nothing actually busy: allocatePorts
+    // reports a conflict no orphan kill could ever fix, so the caller's gate
+    // (`busyPorts !== undefined`) must stay closed.
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'atlas-conflict-'));
+    conflictDirs.push(dir);
+    writeFileSync(
+      path.join(dir, 'repack-federation.json'),
+      JSON.stringify({
+        host: { manifest: './h.json', port: 8082, command: 'true' },
+        remotes: { a: { manifest: './a.json', port: 8082, command: 'true' } },
+      })
+    );
+    const fs = createNodeProjectFs();
+    const result = await resolveDevPlan({
+      workspaceDir: dir,
+      configReader: createWorkspaceConfigReader(fs),
+      manifestSource: createManifestSource(fs),
+      reactNativeCli: createReactNativeCliResolver(),
+      fs,
+      processRunner: {
+        start: () => {
+          throw new Error('never spawns');
+        },
+        isPortBusy: async () => false,
+        findFreePort: async () => 50_000,
+      },
+      autoPorts: false,
+    });
+    assert.equal(result.ok, false);
+    assert.ok(!result.ok);
+    assert.equal('busyPorts' in result, false);
+    assert.equal('appDirs' in result, false);
   });
 });
 
