@@ -17,6 +17,7 @@ import {
   DevTuiApp,
   isMouseOnlyInput,
   newLinesNotice,
+  parseClickEvents,
   parseWheelEvents,
   splitLeadingSymbol,
   splitTimestamp,
@@ -178,6 +179,51 @@ describe('dev tui app', () => {
     app.stdin.write('\u001b[<0;40;3M\u001b[<0;40;3m');
     await wait(150);
     assert.equal(model.selectedIndex(), 0);
+    app.unmount();
+    app.cleanup();
+  });
+
+  it('selects the sidebar row under a left click (F13)', async () => {
+    const model = seededModel();
+    const app = render(<DevTuiApp model={model} onQuit={() => undefined} />);
+    await wait(150);
+    assert.equal(model.selectedIndex(), 0);
+    // SGR click press+release on sidebar row 2 (col 5 < SIDEBAR_WIDTH):
+    // selects the second app directly, not by one-step movement.
+    app.stdin.write('\u001b[<0;5;2M\u001b[<0;5;2m');
+    await wait(150);
+    assert.equal(model.selectedIndex(), 1, 'row 2 selects online-store');
+    // A click on row 1 returns the selection to the host.
+    app.stdin.write('\u001b[<0;3;1M\u001b[<0;3;1m');
+    await wait(150);
+    assert.equal(model.selectedIndex(), 0);
+    // Click below the roster (row 8: past 3 apps + help rows exist only up
+    // to the roster) selects nothing — it is swallowed like panel clicks.
+    app.stdin.write('\u001b[<0;5;9M\u001b[<0;5;2m');
+    await wait(150);
+    assert.equal(model.selectedIndex(), 0, 'out-of-roster click is inert');
+    // Motion with the button held (button 32) is a drag, not a click.
+    app.stdin.write('\u001b[<32;5;2M\u001b[<32;5;2m');
+    await wait(150);
+    assert.equal(model.selectedIndex(), 0, 'drags never select');
+    app.unmount();
+    app.cleanup();
+  });
+
+  it('ignores clicks while mouse reporting is toggled off (F13+F11)', async () => {
+    const model = seededModel();
+    const app = render(<DevTuiApp model={model} onQuit={() => undefined} />);
+    await wait(150);
+    app.stdin.write('m'); // tracking off
+    await wait(150);
+    app.stdin.write('\u001b[<0;5;2M\u001b[<0;5;2m');
+    await wait(150);
+    assert.equal(model.selectedIndex(), 0, 'stale click bytes are inert');
+    app.stdin.write('m'); // tracking back on
+    await wait(150);
+    app.stdin.write('\u001b[<0;5;2M\u001b[<0;5;2m');
+    await wait(150);
+    assert.equal(model.selectedIndex(), 1, 'the same click routes again');
     app.unmount();
     app.cleanup();
   });
@@ -677,5 +723,26 @@ describe('dev tui view helpers', () => {
     assert.equal(isMouseOnlyInput('q'), false);
     assert.equal(isMouseOnlyInput('[<0;40;3Mq'), false);
     assert.equal(isMouseOnlyInput(''), false);
+  });
+
+  it('parseClickEvents reads button-0 presses only (F13)', () => {
+    assert.deepEqual(parseClickEvents('\u001b[<0;5;2M'), [
+      { col: 5, row: 2 },
+    ]);
+    // ink strips the leading ESC before the handler sees the chunk.
+    assert.deepEqual(parseClickEvents('[<0;5;2M'), [{ col: 5, row: 2 }]);
+    // Press+release in ONE chunk: exactly one click.
+    assert.deepEqual(parseClickEvents('[<0;5;2M[<0;5;2m'), [
+      { col: 5, row: 2 },
+    ]);
+    assert.deepEqual(parseClickEvents('[<0;5;2m'), []); // release only
+    assert.deepEqual(parseClickEvents('[<64;5;2M'), []); // wheel, not click
+    assert.deepEqual(parseClickEvents('[<32;5;2M'), []); // drag motion
+    assert.deepEqual(parseClickEvents('[<5;5;2M'), []); // unknown button
+    assert.deepEqual(parseClickEvents('[<16;5;2M'), []); // ctrl-click variant
+    assert.deepEqual(parseClickEvents('q'), []);
+    assert.deepEqual(parseClickEvents(''), []);
+    // Real arrow keys are never clicks — and mouse bytes never arrows.
+    assert.deepEqual(parseClickEvents('\u001b[A'), []);
   });
 });

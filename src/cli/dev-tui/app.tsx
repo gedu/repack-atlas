@@ -57,7 +57,7 @@ const HELP_INPUT = 'i send line to stdin';
  * state. While off, the terminal owns the wheel and native drag works
  * without Shift; the full-row highlight a native selection paints is the
  * terminal's rendering artifact, not something this app draws. */
-const HELP_MOUSE_ON = ['m mouse on · wheel', 'shift+drag copy'] as const;
+const HELP_MOUSE_ON = ['m mouse on · click', 'wheel · shift+drag copy'] as const;
 const HELP_MOUSE_OFF = ['m mouse off · native', 'drag copy'] as const;
 /** Log lines a wheel notch scrolls (F1). */
 const WHEEL_SCROLL_LINES = 3;
@@ -295,6 +295,32 @@ export function parseWheelEvents(input: string): WheelEvent[] {
     if (final !== 'M') continue; // release / motion terminators are not notches
     if (button === 64) events.push({ dir: 'up', col, row });
     else if (button === 65) events.push({ dir: 'down', col, row });
+  }
+  return events;
+}
+
+export interface ClickEvent {
+  col: number;
+  row: number;
+}
+
+/**
+ * F13: extract left-click presses from a raw `useInput` chunk. Button 0 with
+ * the press terminator `M` is the click itself; the +32 release (`m`) and any
+ * motion/drag bits (button 32) are skipped, so a click-drag never fires
+ * selection per movement. Coordinates are 1-based, like the wheel's.
+ */
+export function parseClickEvents(input: string): ClickEvent[] {
+  const events: ClickEvent[] = [];
+  for (const match of input.matchAll(SGR_MOUSE)) {
+    const button = Number.parseInt(match[1] ?? '', 10);
+    const col = Number.parseInt(match[2] ?? '', 10);
+    const row = Number.parseInt(match[3] ?? '', 10);
+    const final = match[4];
+    if (final !== 'M') continue;
+    // Exact button-0 press only: motion (32) and modifier-added variants
+    // (ctrl-click etc.) are deliberately NOT clicks.
+    if (button === 0) events.push({ col, row });
   }
   return events;
 }
@@ -545,6 +571,25 @@ export function DevTuiApp({
         }
       }
       return;
+    }
+    // F13: a left-click over a sidebar row selects that app (the row IS the
+    // coordinate: the sidebar renders its list from screen row 1, so click
+    // row r maps to listRows[r-1]). Clicks elsewhere (the panel, the help
+    // block) fall through to the mouse-only swallow below. Same mouseOn
+    // gate as the wheel: with tracking off the terminal reports nothing.
+    if (mouseOn) {
+      const clicks = parseClickEvents(input);
+      if (clicks.length > 0) {
+        for (const click of clicks) {
+          if (click.col > SIDEBAR_WIDTH) continue;
+          const index = click.row - 1;
+          const row = index >= 0 ? listRows[index] : undefined;
+          if (row !== undefined) {
+            moveSelection((target) => target.selectKey(row.key));
+          }
+        }
+        return;
+      }
     }
     if (isMouseOnlyInput(input)) return;
     if (key.ctrl) {
