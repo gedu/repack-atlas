@@ -26,7 +26,7 @@
 // - `note`/`cancel` go through the live session while mounted (one column,
 //   recaps and notes in order) and straight to stdout when not.
 
-import { Box, Static, Text, render, useInput } from 'ink';
+import { Box, Text, render, useInput } from 'ink';
 import { useEffect, useState } from 'react';
 import type { Instance } from 'ink';
 import type { PromptPort, PromptResult } from '../../core/index.js';
@@ -188,7 +188,24 @@ export function WizardFieldView({
   );
 }
 
-/** The wizard viewport: settled lines (printed once) + the live question. */
+/**
+ * The wizard viewport: the settled-summary panel + the live question.
+ *
+ * The settled lines live in a dim rounded panel (the dashboard's border
+ * idiom), NOT in ink's `<Static>`: a Static block prints one bare line per
+ * settled question as it happens, which cannot be framed as one summary, and
+ * the recap block is what the human reads AFTER the wizard dies on a port
+ * conflict. A live Box gives the box, and measurement (ink 6.8) shows it
+ * survives `unmount()` exactly like Static did — ink's teardown flushes the
+ * final frame and only ever clears the PREVIOUS one — so nothing is lost by
+ * the switch. One blank line separates the panel from the live question, and
+ * stays there when the wizard closes, splitting the panel from the `dev:`
+ * error lines that follow.
+ *
+ * `alignItems="flex-start"` hugs the box to the widest settled line instead
+ * of spanning the screen; long `(in use: …)` recaps still reflow inside it at
+ * any width (measured at 100 and 60 columns).
+ */
 export function WizardApp({ controller, color }: WizardAppProps) {
   const [state, setState] = useState<WizardState>(controller.state);
   useEffect(() => {
@@ -201,11 +218,29 @@ export function WizardApp({ controller, color }: WizardAppProps) {
   useInput((input, key) => {
     controller.handleKey(input, key);
   });
+  const hasPanel = state.lines.length > 0;
   return (
-    <Box flexDirection="column">
-      <Static items={[...state.lines]}>
-        {(line) => <WizardLineView key={line.id} line={line} color={color} />}
-      </Static>
+    <Box flexDirection="column" alignItems="flex-start">
+      {hasPanel ? (
+        <Box
+          flexDirection="column"
+          borderStyle="round"
+          borderColor="gray"
+          borderDimColor
+          paddingLeft={1}
+        >
+          {state.lines.map((line) => (
+            <WizardLineView key={line.id} line={line} color={color} />
+          ))}
+        </Box>
+      ) : null}
+      {/* The panel OWNS its trailing blank line — its own line, not a margin
+          and not a property of the live question. A real-PTY check caught the
+          version that only spaced while a question was live: the wizard dying
+          on a port conflict leaves no live question, the gap vanished with
+          it, and the `dev:` error lines landed flush under the box bottom —
+          the exact squash this panel exists to fix. */}
+      {hasPanel ? <Text>{' '}</Text> : null}
       {state.field === null ? null : (
         <WizardFieldView field={state.field} color={color} />
       )}
@@ -314,6 +349,12 @@ export function createTuiPromptPort(
     // below are the belt-and-braces half of the balance, and stdin must end
     // PAUSED for the dashboard's own takeover.
     stdout.write(SHOW_CURSOR);
+    // The frame ink leaves standing ends wherever the last frame ended — with
+    // the live question when the wizard died mid-flow (a real PTY showed the
+    // `dev:` conflict lines landing flush under it). One blank line HERE puts
+    // whatever the caller prints next below the standing frame; on the clean
+    // path it is a single empty row before the plan lines, which reads fine.
+    if (current !== null) stdout.write('\n');
     try {
       if (stdin.isTTY === true) {
         stdin.setRawMode(false);

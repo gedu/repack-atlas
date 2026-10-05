@@ -30,6 +30,17 @@ import {
   type WizardRequest,
 } from '../../src/cli/dev-tui/wizard-model.js';
 
+// ink's `is-in-ci` mode (CI/CONTINUOUS_INTEGRATION set to anything but
+// ''/0/false, as every CI runner does) skips per-frame writes and, on
+// unmount, writes only `lastOutput + '\n'` — which ink never sets in its
+// debug mode, so the post-unmount frame this file reads is empty there. Only
+// that one teardown assertion is gated below; everything else in this file is
+// plain per-frame content, written in both modes (ink-testing-library renders
+// in ink's debug mode, whose writes happen before the CI branch).
+const ciMode = ['CI', 'CONTINUOUS_INTEGRATION'].some(
+  (key) => key in process.env && process.env[key] !== '0' && process.env[key] !== 'false'
+);
+
 const wait = (ms = 60): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -203,6 +214,88 @@ describe('dev tui wizard view', () => {
     await wait();
     assert.match(app.lastFrame() ?? '', /Session cancelled\./);
     app.unmount();
+    app.cleanup();
+  });
+
+  // The recap panel (the #58 follow-up, D2). The settled answers are a
+  // SUMMARY, not just scrollback: they render inside a dim rounded box — the
+  // dashboard's own border idiom — separated from the live question by a
+  // blank line, and the box stays on screen after the wizard closes so the
+  // `dev:` lines that follow are visually split from it (measured: ink's
+  // unmount leaves the final frame standing, same as <Static> did).
+  it('frames the settled recap block and separates it from the live question', async () => {
+    const controller = createWizardController();
+    const app = render(<WizardApp controller={controller} color />);
+    const answer = controller.ask(REMOTES);
+    await wait();
+    controller.handleKey('', { return: true });
+    assert.deepEqual(await answer, { status: 'ok', value: ['mini_auth', 'mini_store'] });
+    // A second question keeps something LIVE below the panel, which is what
+    // the vertical separation is measured against.
+    void controller.ask(PLATFORM);
+    await wait();
+    const frame = app.lastFrame() ?? '';
+    const lines = frame.split('\n');
+    assert.match(frame, /╭.*╮/, 'the recap block is a box');
+    assert.match(frame, /╰.*╯/, 'the box closes');
+    const top = lines.findIndex((l) => l.startsWith('╭'));
+    const bottom = lines.findIndex((l) => l.startsWith('╰'));
+    const recap = lines.findIndex((l) => l.includes(`✓ Which remotes to run?`));
+    const live = lines.findIndex((l) => l.includes(PROMPT_GLYPH));
+    assert.ok(top >= 0 && recap > top, 'the recap is INSIDE the box');
+    assert.ok(bottom > recap, 'the box closes after the recap');
+    assert.ok(live > bottom, 'the live question is outside the box');
+    assert.equal(
+      (lines[bottom + 1] ?? 'x').trim(),
+      '',
+      'a blank line separates the box from the live question'
+    );
+    app.unmount();
+    app.cleanup();
+  });
+
+  it('leaves the panel standing in the last frame ink emits on close', async () => {
+    // What the human sees when the wizard ends on a port conflict: the recap
+    // panel, then the `dev:` error lines the CLI writes after the prompt port
+    // closed. This fake frame stream (ink-testing-library renders in ink's
+    // debug mode, where every write carries the full screen) can prove the
+    // half that matters INK controls: closing the wizard does not erase the
+    // panel. That the `dev:` lines land below it is ordinary stdout ordering,
+    // and the real-terminal look stays user-owned.
+    const controller = createWizardController();
+    const app = render(<WizardApp controller={controller} color />);
+    const answer = controller.ask(REMOTES);
+    await wait();
+    controller.handleKey('', { return: true });
+    assert.deepEqual(await answer, {
+      status: 'ok',
+      value: ['mini_auth', 'mini_store'],
+    });
+    await wait();
+    const whileOpen = app.lastFrame() ?? '';
+    app.unmount();
+    await wait();
+    const afterClose = app.lastFrame() ?? '';
+    assert.match(whileOpen, /╭/, 'the panel was on screen while the wizard ran');
+    if (!ciMode) {
+      assert.match(
+        afterClose,
+        /╭[\s\S]*✓ Which remotes to run\?/,
+        'the panel and its recap survive the wizard closing'
+      );
+      // Real-PTY check (2026-10-02): when the last question settled, the only
+      // blank line was the question's gap and it vanished with the question —
+      // the `dev:` error lines landed flush under the box bottom. The panel
+      // must own its trailing blank line so what follows stays separated.
+      const closedLines = afterClose.split('\n');
+      const bottom = closedLines.findIndex((l) => l.startsWith('╰'));
+      assert.ok(bottom >= 0, 'the box closed line is in the final frame');
+      assert.equal(
+        (closedLines[bottom + 1] ?? 'x').trim(),
+        '',
+        'a blank line follows the panel even with no live question, so the dev: lines that come after land one row below the box'
+      );
+    }
     app.cleanup();
   });
 

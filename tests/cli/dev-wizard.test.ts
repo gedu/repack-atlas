@@ -398,9 +398,11 @@ describe('runDevWizard', () => {
       const { portOwner } = portProbe(busy(`start ${'y'.repeat(200)}`));
       const { prompts } = await run(ANSWERS, { ...ONE_HOST(), portOwner });
       const question = prompts.asked.find((q) => q.includes('(in use: '))!;
-      assert.match(question, /\.\.\)$/, 'the capped command ends with the ellipsis');
+      // Middle-elision: the marker sits between a short head and the command's
+      // tail, so the note never ends in `...` (the tail is the useful part).
       // The cap contract itself lives in formatOwnerCommand's own tests; the
       // question must simply never carry the raw 200+ char line.
+      assert.match(question, /\.\.\./, 'the capped command marks the elision');
       assert.ok(
         question.length <
           'confirm: Use port 8081 for host_app? (in use: )'.length + 101,
