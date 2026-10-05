@@ -71,9 +71,9 @@ function wantsHelp(parsed: { flags: Set<string> }): boolean {
 // --- doctor -------------------------------------------------------------------
 
 const DOCTOR_SPEC: ArgSpec = {
-  valueOptions: ['host', 'remote'],
+  valueOptions: ['host', 'remote', 'code'],
   optionalValueOptions: ['workspace'],
-  booleanFlags: ['json', 'allow-missing-manifests', 'fail-on-warnings', 'help'],
+  booleanFlags: ['json', 'allow-missing-manifests', 'fail-on-warnings', 'show-infos', 'help'],
 };
 
 async function runDoctorCommand(argv: string[]): Promise<number> {
@@ -118,7 +118,14 @@ async function runDoctorCommand(argv: string[]): Promise<number> {
   }
 
   printDoctorSources(run.sources, plan.host, plan.remotes);
-  writeOut(formatDoctorFindings(run.report.findings));
+  // Human-output filters only: --json above is never filtered, and the exit
+  // code comes from the full report, not this view.
+  writeOut(
+    formatDoctorFindings(run.report.findings, {
+      showInfos: parsed.flags.has('show-infos'),
+      codes: parsed.values.get('code'),
+    })
+  );
   if (run.report.unableToAnswer) {
     writeOut('could not answer (exit 2): the run had no usable input.');
   }

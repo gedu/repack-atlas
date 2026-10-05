@@ -204,6 +204,69 @@ describe('doctor NOTHING_COMPARED (spawned bin)', () => {
   });
 });
 
+describe('doctor human output signal-to-noise (spawned bin)', () => {
+  const advisory = path.join(fixturesDir, 'fixture-eager-advisory');
+  const nothing = path.join(fixturesDir, 'fixture-nothing-compared');
+  const EAGER_MESSAGE = 'is eager: true on host';
+
+  it('default view collapses the info wall but still names the code', async () => {
+    const result = await runBin('doctor', '--workspace', advisory);
+    assert.equal(result.code, 0, `stderr: ${result.stderr}`);
+    assert.ok(
+      result.stdout.includes('EAGER_ADVISORY'),
+      'the hidden-infos hint must name the code'
+    );
+    assert.ok(result.stdout.includes('--show-infos'));
+    assert.ok(
+      !result.stdout.includes(EAGER_MESSAGE),
+      `raw info messages must not be listed:\n${result.stdout}`
+    );
+    assert.ok(result.stdout.includes('summary: 0 errors, 0 warnings, 4 info'));
+  });
+
+  it('--show-infos lists the info messages with the same exit code', async () => {
+    const result = await runBin('doctor', '--workspace', advisory, '--show-infos');
+    assert.equal(result.code, 0, `stderr: ${result.stderr}`);
+    assert.ok(result.stdout.includes(EAGER_MESSAGE), result.stdout);
+  });
+
+  it('--code filters the human view and keeps the exit code', async () => {
+    const result = await runBin(
+      'doctor',
+      '--workspace',
+      nothing,
+      '--code',
+      'MISSING_REMOTE_MANIFEST'
+    );
+    assert.equal(result.code, 1, `stderr: ${result.stderr}`);
+    assert.ok(result.stdout.includes('MISSING_REMOTE_MANIFEST'));
+    assert.ok(
+      !result.stdout.includes('NOTHING_COMPARED'),
+      `unselected code must be hidden:\n${result.stdout}`
+    );
+    assert.ok(result.stdout.includes('summary: 2 errors, 1 warning, 0 info'));
+  });
+
+  it('--code never filters --json', async () => {
+    const result = await runBin(
+      'doctor',
+      '--workspace',
+      nothing,
+      '--code',
+      'MISSING_REMOTE_MANIFEST',
+      '--json'
+    );
+    const payload = parseJson<DoctorJson>(result.stdout);
+    assert.equal(payload.exitCode, result.code);
+    const codes = new Set(payload.findings.map((f) => f.code));
+    assert.ok(codes.has('MISSING_REMOTE_MANIFEST'));
+    assert.ok(
+      codes.has('NOTHING_COMPARED'),
+      `--json must report everything, got ${[...codes].join(', ')}`
+    );
+  });
+});
+
 describe('doctor explicit mode (spawned bin)', () => {
   const drift = path.join(fixturesDir, 'fixture-version-drift', 'manifests');
 
