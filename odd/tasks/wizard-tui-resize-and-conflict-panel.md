@@ -152,6 +152,19 @@ emulator's behavior).
   conflict panel (terminal reflow is emulator behavior; the dev.ts TTY branch
   is gated on `process.stdin.isTTY`, not injectable in tests).
 
+## Known limitation
+
+On a window that is both very narrow and very short, a shrink can still
+leave stacked panels: the terminal re-wraps the OLD frame taller than the
+screen and the overflow lands in scrollback, which nothing can erase (ink
+6.8's own `log.clear()` on shrink cannot either). Accepted as-is: it needs
+an extreme resize. The fix, if it ever matters, is running the wizard in
+the alternate screen (as the dashboard does) and printing the final recap
+on leave; that also makes the banner resize live. Not done to keep the
+prior terminal content visible during the wizard.
+
 ## Next step
 
-Manual PTY check, then work-unit commit(s).
+Feature closed. Push and PR are the user's call. Follow-up for a later PR:
+review advisory R3-001 (no automated test drives the framed branch in
+`src/cli/dev.ts:854-865`).
