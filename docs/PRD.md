@@ -274,7 +274,13 @@ not run — missing option, no/invalid config, host manifest missing/corrupt, or
 every remote manifest exists but is unreadable (missing manifests keep `1`, or `0` with `--allow-missing-manifests`). `NOTHING_COMPARED` (warning, static) is added when remotes exist and none was compared (all missing, or missing plus unreadable), with or without `--allow-missing-manifests`, so a clean exit does not read as "the federation was checked"; like any warning it only affects the exit code under `--fail-on-warnings`, and it is not added in the all-unreadable exit-`2` case, where `MANIFEST_UNREADABLE` already says it. `2` means "no answer", `1` means "bad answer"; CI
 treats both as failure. Heuristic honesty is preserved: `dynamicImportDetected`
 or `confidence: heuristic` downgrades missing-native findings to advisories —
-Atlas reports what it cannot check instead of guessing.
+Atlas reports what it cannot check instead of guessing. Severity `info` is
+reserved for findings that are expected by convention: the eager mismatch in
+the host-eager/remote-lazy direction is `EAGER_ADVISORY` at `info`, because a
+host loading a dependency eagerly while the remote stays lazy is the Module
+Federation convention, not a suspicion (the reverse direction stays
+`EAGER_MISMATCH`, error). Info never moves the exit code and never escalates
+under `--fail-on-warnings` — that flag only escalates static warnings.
 
 ### 7.1.1 `repack-atlas dev`
 

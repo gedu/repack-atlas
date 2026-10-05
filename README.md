@@ -39,7 +39,7 @@ pnpm test        # 274 tests, fixtures only, a few seconds
 ### The 3-minute demo
 
 The repo ships throwaway fixture workspaces under `fixtures/`, so you can see
-the doctor and the runner with zero setup. Both commands below were run from a
+the doctor and the runner with zero setup. The commands below were run from a
 fresh clone; the output is real.
 
 Doctor on a workspace with a deliberate singleton version conflict:
@@ -58,6 +58,28 @@ errors (1):
 summary: 1 error, 0 warnings, 0 info
 1
 ```
+
+Doctor on a workspace that only trips findings by convention (host eager,
+remotes lazy — an info finding, not a problem):
+
+```
+$ node dist/cli.js doctor --workspace fixtures/fixture-eager-advisory; echo "EXIT=$?"
+host:   host  .../fixtures/fixture-eager-advisory/manifests/host.json
+remote: mini_auth  .../fixtures/fixture-eager-advisory/manifests/mini-auth.json
+remote: mini_store  .../fixtures/fixture-eager-advisory/manifests/mini-store.json
+
+infos (4 hidden — --show-infos or --code CODE to list):
+  EAGER_ADVISORY [static] × 4
+
+summary: 0 errors, 0 warnings, 4 info
+EXIT=0
+```
+
+The human output keeps signal high: info findings are hidden by default (list
+them with `--show-infos`, or any single code with repeatable `--code <CODE>`),
+and repeated codes collapse to a first line plus a `+ N more` pointer. Exit
+codes always come from the full report, and `--json` always reports every
+finding regardless of these flags.
 
 Exit codes are a contract: `0` clean (warnings allowed), `1` ran and found
 errors, `2` could not answer. The clean fixture exits `0`. A remote manifest
@@ -205,6 +227,7 @@ row. Expectations also live in `fixtures/README.md`.
 | `fixture-missing-native/` | `MISSING_NATIVE_MODULE` | `1` |
 | `fixture-corrupt-manifest/` | `MANIFEST_UNREADABLE` (names the app) | `1` |
 | `fixture-heuristic-downgrade/` | `HEURISTIC_ADVISORY` (warning) | `0` |
+| `fixture-eager-advisory/` | `EAGER_ADVISORY` (info — host-eager/remote-lazy is the MF convention) | `0` |
 | `fixture-missing-remote-manifest/` | `MISSING_REMOTE_MANIFEST` | `1` (`0` with `--allow-missing-manifests`) |
 | `fixture-nothing-compared/` | `NOTHING_COMPARED` (warning) plus a `MISSING_REMOTE_MANIFEST` per remote | `1` (`0` with `--allow-missing-manifests`) |
 | `fixture-xss/` | hostile strings render as text in Studio | `0` |

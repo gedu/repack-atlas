@@ -62,7 +62,15 @@ Work through it in order; every box is a file in the same PR.
 | `2` | Could not answer: missing required option, missing/invalid config, host manifest missing or corrupt, or every remote manifest exists but is unreadable (a missing manifest never counts: it stays exit 1, or 0 with `--allow-missing-manifests`). | fail (no answer) |
 
 `1` and `2` must stay distinguishable — "bad answer" and "no answer" imply
-different fixes. Warnings and advisories never move the exit code off `0`.
+different fixes. Warnings and advisories never move the exit code off `0`. Info
+findings never move the exit code and never escalate under
+`--fail-on-warnings` (that flag only escalates static warnings); the human
+output hides infos by default behind a `--show-infos` hint, while `--json`
+always reports everything. Use info for findings that are expected by
+convention — e.g. `EAGER_ADVISORY`, the host-eager/remote-lazy direction of the
+eager mismatch (the reverse direction is `EAGER_MISMATCH`, error). Fixture:
+`fixtures/fixture-eager-advisory` (4 info findings, exit 0, and exit 0 under
+`--fail-on-warnings`).
 
 Existing findings worth knowing when you add one: `MISSING_REMOTE_MANIFEST`,
 `MANIFEST_UNREADABLE`, and `NOTHING_COMPARED` (warning, static: remotes exist
