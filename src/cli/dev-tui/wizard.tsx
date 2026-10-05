@@ -101,7 +101,11 @@ export interface WizardAppProps {
   onCommit?: (state: WizardState) => void;
 }
 
-/** One durable line above the live question. */
+/**
+ * One durable line above the live question. It truncates (`…`) rather than
+ * wraps: rows a shrink pushes into scrollback cannot be erased, so the panel
+ * keeps one row per answer at every width and never outgrows the screen.
+ */
 export function WizardLineView({
   line,
   color,
@@ -111,19 +115,29 @@ export function WizardLineView({
 }) {
   if (line.tone === 'recap') {
     return (
-      <Text {...(color ? { color: 'green' } : { dimColor: true })}>
+      <Text
+        wrap="truncate-end"
+        {...(color ? { color: 'green' } : { dimColor: true })}
+      >
         {`${DONE_GLYPH} ${line.text}`}
       </Text>
     );
   }
   if (line.tone === 'cancel') {
     return (
-      <Text {...(color ? { color: 'green' } : { dimColor: true })}>
+      <Text
+        wrap="truncate-end"
+        {...(color ? { color: 'green' } : { dimColor: true })}
+      >
         {line.text}
       </Text>
     );
   }
-  return <Text dimColor>{line.text}</Text>;
+  return (
+    <Text wrap="truncate-end" dimColor>
+      {line.text}
+    </Text>
+  );
 }
 
 /** The live question: message, options (or the typed draft), error, key help. */

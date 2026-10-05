@@ -53,6 +53,15 @@ byte.
       lock for bare conflict lines. Principle: when unsure, leave a ghost
       border rather than delete real rows. Route: delegated writer (3 test
       files + 2 source files).
+- [x] T6 Fixed-height recap panel: answered lines truncate (`…`) instead of
+      wrapping, so a shrink never grows the frame past the screen (rows that
+      scroll into scrollback cannot be erased: the stacked panels seen on a
+      very small window). The live question still wraps. Route: inline (one
+      source file + one test).
+- [x] T7 Banner sizes by width: full art >= BANNER_MIN_COLUMNS, wordmark +
+      tagline below it, nothing when even the tagline does not fit. Printed
+      once, so a later resize still reflows it (out of scope: moving it into
+      the live frame). Route: inline (banner.ts + its test).
 
 ## Checks
 
@@ -128,6 +137,17 @@ emulator's behavior).
     check (`framed: true` forced in dev.ts) turned it RED, then reverted.
   - Checks: `pnpm build`, `pnpm lint`, `pnpm typecheck` ok; `pnpm test`
     881/881 with CI unset and CI=1; dry-run smoke exit 0.
+- T6 done: `WizardLineView` texts use `wrap="truncate-end"`. Test `keeps
+  the recap panel one row per answer however narrow the terminal gets`
+  (dev-tui-wizard-app) RED at columns=30 (panel wrapped), GREEN after.
+- T7 done: `renderStartupBanner` returns the wordmark + tagline below
+  BANNER_MIN_COLUMNS and `''` below the text width. Banner suite RED 2/12
+  without the source change, GREEN 12/12.
+- Checks (T6+T7): `pnpm build`, `pnpm lint`, `pnpm typecheck` ok; `pnpm
+  test` 883/883 with CI unset and CI=1.
+- Manual PTY check of T1-T5 by the user: the conflict panel and the
+  normal shrink/grow look right; a very small window stacked panels (fixed
+  by T6, recheck pending).
 - Pending: manual real-terminal check of shrink/grow ghosts and of the
   conflict panel (terminal reflow is emulator behavior; the dev.ts TTY branch
   is gated on `process.stdin.isTTY`, not injectable in tests).
