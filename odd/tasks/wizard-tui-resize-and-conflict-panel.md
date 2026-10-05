@@ -47,6 +47,12 @@ byte.
       also gated on `stderr.isTTY`, (C) one NO_COLOR helper per no-color.org,
       (D) NaN/0/Infinity guard in the reflow math. Route: delegated writer
       (5 source/test files).
+- [x] T5 Review round 3 (approved, non-blocking): R3-001 compensate only on
+      terminals known to reflow; R3-002 validate `stdout.columns` and delete
+      for the smaller of the last two committed frames; R3-003 machine-path
+      lock for bare conflict lines. Principle: when unsure, leave a ghost
+      border rather than delete real rows. Route: delegated writer (3 test
+      files + 2 source files).
 
 ## Checks
 
@@ -98,6 +104,30 @@ emulator's behavior).
     targeted suites 80/80.
   - Checks: `pnpm build`, `pnpm lint`, `pnpm typecheck` ok; `pnpm test`
     844/844 with CI unset and CI=1; dry-run smoke exit 0.
+- T5 done:
+  - R3-001: `terminalReflowsOnResize(env)` in `reflow.ts`, a conservative
+    allowlist (TERM_PROGRAM iTerm.app/Apple_Terminal/ghostty/WezTerm/vscode/
+    Tabby/Hyper/tmux; TERM xterm-kitty/xterm-ghostty/alacritty/wezterm;
+    KITTY_WINDOW_ID/WEZTERM_PANE/GHOSTTY_RESOURCES_DIR). tmux included (it
+    owns the pane grid and reflows it on resize; >= 3.2 exports
+    TERM_PROGRAM=tmux); a GNU screen session (`STY`) is excluded even with
+    inherited markers. `createTuiPromptPort` gains `reflowsOnResize`
+    (default from `process.env`); the listener installs only when it holds.
+  - R3-002: the handler ignores a non-finite / <= 0 `stdout.columns` and
+    keeps the last good width; `WizardApp` reports each committed state via
+    `onCommit` (`useLayoutEffect`), the port keeps the last two, and
+    `safestReflowCompensation` deletes for the frame with FEWER extra rows.
+  - R3-003: `tests/runner/dev-runner.test.ts` "a busy port prints bare
+    conflict lines on the machine paths" (`--no-interactive --no-studio`,
+    `--json --no-studio`, `--dry-run --no-interactive`, stdio piped): exact
+    conflict + hint lines, no box glyphs, no ESC, exit 1.
+  - RED: reflow suite failed to load (missing exports); port "resize guards"
+    4/4 failed (`a ghost border beats deleting rows…`, `a valid shrink after
+    invalid readings still compensates`, `deleted 10 rows; the smaller frame
+    wrapped only 3 extra` x2). R3-003 is a lock, green on arrival; mutation
+    check (`framed: true` forced in dev.ts) turned it RED, then reverted.
+  - Checks: `pnpm build`, `pnpm lint`, `pnpm typecheck` ok; `pnpm test`
+    881/881 with CI unset and CI=1; dry-run smoke exit 0.
 - Pending: manual real-terminal check of shrink/grow ghosts and of the
   conflict panel (terminal reflow is emulator behavior; the dev.ts TTY branch
   is gated on `process.stdin.isTTY`, not injectable in tests).

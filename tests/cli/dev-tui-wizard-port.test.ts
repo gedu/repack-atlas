@@ -12,7 +12,18 @@
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { describe, it } from 'node:test';
-import { createTuiPromptPort, isInkCiMode } from '../../src/cli/dev-tui/wizard.js';
+import { renderToString } from 'ink';
+import { createElement } from 'react';
+import { reflowCompensation } from '../../src/cli/dev-tui/reflow.js';
+import {
+  createTuiPromptPort,
+  isInkCiMode,
+  WizardView,
+} from '../../src/cli/dev-tui/wizard.js';
+import {
+  createWizardController,
+  type WizardState,
+} from '../../src/cli/dev-tui/wizard-model.js';
 
 /**
  * Minimal write stream: records every write. Non-TTY by default so ink never
@@ -21,6 +32,8 @@ import { createTuiPromptPort, isInkCiMode } from '../../src/cli/dev-tui/wizard.j
  * `columns` is writable: a resize test shrinks it before emitting 'resize'.
  */
 class FakeStdout extends EventEmitter {
+  // Writable and loosely typed: a resize test also feeds the readings a
+  // detached or size-less stream reports (undefined, NaN, 0).
   columns: number;
   readonly rows: number;
   readonly isTTY: boolean;
@@ -89,7 +102,9 @@ interface Harness {
 
 function harness(
   color: boolean,
-  screen: ConstructorParameters<typeof FakeStdout>[0] = {}
+  screen: ConstructorParameters<typeof FakeStdout>[0] = {},
+  // Explicit, so the resize suite does not depend on the terminal running it.
+  reflowsOnResize = true
 ): Harness {
   const stdin = new FakeStdin();
   const stdout = new FakeStdout(screen);
@@ -99,6 +114,7 @@ function harness(
       stdin: stdin as unknown as NodeJS.ReadStream,
       stdout: stdout as unknown as NodeJS.WriteStream,
       color,
+      reflowsOnResize,
     }),
     stdin,
     stdout,
@@ -381,6 +397,124 @@ describe('tui prompt port: terminal resize', () => {
     port.close();
     assert.equal(stdout.listenerCount('resize'), 0, 'close() drops every resize listener');
   });
+});
+
+describe('tui prompt port: resize guards', () => {
+  const esc = String.fromCharCode(0x1b);
+  const deleteLines = new RegExp(`${esc}\\[(\\d+)M`);
+  /** Rows the written compensation deletes (0 when none was written). */
+  const deletedRows = (chunks: readonly string[]): number =>
+    chunks.reduce((rows, chunk) => {
+      const match = deleteLines.exec(chunk);
+      return match === null ? rows : rows + Number(match[1]);
+    }, 0);
+  const longQuestion =
+    'Launch the host on the booted simulator once the bundler is ready?';
+
+  /**
+   * Q1 answered (its recap in the panel), Q2 live: a frame that wraps at 40
+   * columns. Then `body`; close() always runs after it (it cancels Q2), so a
+   * failed assertion cannot leave ink mounted and hold the runner open.
+   */
+  const withTwoQuestions = async (
+    h: Harness,
+    body: () => Promise<void>
+  ): Promise<void> => {
+    try {
+      const first = h.port.confirm({ message: longQuestion });
+      await wait(60);
+      h.stdin.send('y');
+      assert.deepEqual(await first, { status: 'ok', value: true });
+      void h.port.confirm({ message: 'Q2?' });
+      await wait(60);
+      await body();
+    } finally {
+      h.port.close();
+    }
+  };
+
+  /** Shrink the fake terminal to `columns` and return what was written. */
+  const resizeTo = async (h: Harness, columns: unknown): Promise<string[]> => {
+    const before = h.stdout.chunks.length;
+    h.stdout.columns = columns as number;
+    h.stdout.emit('resize');
+    await wait(60);
+    return h.stdout.chunks.slice(before);
+  };
+
+  it('installs no resize listener on a terminal not known to reflow', async () => {
+    const h = harness(false, { isTTY: true, columns: 100, rows: 40 }, false);
+    await withTwoQuestions(h, async () => {
+      assert.equal(
+        deletedRows(await resizeTo(h, 40)),
+        0,
+        'a ghost border beats deleting rows the terminal never re-wrapped'
+      );
+    });
+  });
+
+  it('ignores an unusable width reading without losing the last good one', async () => {
+    const h = harness(false, { isTTY: true, columns: 100, rows: 40 });
+    await withTwoQuestions(h, async () => {
+      // Infinity first: a stored bogus reading must not become the baseline.
+      for (const bogus of [Number.POSITIVE_INFINITY, 0, -1, Number.NaN, undefined]) {
+        assert.equal(
+          deletedRows(await resizeTo(h, bogus)),
+          0,
+          `columns=${String(bogus)} must not trigger a compensation`
+        );
+      }
+      // The 100-column baseline survived the bogus readings, so a real
+      // shrink still compensates (ink redraws, and so the port, outside CI).
+      const written = await resizeTo(h, 40);
+      if (!ciMode) {
+        assert.ok(
+          deletedRows(written) > 0,
+          'a valid shrink after invalid readings still compensates'
+        );
+      }
+    });
+  });
+
+  // ink's throttled draw may lag its last commit by one frame, so the port
+  // rebuilds BOTH of the last two committed frames and deletes for the one
+  // that wrapped into fewer extra rows. Here a long note lands right before
+  // the shrink: the frame with it wraps into more rows than the one without.
+  const note = `note ${'n'.repeat(150)}`;
+  /** The extra rows a frame of `state` wraps into from 100 to 40 columns. */
+  const extraRows = (state: WizardState): number => {
+    const frame = renderToString(createElement(WizardView, { state, color: false }), {
+      columns: 100,
+    });
+    const match = deleteLines.exec(reflowCompensation(frame, 40, 40));
+    return match === null ? 0 : Number(match[1]);
+  };
+
+  for (const committed of [false, true]) {
+    it(`never deletes more than the smaller committed frame wrapped (note ${committed ? 'committed' : 'still queued'})`, async () => {
+      // The same two states, rebuilt on a private controller.
+      const twin = createWizardController();
+      const twinFirst = twin.ask({ kind: 'confirm', message: longQuestion });
+      twin.handleKey('y', {});
+      await twinFirst;
+      void twin.ask({ kind: 'confirm', message: 'Q2?' });
+      const without = extraRows(twin.state());
+      twin.note(note);
+      const withNote = extraRows(twin.state());
+      assert.ok(withNote > without, 'the note must wrap into more rows');
+
+      const h = harness(false, { isTTY: true, columns: 100, rows: 40 });
+      await withTwoQuestions(h, async () => {
+        h.port.note(note);
+        if (committed) await wait(60);
+        const deleted = deletedRows(await resizeTo(h, 40));
+        assert.ok(
+          deleted <= Math.min(without, withNote),
+          `deleted ${deleted} rows; the smaller frame wrapped only ${without} extra`
+        );
+      });
+    });
+  }
 });
 
 describe('tui prompt port: durable lines', () => {

@@ -6,7 +6,12 @@
 
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { reflowCompensation, reflowedRows } from '../../src/cli/dev-tui/reflow.js';
+import {
+  reflowCompensation,
+  reflowedRows,
+  safestReflowCompensation,
+  terminalReflowsOnResize,
+} from '../../src/cli/dev-tui/reflow.js';
 
 const ESC = String.fromCharCode(0x1b);
 
@@ -104,4 +109,85 @@ describe('reflowedRows with an unusable width', () => {
     assert.equal(reflowedRows(frame, -5), 2);
     assert.equal(reflowedRows(frame, Number.POSITIVE_INFINITY), 2);
   });
+});
+
+describe('safestReflowCompensation', () => {
+  // ink's throttled draw may lag its last commit by one frame, so the port
+  // hands over the last TWO committed frames and the helper deletes for the
+  // one that wrapped into FEWER extra rows: a ghost row beats a lost one.
+  const small = `${'x'.repeat(25)}\nz`; // R = 4, F = 2 → 2 extra
+  const big = `${'x'.repeat(25)}\n${'x'.repeat(25)}\nz`; // R = 7, F = 3 → 4 extra
+
+  it('picks the frame with fewer extra rows, in either order', () => {
+    const expected = reflowCompensation(small, 10, 40);
+    assert.equal(expected, `\r${ESC}[4A${ESC}[2M${ESC}[2B`);
+    assert.equal(safestReflowCompensation([small, big], 10, 40), expected);
+    assert.equal(safestReflowCompensation([big, small], 10, 40), expected);
+  });
+
+  it('deletes nothing when either frame needs nothing', () => {
+    assert.equal(safestReflowCompensation([big, 'abc'], 10, 40), '');
+    assert.equal(safestReflowCompensation(['abc', big], 10, 40), '');
+  });
+
+  it('deletes nothing without a committed frame', () => {
+    assert.equal(safestReflowCompensation([], 10, 40), '');
+  });
+
+  it('matches reflowCompensation for a single frame', () => {
+    assert.equal(
+      safestReflowCompensation([big], 10, 40),
+      reflowCompensation(big, 10, 40)
+    );
+  });
+});
+
+describe('terminalReflowsOnResize', () => {
+  // Conservative allowlist: only emulators known to re-wrap the screen on a
+  // width change get the delete-lines compensation; anywhere else a leftover
+  // ghost border is the safe failure, deleting real rows is not.
+  const yes: NodeJS.ProcessEnv[] = [
+    { TERM_PROGRAM: 'iTerm.app', TERM: 'xterm-256color' },
+    { TERM_PROGRAM: 'Apple_Terminal', TERM: 'xterm-256color' },
+    { TERM_PROGRAM: 'ghostty', TERM: 'xterm-ghostty' },
+    { TERM: 'xterm-ghostty' },
+    { GHOSTTY_RESOURCES_DIR: '/Applications/Ghostty.app/Contents/Resources/ghostty' },
+    { TERM_PROGRAM: 'WezTerm' },
+    { TERM: 'wezterm' },
+    { WEZTERM_PANE: '0' },
+    { TERM_PROGRAM: 'vscode' },
+    { TERM_PROGRAM: 'Tabby' },
+    { TERM_PROGRAM: 'Hyper' },
+    { TERM: 'xterm-kitty' },
+    { KITTY_WINDOW_ID: '1', TERM: 'xterm-256color' },
+    { TERM: 'alacritty' },
+    { TERM_PROGRAM: 'tmux', TERM: 'tmux-256color' },
+  ];
+  const no: NodeJS.ProcessEnv[] = [
+    {},
+    { TERM: 'xterm' },
+    { TERM: 'xterm-256color' },
+    { TERM: 'linux' },
+    { TERM: 'dumb' },
+    { TERM: 'screen-256color' },
+    { TERM: 'tmux-256color' },
+    { TERM_PROGRAM: 'SomethingElse' },
+    { TERM_PROGRAM: 'iterm.app' }, // exact names only
+    { TERM_PROGRAM: '', TERM: '' },
+    { KITTY_WINDOW_ID: '' }, // an empty marker is not a marker
+    // GNU screen owns the grid even inside a reflowing emulator.
+    { STY: '123.pts-0.host', TERM: 'screen', KITTY_WINDOW_ID: '1' },
+    { STY: '123.pts-0.host', TERM_PROGRAM: 'iTerm.app' },
+  ];
+
+  for (const env of yes) {
+    it(`reflows: ${JSON.stringify(env)}`, () => {
+      assert.equal(terminalReflowsOnResize(env), true);
+    });
+  }
+  for (const env of no) {
+    it(`does not reflow: ${JSON.stringify(env)}`, () => {
+      assert.equal(terminalReflowsOnResize(env), false);
+    });
+  }
 });

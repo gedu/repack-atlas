@@ -27,7 +27,7 @@
 //   recaps and notes in order) and straight to stdout when not.
 
 import { Box, Text, render, renderToString, useInput } from 'ink';
-import { useEffect, useState } from 'react';
+import { useEffect, useLayoutEffect, useState } from 'react';
 import type { Instance } from 'ink';
 import type { PromptPort, PromptResult } from '../../core/index.js';
 import {
@@ -40,7 +40,11 @@ import {
   type WizardState,
 } from './wizard-model.js';
 import { colorAllowed } from './banner.js';
-import { reflowCompensation } from './reflow.js';
+import {
+  isUsableSize,
+  safestReflowCompensation,
+  terminalReflowsOnResize,
+} from './reflow.js';
 
 // ---------------------------------------------------------------------------
 // Visual language
@@ -93,6 +97,8 @@ export interface WizardAppProps {
   controller: WizardController;
   /** false renders with zero escape bytes (the banner's color/no-color split). */
   color: boolean;
+  /** Called with every state React commits (the frames ink may have drawn). */
+  onCommit?: (state: WizardState) => void;
 }
 
 /** One durable line above the live question. */
@@ -249,8 +255,13 @@ export function WizardView({
 }
 
 /** The live session: controller subscription + keystrokes over `WizardView`. */
-export function WizardApp({ controller, color }: WizardAppProps) {
+export function WizardApp({ controller, color, onCommit }: WizardAppProps) {
   const [state, setState] = useState<WizardState>(controller.state);
+  // Layout effects run in React's commit, the same pass that hands ink its
+  // next frame, so this sees exactly the states ink was given to draw.
+  useLayoutEffect(() => {
+    onCommit?.(state);
+  }, [state, onCommit]);
   useEffect(() => {
     const onChange = (): void => setState(controller.state());
     // Re-read on mount: the first question opens before ink's effects run, so
@@ -275,6 +286,11 @@ export interface TuiPromptPortOptions {
   stdin?: NodeJS.ReadStream;
   /** false renders plain (NO_COLOR); defaults to the NO_COLOR convention. */
   color?: boolean;
+  /**
+   * Whether the terminal re-wraps lines on a width change, which is when the
+   * resize compensation is right; defaults to `terminalReflowsOnResize`.
+   */
+  reflowsOnResize?: boolean;
 }
 
 /** Show-cursor decseq: ink already writes it on teardown; this is the belt. */
@@ -310,7 +326,14 @@ export function createTuiPromptPort(
   const controller = createWizardController();
   let instance: Instance | null = null;
   let closed = false;
+  const reflows = options.reflowsOnResize ?? terminalReflowsOnResize(process.env);
   let lastColumns = stdout.columns;
+  // The last two states React committed, newest last: ink's throttled draw
+  // may lag its last commit by one frame, so either may be on screen.
+  let committed: WizardState[] = [];
+  const onCommit = (state: WizardState): void => {
+    committed = [...committed.slice(-1), state];
+  };
 
   // Ghost-frame fix (src/cli/dev-tui/reflow.ts has the why): on a shrink,
   // delete the rows the terminal re-wrapped the old frame into BEFORE ink's
@@ -318,17 +341,22 @@ export function createTuiPromptPort(
   // re-rendered at the old width: ink's live frame is its `output` string at
   // the terminal width, without the trailing newline it writes after it (the
   // cursor row reflowCompensation assumes), and `renderToString` returns that
-  // same string for the same state — the state may have moved on by at most
-  // one throttled render, which only makes the count approximate.
+  // same string for the same state. Both recently committed states are
+  // rebuilt and the one that wrapped into FEWER extra rows wins: a ghost
+  // border is the safe failure, deleting rows above the wizard is not.
   const onResize = (): void => {
     try {
       const columns = stdout.columns;
-      if (columns < lastColumns) {
-        const frame = renderToString(
-          <WizardView state={controller.state()} color={color} />,
-          { columns: lastColumns }
+      // A size-less or detached reading neither compensates nor replaces the
+      // last good width, so the next real shrink still measures from it.
+      if (!isUsableSize(columns)) return;
+      if (isUsableSize(lastColumns) && columns < lastColumns) {
+        const frames = committed.map((state) =>
+          renderToString(<WizardView state={state} color={color} />, {
+            columns: lastColumns,
+          })
         );
-        const sequence = reflowCompensation(frame, columns, stdout.rows);
+        const sequence = safestReflowCompensation(frames, columns, stdout.rows);
         if (sequence !== '') stdout.write(sequence);
       }
       lastColumns = columns;
@@ -337,10 +365,14 @@ export function createTuiPromptPort(
     }
   };
 
+  const app = () => (
+    <WizardApp controller={controller} color={color} onCommit={onCommit} />
+  );
+
   /** Mount on the first question: from then on the wizard owns the screen. */
   const mount = (): void => {
     if (instance !== null || closed) return;
-    instance = render(<WizardApp controller={controller} color={color} />, {
+    instance = render(app(), {
       stdout,
       stdin,
       // Ctrl-C must reach the controller (a cancel), never kill the process.
@@ -353,7 +385,9 @@ export function createTuiPromptPort(
     // surface as an unhandled rejection on top of the wizard's own error path.
     void instance.waitUntilExit().catch(() => undefined);
     // Prepended so it runs BEFORE ink's listener (registered by render above).
-    if (!inkCiMode && stdout.isTTY === true) {
+    // Only where the terminal is known to reflow: elsewhere ink's erase is
+    // already exact and the compensation would delete real rows.
+    if (reflows && !inkCiMode && stdout.isTTY === true) {
       lastColumns = stdout.columns;
       stdout.prependListener('resize', onResize);
     }
@@ -410,7 +444,7 @@ export function createTuiPromptPort(
       // Unmounting now would leave the frame with that question still live
       // and its recap missing from the panel (seen on a real PTY). A sync
       // rerender flushes the queued update so ink's final frame is current.
-      current?.rerender(<WizardApp controller={controller} color={color} />);
+      current?.rerender(app());
       current?.unmount();
     } catch {
       /* ink's own cleanup failed; the belt-and-braces writes below still run */
