@@ -25,6 +25,16 @@
  * caller prints nothing. */
 export const BANNER_MIN_COLUMNS = 56;
 
+/**
+ * The NO_COLOR convention (no-color.org): color is off only when `NO_COLOR`
+ * is present AND non-empty. Shared by every human-path renderer (this banner,
+ * the wizard, the busy-port panel) so they cannot drift; the caller passes
+ * the env, keeping this module free of `process`.
+ */
+export function colorAllowed(env: NodeJS.ProcessEnv): boolean {
+  return env.NO_COLOR === undefined || env.NO_COLOR === '';
+}
+
 // Built without an ESC literal for consistency with app.tsx's mouse
 // sequences (the eslint no-control-regex rule is regex-only, but keeping one
 // runtime-built ESC constant across the TUI code keeps the idiom uniform).

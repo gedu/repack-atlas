@@ -10,6 +10,7 @@ import path from 'node:path';
 import { describe, it } from 'node:test';
 import {
   BANNER_MIN_COLUMNS,
+  colorAllowed,
   renderStartupBanner,
 } from '../../src/cli/dev-tui/banner.js';
 import { repoRoot } from './run-bin.js';
@@ -107,5 +108,24 @@ describe('startup banner', () => {
     assert.doesNotMatch(source, /\bimport\(/, 'no dynamic imports either');
     assert.doesNotMatch(source, /\bprocess\.(stdout|stderr|env|exit)/);
     assert.doesNotMatch(source, /\bconsole\./);
+  });
+});
+
+// no-color.org: NO_COLOR disables color only when it is present AND
+// non-empty. One helper shared by the banner, the wizard and the conflict
+// panel, so the three sites cannot drift.
+describe('colorAllowed', () => {
+  it('allows color when NO_COLOR is unset', () => {
+    assert.equal(colorAllowed({}), true);
+  });
+
+  it('allows color when NO_COLOR is set but empty', () => {
+    assert.equal(colorAllowed({ NO_COLOR: '' }), true);
+  });
+
+  it('disables color for any non-empty NO_COLOR value', () => {
+    assert.equal(colorAllowed({ NO_COLOR: '1' }), false);
+    assert.equal(colorAllowed({ NO_COLOR: '0' }), false);
+    assert.equal(colorAllowed({ NO_COLOR: 'false' }), false);
   });
 });

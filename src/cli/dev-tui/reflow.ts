@@ -34,13 +34,22 @@ function frameLines(frame: string): string[] {
   return lines;
 }
 
+/** A usable terminal dimension: a stream that reports no size gives
+ * `undefined` (NaN in the math below), a detached one 0. */
+function isUsableSize(value: number): boolean {
+  return Number.isFinite(value) && value > 0;
+}
+
 /**
  * Rows `frame` occupies once a terminal `columns` wide has re-wrapped it:
  * every line takes `ceil(width / columns)` rows, an empty line still one.
+ * An unusable width (non-finite or <= 0) wraps nothing: one row per line.
  */
 export function reflowedRows(frame: string, columns: number): number {
+  const lines = frameLines(frame);
+  if (!isUsableSize(columns)) return lines.length;
   const width = Math.max(1, columns);
-  return frameLines(frame).reduce(
+  return lines.reduce(
     (rows, line) => rows + Math.max(1, Math.ceil(visibleWidth(line) / width)),
     0
   );
@@ -57,12 +66,17 @@ export function reflowedRows(frame: string, columns: number): number {
  * the `up - F` rows ink will not erase (`CSI n M` pulls the rest up, so no
  * blank gap is left), then step back down F rows to the cursor row ink
  * expects. ink's clear then erases the remaining F rows plus the cursor row.
+ *
+ * `''` too when `newColumns` or `screenRows` is not a finite positive number:
+ * `wizard.tsx` passes `stdout.columns` / `stdout.rows` unchecked, and a
+ * guessed climb would delete rows that are not the frame's.
  */
 export function reflowCompensation(
   frame: string,
   newColumns: number,
   screenRows: number
 ): string {
+  if (!isUsableSize(newColumns) || !isUsableSize(screenRows)) return '';
   const lines = frameLines(frame).length;
   const up = Math.min(reflowedRows(frame, newColumns), screenRows - 1);
   const extra = up - lines;

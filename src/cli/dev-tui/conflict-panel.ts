@@ -88,3 +88,39 @@ export function renderConflictPanel(
     border(`╰${rule}╯`),
   ].join('\n');
 }
+
+export interface PortConflictFrameInputs {
+  /** The human TUI path is active (dev.ts `tuiCondition`). */
+  tuiCondition: boolean;
+  /** The plan failed on busy ports. */
+  portConflict: boolean;
+  /** stderr, where the panel is written, is a terminal (`2> file` is not). */
+  stderrIsTTY: boolean;
+}
+
+/** Whether a failed plan's reasons go out framed: a port conflict on the
+ * human TUI path, written to a terminal. Everything else stays bare lines. */
+export function shouldFramePortConflict(inputs: PortConflictFrameInputs): boolean {
+  return inputs.tuiCondition && inputs.portConflict && inputs.stderrIsTTY;
+}
+
+export interface PlanFailureOptions extends ConflictPanelOptions {
+  /** True renders the panel (see `shouldFramePortConflict`). */
+  framed: boolean;
+}
+
+/**
+ * The `writeErr` payloads for a failed plan: one `dev: <reason>` line per
+ * reason when not framed (byte for byte what dev.ts always printed), or a
+ * single panel holding those same lines.
+ */
+export function formatPlanFailure(
+  reasons: readonly string[],
+  options: PlanFailureOptions
+): string[] {
+  const lines = reasons.map((reason) => `dev: ${reason}`);
+  if (!options.framed) return lines;
+  return [
+    renderConflictPanel(lines, { columns: options.columns, color: options.color }),
+  ];
+}

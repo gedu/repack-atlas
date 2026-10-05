@@ -85,8 +85,11 @@ import {
 // G4 startup banner: PURE like model.ts (no ink/react, no fs), so the static
 // import keeps rule 11 exception (b) intact — dev-tui-seam.test.ts re-checks
 // banner.ts for purity the same way it checks model.ts.
-import { renderStartupBanner } from './dev-tui/banner.js';
-import { renderConflictPanel } from './dev-tui/conflict-panel.js';
+import { colorAllowed, renderStartupBanner } from './dev-tui/banner.js';
+import {
+  formatPlanFailure,
+  shouldFramePortConflict,
+} from './dev-tui/conflict-panel.js';
 import { readVersion } from './version.js';
 import { lastValue, parseArgs, type ArgSpec } from './args.js';
 import { runDevWizard, shouldRunWizard } from './dev-wizard.js';
@@ -577,7 +580,7 @@ export async function runDevCommand(
     const banner = renderStartupBanner({
       version,
       columns: process.stdout.columns ?? 80,
-      color: process.env.NO_COLOR === undefined,
+      color: colorAllowed(process.env),
     });
     // Empty below BANNER_MIN_COLUMNS: print nothing, not even a blank line.
     if (banner !== '') io.writeOut(banner);
@@ -842,21 +845,23 @@ export async function runDevCommand(
     }
   }
   if (!plan.ok) {
-    const reasons = plan.reasons.map((reason) => `dev: ${reason}`);
     // T3 (ODD wizard-tui-resize-and-conflict-panel): on the HUMAN TTY path a
     // port conflict prints the same `dev:` lines inside a dim-yellow rounded
-    // panel, matching the wizard's recap panel above it. Every other path
-    // (--json, --ci, non-TTY, non-port reasons) keeps the bare lines byte for
-    // byte. Color follows NO_COLOR, width the terminal.
-    if (tuiCondition && plan.portConflict) {
-      io.writeErr(
-        renderConflictPanel(reasons, {
-          columns: process.stderr.columns ?? process.stdout.columns ?? 80,
-          color: process.env.NO_COLOR === undefined,
-        })
-      );
-    } else {
-      for (const reason of reasons) io.writeErr(reason);
+    // panel, matching the wizard's recap panel above it. The panel goes to
+    // stderr, so stderr must be a terminal too (`2> file` gets bare lines).
+    // Every other path (--json, --ci, non-TTY, non-port reasons) keeps the
+    // bare lines byte for byte. Color follows NO_COLOR, width the terminal.
+    const framed = shouldFramePortConflict({
+      tuiCondition,
+      portConflict: plan.portConflict === true,
+      stderrIsTTY: process.stderr.isTTY === true,
+    });
+    for (const block of formatPlanFailure(plan.reasons, {
+      framed,
+      columns: process.stderr.columns ?? process.stdout.columns ?? 80,
+      color: colorAllowed(process.env),
+    })) {
+      io.writeErr(block);
     }
     // Busy ports ran-and-found-errors (1, dry-run parity); the rest is 2.
     return plan.portConflict ? EXIT_FOUND_ERRORS : EXIT_NO_ANSWER;

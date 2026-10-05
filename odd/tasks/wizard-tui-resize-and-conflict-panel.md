@@ -43,6 +43,10 @@ byte.
       ink cannot see, pure row math unit-tested. Route: delegated writer.
 - [x] T3 Port-conflict lines in a dim-yellow rounded panel on the human TTY
       path; plain lines elsewhere. Route: delegated writer.
+- [x] T4 Review advisories: (A) CI-detection drift guard, (B) conflict panel
+      also gated on `stderr.isTTY`, (C) one NO_COLOR helper per no-color.org,
+      (D) NaN/0/Infinity guard in the reflow math. Route: delegated writer
+      (5 source/test files).
 
 ## Checks
 
@@ -70,6 +74,30 @@ emulator's behavior).
   plan.portConflict`; all other paths unchanged.
 - Checks: `pnpm build` ok, `pnpm lint` ok, `pnpm typecheck` ok, `pnpm test`
   823/823 (CI unset and CI=1), dry-run smoke exit 0.
+- T4 done:
+  - A: `isInkCiMode(env)` exported from `wizard.tsx` (module constant now
+    computed from it; the port test uses it too).
+    `tests/cli/dev-tui-ci-parity.test.ts` resolves the `is-in-ci` ink itself
+    depends on (`createRequire(require.resolve('ink'))`) and compares its
+    verdict in a clean-env child for 9 envs (none, CI=1/''/0/false,
+    CONTINUOUS_INTEGRATION=true/false, CI_SERVER, GITLAB_CI). No dependency
+    added.
+  - B: `shouldFramePortConflict` + `formatPlanFailure` in `conflict-panel.ts`
+    (pure); `dev.ts` frames only when `tuiCondition && portConflict &&
+    process.stderr.isTTY === true`. Unframed output is byte-identical to the
+    old `dev: ${reason}` lines (unit-tested).
+  - C: `colorAllowed(env)` in `banner.ts` (`NO_COLOR` unset or empty allows
+    color), used by the banner and conflict panel in `dev.ts` and by the
+    wizard.
+  - D: `reflowCompensation` returns `''` for a non-finite or <= 0
+    `newColumns`/`screenRows`; `reflowedRows` counts one row per line for an
+    unusable width.
+  - RED: the three new suites failed to load (`does not provide an export
+    named colorAllowed / isInkCiMode / formatPlanFailure`); reflow 3/15
+    failed (`'\r\x1B[NaNA\x1B[NaNM\x1B[1B' !== ''`, `NaN !== 2`). GREEN:
+    targeted suites 80/80.
+  - Checks: `pnpm build`, `pnpm lint`, `pnpm typecheck` ok; `pnpm test`
+    844/844 with CI unset and CI=1; dry-run smoke exit 0.
 - Pending: manual real-terminal check of shrink/grow ghosts and of the
   conflict panel (terminal reflow is emulator behavior; the dev.ts TTY branch
   is gated on `process.stdin.isTTY`, not injectable in tests).

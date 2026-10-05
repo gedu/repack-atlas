@@ -5,7 +5,11 @@
 
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { renderConflictPanel } from '../../src/cli/dev-tui/conflict-panel.js';
+import {
+  formatPlanFailure,
+  renderConflictPanel,
+  shouldFramePortConflict,
+} from '../../src/cli/dev-tui/conflict-panel.js';
 
 const ESC = String.fromCharCode(0x1b);
 const SGR_PATTERN = new RegExp(`${ESC}\\[[0-9;]*m`, 'g');
@@ -69,5 +73,67 @@ describe('renderConflictPanel', () => {
 
   it('emits zero escape bytes without color', () => {
     assert.ok(!renderConflictPanel(LINES, { columns: 60, color: false }).includes(ESC));
+  });
+});
+
+// dev.ts writes a failed plan through these two: the gate decides whether the
+// human TTY path frames a port conflict, the formatter turns the plan's
+// reasons into the exact writeErr payloads.
+describe('shouldFramePortConflict', () => {
+  it('frames only a port conflict on the TUI path with stderr at a TTY', () => {
+    assert.equal(
+      shouldFramePortConflict({ tuiCondition: true, portConflict: true, stderrIsTTY: true }),
+      true
+    );
+  });
+
+  it('keeps bare lines when stderr is not a TTY (2> file)', () => {
+    assert.equal(
+      shouldFramePortConflict({ tuiCondition: true, portConflict: true, stderrIsTTY: false }),
+      false
+    );
+  });
+
+  it('keeps bare lines off the TUI path or for non-port failures', () => {
+    assert.equal(
+      shouldFramePortConflict({ tuiCondition: false, portConflict: true, stderrIsTTY: true }),
+      false
+    );
+    assert.equal(
+      shouldFramePortConflict({ tuiCondition: true, portConflict: false, stderrIsTTY: true }),
+      false
+    );
+  });
+});
+
+describe('formatPlanFailure', () => {
+  const REASONS = [
+    'port 8081 declared by host is already busy',
+    'free the port(s), pass --port for the host, or use --auto-ports to reassign busy ports',
+  ];
+
+  it('is byte-identical to the old `dev: ${reason}` lines when not framed', () => {
+    assert.deepEqual(
+      formatPlanFailure(REASONS, { framed: false, columns: 80, color: true }),
+      REASONS.map((reason) => `dev: ${reason}`)
+    );
+  });
+
+  it('keeps non-port reasons bare, one write per reason', () => {
+    const reasons = ['no host app found', 'workspace config is invalid'];
+    assert.deepEqual(
+      formatPlanFailure(reasons, { framed: false, columns: 80, color: false }),
+      ['dev: no host app found', 'dev: workspace config is invalid']
+    );
+  });
+
+  it('frames the prefixed lines in one panel write when framed', () => {
+    const options = { columns: 120, color: true };
+    assert.deepEqual(formatPlanFailure(REASONS, { framed: true, ...options }), [
+      renderConflictPanel(
+        REASONS.map((reason) => `dev: ${reason}`),
+        options
+      ),
+    ]);
   });
 });

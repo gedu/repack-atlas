@@ -12,7 +12,7 @@
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { describe, it } from 'node:test';
-import { createTuiPromptPort } from '../../src/cli/dev-tui/wizard.js';
+import { createTuiPromptPort, isInkCiMode } from '../../src/cli/dev-tui/wizard.js';
 
 /**
  * Minimal write stream: records every write. Non-TTY by default so ink never
@@ -122,17 +122,15 @@ const pressEnter = async (stdin: FakeStdin): Promise<void> => {
   await wait();
 };
 
-// ink's `is-in-ci` mode (CI set to anything but ''/0/false, as every CI
-// runner does) SKIPS per-frame writes to a TTY stdout: it buffers frames
+// ink's `is-in-ci` mode (CI set to anything but 0/false, even empty, as
+// every CI runner does) SKIPS per-frame writes to a TTY stdout: it buffers frames
 // and only flushes static output plus the LAST frame at unmount. Live
 // frames therefore never reach this fake TTY stdout mid-question in that
 // mode. Frame CONTENT stays covered CI-safely by the ink-testing-library
 // suites (non-TTY stdout → plain writes in every mode); this suite keeps
 // proving session behavior here (raw mode, keys, promises, hygiene), and
 // these content assertions stay enforced for local runs.
-const ciMode = ['CI', 'CONTINUOUS_INTEGRATION'].some(
-  (key) => key in process.env && process.env[key] !== '0' && process.env[key] !== 'false'
-);
+const ciMode = isInkCiMode(process.env);
 
 describe('tui prompt port: terminal hygiene', () => {
   it('takes raw mode for the live question and hands it back on close', async () => {

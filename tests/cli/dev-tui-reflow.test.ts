@@ -76,4 +76,32 @@ describe('reflowCompensation', () => {
   it('is empty for an empty frame', () => {
     assert.equal(reflowCompensation('', 10, 40), '');
   });
+
+  // wizard.tsx passes `stdout.rows` / `stdout.columns` unchecked: a stream
+  // that reports no size yields undefined (NaN in the math) or 0.
+  it('is empty when the screen height is unknown, zero or infinite', () => {
+    const frame = 'x'.repeat(100);
+    assert.equal(reflowCompensation(frame, 10, undefined as unknown as number), '');
+    assert.equal(reflowCompensation(frame, 10, Number.NaN), '');
+    assert.equal(reflowCompensation(frame, 10, 0), '');
+    assert.equal(reflowCompensation(frame, 10, Number.POSITIVE_INFINITY), '');
+  });
+
+  it('is empty when the new width is unknown, zero or infinite', () => {
+    const frame = 'x'.repeat(100);
+    assert.equal(reflowCompensation(frame, undefined as unknown as number, 40), '');
+    assert.equal(reflowCompensation(frame, 0, 40), '');
+    assert.equal(reflowCompensation(frame, Number.POSITIVE_INFINITY, 40), '');
+  });
+});
+
+describe('reflowedRows with an unusable width', () => {
+  it('counts one row per line instead of NaN', () => {
+    const frame = `${'x'.repeat(100)}\nok`;
+    assert.equal(reflowedRows(frame, Number.NaN), 2);
+    assert.equal(reflowedRows(frame, undefined as unknown as number), 2);
+    assert.equal(reflowedRows(frame, 0), 2);
+    assert.equal(reflowedRows(frame, -5), 2);
+    assert.equal(reflowedRows(frame, Number.POSITIVE_INFINITY), 2);
+  });
 });

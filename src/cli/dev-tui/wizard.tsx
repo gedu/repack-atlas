@@ -39,6 +39,7 @@ import {
   type WizardRequest,
   type WizardState,
 } from './wizard-model.js';
+import { colorAllowed } from './banner.js';
 import { reflowCompensation } from './reflow.js';
 
 // ---------------------------------------------------------------------------
@@ -279,15 +280,21 @@ export interface TuiPromptPortOptions {
 /** Show-cursor decseq: ink already writes it on teardown; this is the belt. */
 const SHOW_CURSOR = `${ESC}[?25h`;
 
-// ink's own CI detection (its `is-in-ci` dependency, mirrored: Atlas does not
-// import ink's transitive deps). In CI mode ink neither draws live frames nor
-// listens for 'resize', so there is nothing on screen to compensate.
-const inkCiMode = ['CI', 'CONTINUOUS_INTEGRATION'].some(
-  (key) =>
-    key in process.env &&
-    process.env[key] !== '0' &&
-    process.env[key] !== 'false'
-);
+/**
+ * ink's own CI detection (its `is-in-ci` dependency, mirrored: Atlas does not
+ * import ink's transitive deps). In CI mode ink neither draws live frames nor
+ * listens for 'resize', so there is nothing on screen to compensate. Note an
+ * EMPTY `CI` still counts. tests/cli/dev-tui-ci-parity.test.ts compares this
+ * against the `is-in-ci` ink resolves, so an ink upgrade that changes the
+ * detection fails there instead of deleting terminal rows.
+ */
+export function isInkCiMode(env: NodeJS.ProcessEnv): boolean {
+  return ['CI', 'CONTINUOUS_INTEGRATION'].some(
+    (key) => key in env && env[key] !== '0' && env[key] !== 'false'
+  );
+}
+
+const inkCiMode = isInkCiMode(process.env);
 
 /**
  * The `PromptPort` the dev wizard uses when the ink dashboard will mount. One
@@ -299,7 +306,7 @@ export function createTuiPromptPort(
 ): PromptPort {
   const stdout = options.stdout ?? process.stdout;
   const stdin = options.stdin ?? process.stdin;
-  const color = options.color ?? process.env.NO_COLOR === undefined;
+  const color = options.color ?? colorAllowed(process.env);
   const controller = createWizardController();
   let instance: Instance | null = null;
   let closed = false;
