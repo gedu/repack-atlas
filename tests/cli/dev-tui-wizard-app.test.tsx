@@ -14,6 +14,7 @@
 
 import assert from 'node:assert/strict';
 import { after, describe, it } from 'node:test';
+import { renderToString } from 'ink';
 import { cleanup, render } from 'ink-testing-library';
 import {
   CHECKED,
@@ -23,11 +24,13 @@ import {
   PROMPT_GLYPH,
   UNCHECKED,
   WizardApp,
+  WizardView,
 } from '../../src/cli/dev-tui/wizard.js';
 import {
   createWizardController,
   type WizardController,
   type WizardRequest,
+  type WizardState,
 } from '../../src/cli/dev-tui/wizard-model.js';
 
 // ink's `is-in-ci` mode (CI/CONTINUOUS_INTEGRATION set to anything but
@@ -297,6 +300,27 @@ describe('dev tui wizard view', () => {
       );
     }
     app.cleanup();
+  });
+
+  it('keeps the recap panel one row per answer however narrow the terminal gets', () => {
+    // Rows a shrink pushes into scrollback cannot be erased, so a panel that
+    // grows taller as the width drops stacks copies of itself on a very small
+    // window. Answered lines truncate instead of wrapping: the panel's height
+    // is the answer count plus its two borders at every width.
+    const state: WizardState = {
+      lines: [
+        { id: 1, tone: 'recap', text: 'Which remotes to run? trading, wallet, auth' },
+        { id: 2, tone: 'recap', text: 'Launch the app on ios when the host is ready? yes' },
+      ],
+      field: null,
+    };
+    for (const columns of [80, 30, 16]) {
+      const frame = renderToString(<WizardView state={state} color={false} />, { columns });
+      const panel = frame.split('\n').filter((row) => row.trim() !== '');
+      assert.equal(panel.length, 4, `columns=${columns}:\n${frame}`);
+    }
+    const narrow = renderToString(<WizardView state={state} color={false} />, { columns: 30 });
+    assert.match(narrow, /…/);
   });
 
   it('renders the same content with color off (the palette is styling only)', async () => {

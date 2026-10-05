@@ -12,15 +12,39 @@
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { describe, it } from 'node:test';
-import { createTuiPromptPort } from '../../src/cli/dev-tui/wizard.js';
+import { renderToString } from 'ink';
+import { createElement } from 'react';
+import { reflowCompensation } from '../../src/cli/dev-tui/reflow.js';
+import {
+  createTuiPromptPort,
+  isInkCiMode,
+  WizardView,
+} from '../../src/cli/dev-tui/wizard.js';
+import {
+  createWizardController,
+  type WizardState,
+} from '../../src/cli/dev-tui/wizard-model.js';
 
-/** Minimal write stream: records every write, non-TTY so ink never goes fullscreen. */
+/**
+ * Minimal write stream: records every write. Non-TTY by default so ink never
+ * goes fullscreen; the TTY variant (`isTTY: true`) is what makes ink diff
+ * frames and listen for `resize`, so the final-frame and reflow tests use it.
+ * `columns` is writable: a resize test shrinks it before emitting 'resize'.
+ */
 class FakeStdout extends EventEmitter {
-  readonly columns = 100;
-  readonly rows = 24;
-  readonly isTTY = false;
+  // Writable and loosely typed: a resize test also feeds the readings a
+  // detached or size-less stream reports (undefined, NaN, 0).
+  columns: number;
+  readonly rows: number;
+  readonly isTTY: boolean;
   readonly chunks: string[] = [];
   readonly setEncoding = (): void => undefined;
+  constructor({ isTTY = false, columns = 100, rows = 24 } = {}) {
+    super();
+    this.isTTY = isTTY;
+    this.columns = columns;
+    this.rows = rows;
+  }
   write = (chunk: string): boolean => {
     this.chunks.push(chunk);
     return true;
@@ -76,15 +100,21 @@ interface Harness {
   readonly stdout: FakeStdout;
 }
 
-function harness(color: boolean): Harness {
+function harness(
+  color: boolean,
+  screen: ConstructorParameters<typeof FakeStdout>[0] = {},
+  // Explicit, so the resize suite does not depend on the terminal running it.
+  reflowsOnResize = true
+): Harness {
   const stdin = new FakeStdin();
-  const stdout = new FakeStdout();
+  const stdout = new FakeStdout(screen);
   return {
     port: createTuiPromptPort({
       // Cast: the fakes implement the slice of the stream contract ink uses.
       stdin: stdin as unknown as NodeJS.ReadStream,
       stdout: stdout as unknown as NodeJS.WriteStream,
       color,
+      reflowsOnResize,
     }),
     stdin,
     stdout,
@@ -108,17 +138,15 @@ const pressEnter = async (stdin: FakeStdin): Promise<void> => {
   await wait();
 };
 
-// ink's `is-in-ci` mode (CI set to anything but ''/0/false, as every CI
-// runner does) SKIPS per-frame writes to a TTY stdout: it buffers frames
+// ink's `is-in-ci` mode (CI set to anything but 0/false, even empty, as
+// every CI runner does) SKIPS per-frame writes to a TTY stdout: it buffers frames
 // and only flushes static output plus the LAST frame at unmount. Live
 // frames therefore never reach this fake TTY stdout mid-question in that
 // mode. Frame CONTENT stays covered CI-safely by the ink-testing-library
 // suites (non-TTY stdout → plain writes in every mode); this suite keeps
 // proving session behavior here (raw mode, keys, promises, hygiene), and
 // these content assertions stay enforced for local runs.
-const ciMode = ['CI', 'CONTINUOUS_INTEGRATION'].some(
-  (key) => key in process.env && process.env[key] !== '0' && process.env[key] !== 'false'
-);
+const ciMode = isInkCiMode(process.env);
 
 describe('tui prompt port: terminal hygiene', () => {
   it('takes raw mode for the live question and hands it back on close', async () => {
@@ -292,6 +320,201 @@ describe('tui prompt port: terminal hygiene', () => {
     assert.deepEqual(await answer, { status: 'ok', value: '9001' });
     port.close();
   });
+});
+
+describe('tui prompt port: the final frame', () => {
+  // Regression (real PTY): the last answer's setState is queued in a React
+  // microtask, and the awaiting wizard calls close() first. Without the sync
+  // rerender in close(), ink's final frame still drew the last question live
+  // (`● Q2 last?`) and its recap was missing from the panel. A TTY stdout is
+  // what makes ink diff frames; in CI mode ink flushes only the final frame at
+  // unmount, which is exactly the frame under test, so this runs in both.
+  it('holds the last answer in the panel when close() follows the answer at once', async () => {
+    const { port, stdin, stdout } = harness(false, { isTTY: true, columns: 100, rows: 40 });
+    const first = port.confirm({ message: 'Q1?' });
+    await wait(60);
+    stdin.send('y');
+    assert.deepEqual(await first, { status: 'ok', value: true });
+    const last = port.confirm({ message: 'Q2 last?' });
+    await wait(60);
+    stdin.send('y');
+    assert.deepEqual(await last, { status: 'ok', value: true });
+    port.close(); // no wait: the wizard's await resumes straight into close()
+
+    const finalFrame = stdout.text.slice(stdout.text.lastIndexOf('╭'));
+    assert.match(finalFrame, /✓ Q2 last\? yes/, 'the last recap is in the panel');
+    assert.doesNotMatch(finalFrame, /● Q2 last\?/, 'no question is left live');
+  });
+});
+
+describe('tui prompt port: terminal resize', () => {
+  // On a width decrease ink erases only the rows it wrote, while the terminal
+  // has already re-wrapped the wider frame into more rows: the panel's top
+  // border survived as stacked ghosts (real terminal). The port answers with
+  // a delete-lines compensation written BEFORE ink's own erase. ink only
+  // listens for 'resize' outside CI mode, and so does the port.
+  it('deletes the re-wrapped rows before ink erases its frame on a shrink', async () => {
+    const { port, stdin, stdout } = harness(false, { isTTY: true, columns: 100, rows: 40 });
+    const first = port.confirm({
+      message: 'Launch the host on the booted simulator once the bundler is ready?',
+    });
+    await wait(60);
+    stdin.send('y');
+    assert.deepEqual(await first, { status: 'ok', value: true });
+    const live = port.confirm({ message: 'Q2?' });
+    await wait(60);
+
+    const esc = String.fromCharCode(0x1b);
+    const before = stdout.chunks.length;
+    stdout.columns = 40;
+    stdout.emit('resize');
+    await wait(60);
+    const after = stdout.chunks.slice(before);
+    const compensation = after.findIndex((chunk) =>
+      new RegExp(`^\\r${esc}\\[\\d+A${esc}\\[\\d+M${esc}\\[\\d+B$`).test(chunk)
+    );
+    if (ciMode) {
+      assert.equal(compensation, -1, 'no compensation where ink does not redraw');
+    } else {
+      const erase = after.findIndex((chunk) => chunk.includes(`${esc}[2K`));
+      assert.notEqual(compensation, -1, 'the compensation sequence is written');
+      assert.notEqual(erase, -1, "ink's own erase follows");
+      assert.ok(compensation < erase, "the compensation lands before ink's erase");
+    }
+
+    // Growing back is ink's job alone: nothing extra wrapped.
+    const grown = stdout.chunks.length;
+    stdout.columns = 100;
+    stdout.emit('resize');
+    await wait(60);
+    assert.ok(
+      !stdout.chunks.slice(grown).some((chunk) => new RegExp(`${esc}\\[\\d+M`).test(chunk)),
+      'a width increase deletes nothing'
+    );
+
+    stdin.send('n');
+    assert.deepEqual(await live, { status: 'ok', value: false });
+    port.close();
+    assert.equal(stdout.listenerCount('resize'), 0, 'close() drops every resize listener');
+  });
+});
+
+describe('tui prompt port: resize guards', () => {
+  const esc = String.fromCharCode(0x1b);
+  const deleteLines = new RegExp(`${esc}\\[(\\d+)M`);
+  /** Rows the written compensation deletes (0 when none was written). */
+  const deletedRows = (chunks: readonly string[]): number =>
+    chunks.reduce((rows, chunk) => {
+      const match = deleteLines.exec(chunk);
+      return match === null ? rows : rows + Number(match[1]);
+    }, 0);
+  const longQuestion =
+    'Launch the host on the booted simulator once the bundler is ready?';
+
+  /**
+   * Q1 answered (its recap in the panel), Q2 live: a frame that wraps at 40
+   * columns. Then `body`; close() always runs after it (it cancels Q2), so a
+   * failed assertion cannot leave ink mounted and hold the runner open.
+   */
+  const withTwoQuestions = async (
+    h: Harness,
+    body: () => Promise<void>
+  ): Promise<void> => {
+    try {
+      const first = h.port.confirm({ message: longQuestion });
+      await wait(60);
+      h.stdin.send('y');
+      assert.deepEqual(await first, { status: 'ok', value: true });
+      void h.port.confirm({ message: 'Q2?' });
+      await wait(60);
+      await body();
+    } finally {
+      h.port.close();
+    }
+  };
+
+  /** Shrink the fake terminal to `columns` and return what was written. */
+  const resizeTo = async (h: Harness, columns: unknown): Promise<string[]> => {
+    const before = h.stdout.chunks.length;
+    h.stdout.columns = columns as number;
+    h.stdout.emit('resize');
+    await wait(60);
+    return h.stdout.chunks.slice(before);
+  };
+
+  it('installs no resize listener on a terminal not known to reflow', async () => {
+    const h = harness(false, { isTTY: true, columns: 100, rows: 40 }, false);
+    await withTwoQuestions(h, async () => {
+      assert.equal(
+        deletedRows(await resizeTo(h, 40)),
+        0,
+        'a ghost border beats deleting rows the terminal never re-wrapped'
+      );
+    });
+  });
+
+  it('ignores an unusable width reading without losing the last good one', async () => {
+    const h = harness(false, { isTTY: true, columns: 100, rows: 40 });
+    await withTwoQuestions(h, async () => {
+      // Infinity first: a stored bogus reading must not become the baseline.
+      for (const bogus of [Number.POSITIVE_INFINITY, 0, -1, Number.NaN, undefined]) {
+        assert.equal(
+          deletedRows(await resizeTo(h, bogus)),
+          0,
+          `columns=${String(bogus)} must not trigger a compensation`
+        );
+      }
+      // The 100-column baseline survived the bogus readings, so a real
+      // shrink still compensates (ink redraws, and so the port, outside CI).
+      const written = await resizeTo(h, 40);
+      if (!ciMode) {
+        assert.ok(
+          deletedRows(written) > 0,
+          'a valid shrink after invalid readings still compensates'
+        );
+      }
+    });
+  });
+
+  // ink's throttled draw may lag its last commit by one frame, so the port
+  // rebuilds BOTH of the last two committed frames and deletes for the one
+  // that wrapped into fewer extra rows. Here a long note lands right before
+  // the shrink: the frame with it wraps into more rows than the one without.
+  const note = `note ${'n'.repeat(150)}`;
+  /** The extra rows a frame of `state` wraps into from 100 to 40 columns. */
+  const extraRows = (state: WizardState): number => {
+    const frame = renderToString(createElement(WizardView, { state, color: false }), {
+      columns: 100,
+    });
+    const match = deleteLines.exec(reflowCompensation(frame, 40, 40));
+    return match === null ? 0 : Number(match[1]);
+  };
+
+  for (const committed of [false, true]) {
+    it(`never deletes more than the smaller committed frame wrapped (note ${committed ? 'committed' : 'still queued'})`, async () => {
+      // The same two states, rebuilt on a private controller.
+      const twin = createWizardController();
+      const twinFirst = twin.ask({ kind: 'confirm', message: longQuestion });
+      twin.handleKey('y', {});
+      await twinFirst;
+      void twin.ask({ kind: 'confirm', message: 'Q2?' });
+      const without = extraRows(twin.state());
+      twin.note(note);
+      const withNote = extraRows(twin.state());
+      assert.ok(withNote > without, 'the note must wrap into more rows');
+
+      const h = harness(false, { isTTY: true, columns: 100, rows: 40 });
+      await withTwoQuestions(h, async () => {
+        h.port.note(note);
+        if (committed) await wait(60);
+        const deleted = deletedRows(await resizeTo(h, 40));
+        assert.ok(
+          deleted <= Math.min(without, withNote),
+          `deleted ${deleted} rows; the smaller frame wrapped only ${without} extra`
+        );
+      });
+    });
+  }
 });
 
 describe('tui prompt port: durable lines', () => {

@@ -743,6 +743,46 @@ describe('dev --dry-run', () => {
     }
   });
 
+  // Machine-path lock (ODD wizard-tui-resize-and-conflict-panel, R3-003): the
+  // dim-yellow conflict panel is for a human at a TTY only. With stdio piped
+  // (no TTY anywhere) and with --json, a busy declared port prints the bare
+  // `dev:` lines byte for byte: no box glyphs, no escape bytes, exit 1.
+  it('a busy port prints bare conflict lines on the machine paths: no panel, no ESC', async () => {
+    const held = await occupyPorts(1);
+    const busy = held.ports[0]!;
+    try {
+      await withConfig(
+        {
+          host: { manifest: './h.json', port: busy, command: 'true' },
+          remotes: {},
+        },
+        async (dir) => {
+          for (const args of [
+            ['--no-interactive', '--no-studio'],
+            ['--json', '--no-studio'],
+            ['--dry-run', '--no-interactive'],
+          ]) {
+            const result = await runToCompletion(args, dir);
+            const label = args.join(' ');
+            assert.equal(result.code, 1, `${label}: ${result.stderr}`);
+            const lines = result.stderr.split('\n');
+            const at = lines.indexOf(`dev: port ${busy} declared by host is already busy`);
+            assert.notEqual(at, -1, `${label}: bare conflict line\n${result.stderr}`);
+            assert.equal(
+              lines[at + 1],
+              'dev: free the port(s), pass --port for the host, or use --auto-ports to reassign busy ports',
+              `${label}: bare hint line right after it`
+            );
+            assert.doesNotMatch(result.stderr, /[╭╮╰╯│─]/, `${label}: no panel glyphs`);
+            assert.ok(!result.stderr.includes('\u001b'), `${label}: no escape bytes`);
+          }
+        }
+      );
+    } finally {
+      await held.close();
+    }
+  });
+
   it('plan failures exit 2 under --dry-run: missing config, invalid config, unknown --apps', async () => {
     const empty = mkdtempSync(path.join(os.tmpdir(), 'atlas-dry-'));
     try {

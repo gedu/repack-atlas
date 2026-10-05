@@ -10,6 +10,7 @@ import path from 'node:path';
 import { describe, it } from 'node:test';
 import {
   BANNER_MIN_COLUMNS,
+  colorAllowed,
   renderStartupBanner,
 } from '../../src/cli/dev-tui/banner.js';
 import { repoRoot } from './run-bin.js';
@@ -23,10 +24,24 @@ const ESC = String.fromCharCode(0x1b);
 const SGR_SEQUENCE = new RegExp(`${ESC}\\[[0-9;]*m`, 'g');
 
 describe('startup banner', () => {
-  it('suppresses below the minimum columns', () => {
-    assert.equal(renderStartupBanner({ version: '1.2.3', columns: BANNER_MIN_COLUMNS - 1, color: true }), '');
+  it('drops the art below the minimum columns and keeps the text lines', () => {
+    const full = renderStartupBanner({ version: '1.2.3', columns: BANNER_MIN_COLUMNS, color: false });
+    assert.match(full, /[\u2800-\u28FF]/);
+    const compact = renderStartupBanner({ version: '1.2.3', columns: BANNER_MIN_COLUMNS - 1, color: false });
+    const rows = compact.split('\n');
+    assert.equal(rows.length, 2, compact);
+    assert.doesNotMatch(compact, /[\u2800-\u28FF]/);
+    assert.match(rows[0] ?? '', /repack-atlas v1\.2\.3/);
+    assert.match(rows[1] ?? '', /module federation, made visible/);
+    for (const row of rows) assert.ok(row.length <= BANNER_MIN_COLUMNS - 1, row);
+  });
+
+  it('prints nothing when even the text lines would wrap', () => {
+    const tagline = 'module federation, made visible'.length;
+    assert.notEqual(renderStartupBanner({ version: '1.2.3', columns: tagline, color: false }), '');
+    assert.equal(renderStartupBanner({ version: '1.2.3', columns: tagline - 1, color: true }), '');
     assert.equal(renderStartupBanner({ version: '1.2.3', columns: 10, color: false }), '');
-    assert.notEqual(renderStartupBanner({ version: '1.2.3', columns: BANNER_MIN_COLUMNS, color: false }), '');
+    assert.equal(renderStartupBanner({ version: '1.2.3', columns: Number.NaN, color: false }), '');
   });
 
   it('color=false yields zero escape bytes', () => {
@@ -107,5 +122,24 @@ describe('startup banner', () => {
     assert.doesNotMatch(source, /\bimport\(/, 'no dynamic imports either');
     assert.doesNotMatch(source, /\bprocess\.(stdout|stderr|env|exit)/);
     assert.doesNotMatch(source, /\bconsole\./);
+  });
+});
+
+// no-color.org: NO_COLOR disables color only when it is present AND
+// non-empty. One helper shared by the banner, the wizard and the conflict
+// panel, so the three sites cannot drift.
+describe('colorAllowed', () => {
+  it('allows color when NO_COLOR is unset', () => {
+    assert.equal(colorAllowed({}), true);
+  });
+
+  it('allows color when NO_COLOR is set but empty', () => {
+    assert.equal(colorAllowed({ NO_COLOR: '' }), true);
+  });
+
+  it('disables color for any non-empty NO_COLOR value', () => {
+    assert.equal(colorAllowed({ NO_COLOR: '1' }), false);
+    assert.equal(colorAllowed({ NO_COLOR: '0' }), false);
+    assert.equal(colorAllowed({ NO_COLOR: 'false' }), false);
   });
 });
