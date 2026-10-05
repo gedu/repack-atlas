@@ -20,9 +20,8 @@
 // (U+2800-U+28FF) only — Ghostty-safe. Box-drawing is allowed by the rule
 // but the final drawing does not need it.
 
-/** Narrowest terminal that still gets the banner; below this the art would
- * not center without looking broken, so the renderer returns '' and the
- * caller prints nothing. */
+/** Narrowest terminal that still gets the art; below this the drawing would
+ * wrap into noise, so the renderer falls back to the wordmark + tagline. */
 export const BANNER_MIN_COLUMNS = 56;
 
 /**
@@ -97,7 +96,8 @@ const TAGLINE = 'module federation, made visible';
 export interface StartupBannerOptions {
   /** Version to show; an empty/absent version drops the `v<x>` suffix. */
   version?: string;
-  /** Terminal columns; below BANNER_MIN_COLUMNS the banner is suppressed. */
+  /** Terminal columns; below BANNER_MIN_COLUMNS only the text lines print,
+   * and nothing at all when even those would wrap. */
   columns: number;
   /** False renders with zero escape bytes (plain streams, captured output). */
   color: boolean;
@@ -112,25 +112,29 @@ function centerOf(content: number, width: number): number {
 }
 
 /**
- * The full banner, newline-joined, or `''` when it must not print at all
- * (`columns < BANNER_MIN_COLUMNS`). Centered against `columns`: art rows
- * first, then the bold wordmark (`repack-atlas v<version>` — the plain name
- * when no version is available) and the dim tagline. `color: false` yields
- * the same layout with zero escape bytes; suppression for machine paths is
- * `dev.ts`'s job, not a mode of this function.
+ * The banner, newline-joined, sized to `columns`: the full art when it fits
+ * (`columns >= BANNER_MIN_COLUMNS`), only the text lines on a narrower
+ * terminal, and `''` when even those would wrap. Centered against `columns`:
+ * art rows first, then the bold wordmark (`repack-atlas v<version>` — the
+ * plain name when no version is available) and the dim tagline. The banner is
+ * printed once, so a later resize is the terminal's to reflow. `color: false`
+ * yields the same layout with zero escape bytes; suppression for machine
+ * paths is `dev.ts`'s job, not a mode of this function.
  */
 export function renderStartupBanner(options: StartupBannerOptions): string {
-  if (options.columns < BANNER_MIN_COLUMNS) return '';
   const { version, color } = options;
   const title =
     version === undefined || version === '' ? TITLE : `${TITLE} v${version}`;
-  const widest = Math.max(ART_WIDTH, title.length, TAGLINE.length);
+  const withArt = options.columns >= BANNER_MIN_COLUMNS;
+  const textWidth = Math.max(title.length, TAGLINE.length);
+  if (!withArt && !(options.columns >= textWidth)) return '';
+  const widest = withArt ? Math.max(ART_WIDTH, textWidth) : textWidth;
   const indent = ' '.repeat(Math.max(0, Math.floor((options.columns - widest) / 2)));
   // The art block is centered within the text block when the tagline is the
   // widest line (its trailing design spaces are part of the drawing).
   const artIndent = ' '.repeat(centerOf(ART_WIDTH, widest));
   const lines: string[] = [];
-  for (const row of ART) {
+  for (const row of withArt ? ART : []) {
     const text = artIndent + pad(row.text, widest);
     lines.push(color ? paint(SGR[row.color], text) : text);
   }

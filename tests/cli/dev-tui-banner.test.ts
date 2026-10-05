@@ -24,10 +24,24 @@ const ESC = String.fromCharCode(0x1b);
 const SGR_SEQUENCE = new RegExp(`${ESC}\\[[0-9;]*m`, 'g');
 
 describe('startup banner', () => {
-  it('suppresses below the minimum columns', () => {
-    assert.equal(renderStartupBanner({ version: '1.2.3', columns: BANNER_MIN_COLUMNS - 1, color: true }), '');
+  it('drops the art below the minimum columns and keeps the text lines', () => {
+    const full = renderStartupBanner({ version: '1.2.3', columns: BANNER_MIN_COLUMNS, color: false });
+    assert.match(full, /[\u2800-\u28FF]/);
+    const compact = renderStartupBanner({ version: '1.2.3', columns: BANNER_MIN_COLUMNS - 1, color: false });
+    const rows = compact.split('\n');
+    assert.equal(rows.length, 2, compact);
+    assert.doesNotMatch(compact, /[\u2800-\u28FF]/);
+    assert.match(rows[0] ?? '', /repack-atlas v1\.2\.3/);
+    assert.match(rows[1] ?? '', /module federation, made visible/);
+    for (const row of rows) assert.ok(row.length <= BANNER_MIN_COLUMNS - 1, row);
+  });
+
+  it('prints nothing when even the text lines would wrap', () => {
+    const tagline = 'module federation, made visible'.length;
+    assert.notEqual(renderStartupBanner({ version: '1.2.3', columns: tagline, color: false }), '');
+    assert.equal(renderStartupBanner({ version: '1.2.3', columns: tagline - 1, color: true }), '');
     assert.equal(renderStartupBanner({ version: '1.2.3', columns: 10, color: false }), '');
-    assert.notEqual(renderStartupBanner({ version: '1.2.3', columns: BANNER_MIN_COLUMNS, color: false }), '');
+    assert.equal(renderStartupBanner({ version: '1.2.3', columns: Number.NaN, color: false }), '');
   });
 
   it('color=false yields zero escape bytes', () => {
