@@ -211,6 +211,17 @@ export const STUDIO_PAGE_HTML = `<!doctype html>
   .pill.warn { color: var(--warn); background: var(--warn-soft); }
   .pill.bad { color: var(--bad); background: var(--bad-soft); }
 
+  /* Doctor findings: severity filter chips (same pill language as .sess). */
+  .chips { display: flex; gap: 6px; flex-wrap: wrap; }
+  .chip {
+    font: inherit; font-family: var(--mono); font-size: 12px; color: var(--ink-2);
+    cursor: pointer; padding: 2px 9px; border-radius: 999px;
+    background: var(--surface-2); border: 1px solid var(--line);
+    font-variant-numeric: tabular-nums;
+  }
+  .chip[aria-pressed="true"] { border-color: var(--accent); color: var(--accent-ink); background: var(--accent-soft); }
+  .chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
   /* Doctor findings with severity stripes. */
   .issues { list-style: none; margin: 0; padding: 6px; display: grid; gap: 4px; }
   .issue {
@@ -226,6 +237,13 @@ export const STUDIO_PAGE_HTML = `<!doctype html>
   .code { font-family: var(--mono); font-size: 11.5px; font-weight: 500; color: var(--ink-2); white-space: nowrap; }
   .issue .msg { font-size: 13px; overflow-wrap: anywhere; }
   .issue .where { font-family: var(--mono); font-size: 11.5px; color: var(--ink-3); white-space: nowrap; }
+  .issue-more {
+    font: inherit; font-family: var(--mono); font-size: 11.5px; color: var(--ink-3);
+    background: none; border: 1px dashed var(--line-strong); border-radius: 6px;
+    padding: 3px 10px; margin: 2px 0 0 14px; cursor: pointer;
+  }
+  .issue-more:hover { border-color: var(--accent); color: var(--accent-ink); }
+  .issue-more:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   @media (max-width: 560px) {
     .issue { grid-template-columns: 4px 1fr; }
     .issue .code, .issue .msg, .issue .where { grid-column: 2; }
@@ -282,6 +300,7 @@ export const STUDIO_PAGE_HTML = `<!doctype html>
   <section class="panel" aria-label="Doctor findings">
     <div class="panel-head">
       <h2>Doctor findings</h2>
+      <div class="chips" id="issue-chips"></div>
       <span class="hint" id="issue-count"></span>
     </div>
     <ul class="issues" id="issues"></ul>
@@ -301,6 +320,11 @@ export const STUDIO_PAGE_HTML = `<!doctype html>
   var graph = { apps: [], edges: [], findings: [] };
   var selected = null;
   var tab = 'exposes';
+  // Panel filters: error+warning visible by default, info hidden until the
+  // chip enables it (same signal-to-noise rule as the CLI doctor panel).
+  var showSeverity = { error: true, warning: true, info: false };
+  // Finding codes the human expanded beyond the first row, e.g. code -> true.
+  var expandedCodes = {};
   var svg = document.getElementById('graph');
   var toastTimer = null;
 
@@ -625,6 +649,14 @@ export const STUDIO_PAGE_HTML = `<!doctype html>
     return function () { select(name); };
   }
 
+  function expandHandler(code) {
+    return function () {
+      if (expandedCodes[code]) delete expandedCodes[code];
+      else expandedCodes[code] = true;
+      renderIssues();
+    };
+  }
+
   function select(name, requestedTab) {
     if (!appByName(name)) return;
     selected = name;
@@ -877,38 +909,122 @@ export const STUDIO_PAGE_HTML = `<!doctype html>
     else renderExposes(app, body);
   }
 
+  function severityTotal(severity) {
+    var count = 0;
+    for (var i = 0; i < graph.findings.length; i++) {
+      if (graph.findings[i].severity === severity) count++;
+    }
+    return count;
+  }
+
+  function renderIssueChips() {
+    var host = clear(document.getElementById('issue-chips'));
+    var chips = [
+      ['error', 'errors'],
+      ['warning', 'warnings'],
+      ['info', 'infos']
+    ];
+    for (var c = 0; c < chips.length; c++) {
+      var chip = el('button', 'chip', chips[c][1] + ' (' + severityTotal(chips[c][0]) + ')');
+      chip.type = 'button';
+      chip.setAttribute('data-severity', chips[c][1]);
+      chip.setAttribute('aria-pressed', String(showSeverity[chips[c][0]] === true));
+      chip.addEventListener('click', (function (key) {
+        return function () {
+          showSeverity[key] = !showSeverity[key];
+          renderIssues();
+        };
+      })(chips[c][0]));
+      host.appendChild(chip);
+    }
+  }
+
+  function issueRow(finding) {
+    var item = el('li');
+    var button = el('button', 'issue');
+    button.type = 'button';
+    button.setAttribute('data-code', String(finding.code));
+    button.appendChild(el('span', 'stripe' + (finding.severity === 'error' ? ' bad' : finding.severity === 'info' ? ' info' : '')));
+    button.appendChild(el('span', 'code', String(finding.code)));
+    button.appendChild(el('span', 'msg', String(finding.message)));
+    button.appendChild(el('span', 'where', finding.confidence === 'heuristic' ? 'heuristic' : 'static'));
+    button.addEventListener('click', function (candidate) {
+      return function () {
+        for (var a = 0; a < graph.apps.length; a++) {
+          if (String(candidate.message).indexOf(graph.apps[a].name) !== -1) {
+            select(graph.apps[a].name);
+            return;
+          }
+        }
+      };
+    }(finding));
+    item.appendChild(button);
+    return item;
+  }
+
   function renderIssues() {
+    renderIssueChips();
     var list = clear(document.getElementById('issues'));
-    var errors = 0, warnings = 0, infos = 0;
+    var errors = severityTotal('error');
+    var warnings = severityTotal('warning');
+    var infos = severityTotal('info');
+
+    // Group visible findings by code, first-occurrence order; groups larger
+    // than one collapse behind a "+ N more" button, collapsed by default
+    // (same signal-to-noise rule as the CLI doctor panel).
+    var order = [];
+    var groups = {};
+    var hiddenInfos = 0;
     for (var i = 0; i < graph.findings.length; i++) {
       var finding = graph.findings[i];
-      if (finding.severity === 'error') errors++;
-      else if (finding.severity === 'warning') warnings++;
-      else infos++;
-
-      var item = el('li');
-      var button = el('button', 'issue');
-      button.type = 'button';
-      button.setAttribute('data-code', String(finding.code));
-      button.appendChild(el('span', 'stripe' + (finding.severity === 'error' ? ' bad' : finding.severity === 'info' ? ' info' : '')));
-      button.appendChild(el('span', 'code', String(finding.code)));
-      button.appendChild(el('span', 'msg', String(finding.message)));
-      button.appendChild(el('span', 'where', finding.confidence === 'heuristic' ? 'heuristic' : 'static'));
-      button.addEventListener('click', function (candidate) {
-        return function () {
-          for (var a = 0; a < graph.apps.length; a++) {
-            if (String(candidate.message).indexOf(graph.apps[a].name) !== -1) {
-              select(graph.apps[a].name);
-              return;
-            }
-          }
-        };
-      }(finding));
-      item.appendChild(button);
-      list.appendChild(item);
+      var severity = finding.severity;
+      if (showSeverity[severity] !== true) {
+        if (severity === 'info') hiddenInfos++;
+        continue;
+      }
+      var code = String(finding.code);
+      if (!groups[code]) { groups[code] = []; order.push(code); }
+      groups[code].push(finding);
     }
-    if (!truthy(graph.findings.length)) {
-      list.appendChild(el('li', 'hint', 'No findings.'));
+
+    var visibleRows = 0;
+    for (var g = 0; g < order.length; g++) {
+      var groupCode = order[g];
+      var findings = groups[groupCode];
+      var expanded = expandedCodes[groupCode] === true;
+      list.appendChild(issueRow(findings[0]));
+      visibleRows++;
+      if (!expanded) {
+        if (findings.length > 1) {
+          var collapsed = el('button', 'issue-more');
+          collapsed.type = 'button';
+          collapsed.setAttribute('data-code', groupCode);
+          collapsed.setAttribute('aria-pressed', 'false');
+          collapsed.textContent = '+ ' + (findings.length - 1) + ' more ' + groupCode + ' \\u2014 click to expand all';
+          collapsed.addEventListener('click', expandHandler(groupCode));
+          list.appendChild(collapsed);
+        }
+      } else {
+        for (var r = 1; r < findings.length; r++) {
+          list.appendChild(issueRow(findings[r]));
+          visibleRows++;
+        }
+        var opened = el('button', 'issue-more');
+        opened.type = 'button';
+        opened.setAttribute('data-code', groupCode);
+        opened.setAttribute('aria-pressed', 'true');
+        opened.textContent = '\\u25b4 ' + findings.length + ' ' + groupCode + ' \\u2014 click to collapse';
+        opened.addEventListener('click', expandHandler(groupCode));
+        list.appendChild(opened);
+      }
+    }
+
+    if (!truthy(visibleRows)) {
+      list.appendChild(el('li', 'hint', truthy(graph.findings.length)
+        ? (truthy(hiddenInfos)
+          ? 'infos are hidden \\u2014 enable the infos chip to show them'
+          : 'No findings match the selected severities.')
+        : 'No findings.'));
     }
     document.getElementById('issue-count').textContent =
       errors + ' errors \\u00b7 ' + warnings + ' warnings \\u00b7 ' + infos + ' infos';

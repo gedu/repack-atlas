@@ -188,6 +188,98 @@ test.describe('Studio over the remote-cycle fixture', () => {
     await expect(page.locator('#issue-count')).toContainText('0 errors');
     await expect(page.locator('#issue-count')).toContainText('1 warnings');
   });
+
+  test('severity chips show the warning by default and hide it on click', async ({ page }) => {
+    await page.goto(preview.url);
+
+    const errors = page.locator('#issue-chips .chip[data-severity="errors"]');
+    const warnings = page.locator('#issue-chips .chip[data-severity="warnings"]');
+    const infos = page.locator('#issue-chips .chip[data-severity="infos"]');
+    await expect(page.locator('#issue-chips .chip')).toHaveCount(3);
+    // errors + warnings on, infos off, counts always the totals.
+    await expect(errors).toHaveText('errors (0)');
+    await expect(errors).toHaveAttribute('aria-pressed', 'true');
+    await expect(warnings).toHaveText('warnings (1)');
+    await expect(warnings).toHaveAttribute('aria-pressed', 'true');
+    await expect(infos).toHaveText('infos (0)');
+    await expect(infos).toHaveAttribute('aria-pressed', 'false');
+
+    // Turning warnings off removes the row but never changes the summary.
+    await warnings.click();
+    await expect(page.locator('#issues .issue')).toHaveCount(0);
+    await expect(warnings).toHaveAttribute('aria-pressed', 'false');
+    await expect(page.locator('#issue-count')).toContainText('1 warnings');
+
+    // And back on: the same single row.
+    await warnings.click();
+    await expect(page.locator('#issues .issue[data-code="REMOTE_CYCLE"]')).toHaveCount(1);
+  });
+});
+
+test.describe('Studio over the eager-advisory fixture (info findings)', () => {
+  let preview: Preview;
+
+  test.beforeAll(async () => {
+    preview = await startPreview(path.join(repoRoot, 'fixtures', 'fixture-eager-advisory'), basePort + 53);
+  });
+  test.afterAll(async () => {
+    await preview?.stop();
+  });
+
+  test('hides infos by default and collapses repeated codes behind a count', async ({ page }) => {
+    await page.goto(preview.url);
+
+    // Four info findings exist but are NOT in the default view: the hint
+    // explains why (same signal-to-noise rule the CLI panel uses).
+    await expect(page.locator('#issues .issue')).toHaveCount(0);
+    await expect(page.locator('#issues li.hint')).toContainText(
+      'infos are hidden \u2014 enable the infos chip to show them'
+    );
+    // The summary still counts every finding by severity.
+    await expect(page.locator('#issue-count')).toContainText('4 infos');
+    await expect(page.locator('#issue-chips .chip[data-severity="infos"]')).toHaveAttribute(
+      'aria-pressed',
+      'false'
+    );
+    // Infos must not paint every node: graph badges stay error/warning only.
+    await expect(page.locator('svg.graph circle.badge-c, svg.graph circle.badge-w')).toHaveCount(0);
+
+    await page.locator('#issue-chips .chip[data-severity="infos"]').click();
+    await expect(page.locator('#issue-chips .chip[data-severity="infos"]')).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    );
+    // One group per finding code: first row shown, the rest behind the count.
+    await expect(page.locator('#issues .issue[data-code="EAGER_ADVISORY"]')).toHaveCount(1);
+    const more = page.locator('#issues .issue-more[data-code="EAGER_ADVISORY"]');
+    await expect(more).toHaveCount(1);
+    await expect(more).toHaveText('+ 3 more EAGER_ADVISORY \u2014 click to expand all');
+    await expect(more).toHaveAttribute('aria-pressed', 'false');
+    await expect(page.locator('#issues li.hint')).toHaveCount(0);
+
+    await more.click();
+    await expect(page.locator('#issues .issue[data-code="EAGER_ADVISORY"]')).toHaveCount(4);
+
+    // Collapse again returns to the one-row group.
+    await more.click();
+    await expect(page.locator('#issues .issue[data-code="EAGER_ADVISORY"]')).toHaveCount(1);
+
+    // Turning infos off goes back to the hint, and the summary never moved.
+    await page.locator('#issue-chips .chip[data-severity="infos"]').click();
+    await expect(page.locator('#issues .issue')).toHaveCount(0);
+    await expect(page.locator('#issue-count')).toContainText('4 infos');
+  });
+
+  test('an expanded info row still selects the app it mentions', async ({ page }) => {
+    await page.goto(preview.url);
+    await page.locator('#issue-chips .chip[data-severity="infos"]').click();
+    await page.locator('#issues .issue-more[data-code="EAGER_ADVISORY"]').click();
+
+    // Existing row-click contract: the first app name occurring in the
+    // message is selected (every eager advisory mentions "host" first).
+    await page.locator('#issues .issue[data-code="EAGER_ADVISORY"]').nth(2).click();
+    await expect(page.locator('#insp-name')).toHaveText('host');
+  });
 });
 
 test.describe('Studio over the rendering probe fixture', () => {
