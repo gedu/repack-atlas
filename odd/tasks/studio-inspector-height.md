@@ -42,8 +42,10 @@ Branch `fix/studio-inspector-height` from `main` (`c85d1f1`, after #74).
 - [x] T3 Docs: one clause in `docs/PRD.md` §7.2 layout description.
 - [x] T4 Checks: `pnpm build`, `pnpm typecheck`, `pnpm lint`, `pnpm test`,
       `pnpm agent:check`, `pnpm exec playwright test tests/e2e/studio.spec.ts`.
-- [ ] T5 Close: work-unit commit on the branch, then native review per RDD over
-      that commit.
+- [x] T5 Close: work-unit commit `b8cd023` on `fix/studio-inspector-height`;
+      native RDD review over that commit: lineage `review-24657eb2cea255dd`,
+      tier medium (lens review-reliability), closure `approved`, acknowledgement
+      burned authority `sha256:092a13471e…`, no correction round.
 
 ## Evidence log
 
