@@ -124,3 +124,13 @@ Branch `feat/studio-shared-matrix` from `d147683` (main, after #68).
   the Studio view + its tests + PRD §7.2. Review-size note: the whole branch is
   over the 400-line PR budget, so it ships either as two chained PRs or as one
   PR carrying `size:exception` (the route #68 took). The user decides.
+- Native review (RDD on): candidate = both commits of this branch as one
+  target (base `d147683`, committed-only). Lineage `review-9e6f7f0e773d1179`,
+  tier medium (reason `executable_change` in src/core/graph.ts), lens
+  `review-reliability`, 1 materialize run (forecast relayed, then
+  acknowledged). Capture closed `approved` on the last admitted event
+  (store revision `4d5b6f7b…`); the provider-issued `acknowledge-approved`
+  ran unchanged and returned `authority: "burned"`,
+  `consumed_revision: 4d5b6f7b…`. No findings, no correction round.
+  Note: `acknowledge-approved` is a native CLI operation — the `gentle_review`
+  facade rejected it as `controller-only-input` before the CLI run accepted it.
