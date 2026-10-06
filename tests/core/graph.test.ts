@@ -13,11 +13,16 @@ import { fileURLToPath } from 'node:url';
 import { describe, it } from 'node:test';
 import {
   buildFederationGraph,
+  buildSharedMatrix,
   runDoctor,
   validateFederationConfig,
   type FederationConfig,
   type FederationGraphInput,
+  type GraphApp,
+  type ManifestSharedEntry,
   type ParsedFederationManifest,
+  type SharedMatrix,
+  type SharedMatrixCell,
 } from '../../src/core/index.js';
 
 const fixturesDir = path.join(
@@ -233,6 +238,297 @@ describe('buildFederationGraph over the Studio rendering probe fixture', () => {
       graph.edges.map((edge) => edge.to).sort(),
       ['mini_auth', 'mini_store']
     );
+  });
+});
+
+// The shared matrix is the Studio's Compare view (issue #73): the doctor's own
+// host↔remote comparison projected over every app at once. These tests pin the
+// statuses to the doctor branches they mirror, and pin what the matrix must
+// NOT claim (remote↔remote is #55; `unknown` is never a pass).
+function describeMatrix(graph: ReturnType<typeof buildFederationGraph>): string[] {
+  return graph.sharedMatrix.rows.map(
+    (row) =>
+      `${row.package} [${row.singleton ? 'singleton' : 'any'}] ` +
+      row.cells.map((cell) => `${cell.app}=${cell.status}/${cell.version}`).join(' ')
+  );
+}
+
+describe('buildSharedMatrix over the workspace fixtures', () => {
+  it('marks the reference host cell and the remotes that agree with it', async () => {
+    const { config, inputs, findings } = await loadWorkspace('workspace');
+    const graph = buildFederationGraph(config, inputs, findings);
+
+    assert.equal(graph.sharedMatrix.referenceApp, 'host');
+    assert.deepEqual(
+      graph.sharedMatrix.apps,
+      ['host', 'mini_auth', 'mini_store'],
+      'the reference column comes first, remotes stay alphabetical'
+    );
+    assert.deepEqual(describeMatrix(graph), [
+      'react [singleton] host=reference/19.0.0 mini_auth=match/19.0.0 mini_store=match/19.0.0',
+      'react-native [singleton] host=reference/0.79.2 mini_auth=match/0.79.2 mini_store=match/0.79.2',
+    ]);
+  });
+
+  it('marks the drifted singleton the same way the doctor does', async () => {
+    const { config, inputs, findings } = await loadWorkspace('fixture-version-drift');
+    const graph = buildFederationGraph(config, inputs, findings);
+
+    assert.ok(
+      findings.some((finding) => finding.code === 'SHARED_VERSION_DRIFT'),
+      'the fixture must still provoke the drift this matrix mirrors'
+    );
+    assert.deepEqual(describeMatrix(graph), [
+      'react [singleton] host=reference/19.0.0 mini_auth=match/19.0.0 mini_store=drift/19.1.0',
+      'react-native [singleton] host=reference/0.79.2 mini_auth=match/0.79.2 mini_store=match/0.79.2',
+    ]);
+  });
+
+  it('is deterministic: equal input produces byte-identical JSON', async () => {
+    const { config, inputs, findings } = await loadWorkspace('fixture-version-drift');
+    const graph = buildFederationGraph(config, inputs, findings);
+    const first = graph.sharedMatrix;
+
+    assert.equal(
+      JSON.stringify(buildFederationGraph(config, [...inputs].reverse(), findings).sharedMatrix),
+      JSON.stringify(first),
+      'input order must not leak into the matrix'
+    );
+    assert.equal(
+      JSON.stringify(buildSharedMatrix(graph.apps)),
+      JSON.stringify(first),
+      'buildSharedMatrix is a pure function of the app list the graph already carries'
+    );
+  });
+});
+
+describe('buildSharedMatrix edge cases', () => {
+  const shared = (overrides: Partial<ManifestSharedEntry> = {}) => ({
+    name: 'react',
+    version: '19.0.0',
+    singleton: true,
+    eager: true,
+    requiredVersion: '^19.0.0',
+    ...overrides,
+  });
+
+  function matrixOf(
+    hostShared: ManifestSharedEntry[] | undefined,
+    remoteShared: ManifestSharedEntry[] | undefined
+  ) {
+    const config = {
+      host: { manifest: './host.json' },
+      remotes: { wallet: { manifest: './wallet.json', port: 9000 } },
+    } as FederationConfig;
+    // exactOptionalPropertyTypes: `shared` is omitted, never set to undefined.
+    const graph = buildFederationGraph(
+      config,
+      [
+        {
+          name: 'host',
+          role: 'host',
+          manifest: {
+            manifestVersion: 1,
+            id: 'host',
+            name: 'host',
+            ...(hostShared ? { shared: hostShared } : {}),
+          },
+        },
+        {
+          name: 'wallet',
+          role: 'remote',
+          manifest: {
+            manifestVersion: 1,
+            id: 'wallet',
+            name: 'wallet',
+            ...(remoteShared ? { shared: remoteShared } : {}),
+          },
+        },
+      ],
+      []
+    );
+    return graph.sharedMatrix;
+  }
+
+  const CELL = (matrix: SharedMatrix, pkg: string, app: string): SharedMatrixCell =>
+    matrix.rows.find((row) => row.package === pkg)!.cells.find((cell) => cell.app === app)!;
+
+  it('reports unknown versions as unknown, never as a match', () => {
+    const matrix = matrixOf([shared()], [shared({ version: 'unknown' })]);
+
+    assert.equal(CELL(matrix, 'react', 'wallet').status, 'unknown');
+    assert.equal(CELL(matrix, 'react', 'wallet').declared, true);
+    assert.equal(
+      CELL(matrix, 'react', 'host').status,
+      'reference',
+      'a known host version does not rescue the unknown remote side'
+    );
+  });
+
+  it('reports an unknown on the reference side without inventing a verdict', () => {
+    const matrix = matrixOf([shared({ version: 'unknown' })], [shared()]);
+
+    assert.equal(CELL(matrix, 'react', 'host').status, 'reference');
+    assert.equal(CELL(matrix, 'react', 'wallet').status, 'unknown');
+  });
+
+  it('separates a singleton disagreement from a version drift', () => {
+    const matrix = matrixOf([shared({ singleton: true })], [shared({ singleton: false })]);
+
+    assert.equal(CELL(matrix, 'react', 'wallet').status, 'singleton-mismatch');
+  });
+
+  it('keeps non-singleton packages neutral even when the versions differ', () => {
+    const matrix = matrixOf(
+      [shared({ singleton: false })],
+      [shared({ singleton: false, version: '18.2.0' })]
+    );
+
+    assert.equal(matrix.rows[0]?.singleton, false, 'the row records the reference declaration');
+    assert.equal(CELL(matrix, 'react', 'wallet').status, 'coexist');
+  });
+
+  it('marks packages one side does not declare instead of inventing a comparison', () => {
+    const matrix = matrixOf([shared()], [shared({ name: 'zustand' })]);
+
+    assert.deepEqual(
+      matrix.rows.map((row) => `${row.package}:${row.cells.map((c) => c.status).join(',')}`),
+      ['react:reference,absent', 'zustand:absent,uncompared'],
+      'a package the host never declares has nothing to be compared against'
+    );
+    assert.equal(CELL(matrix, 'zustand', 'wallet').declared, true);
+    assert.equal(CELL(matrix, 'zustand', 'host').declared, false);
+    assert.equal(CELL(matrix, 'zustand', 'wallet').version, '19.0.0');
+  });
+
+  it('does not claim a remote-only singleton is not a singleton', () => {
+    // The host declares react only; the remote declares a SINGLETON the host
+    // never mentions. The row's singleton flag comes from the reference, so
+    // without referenceDeclares the page would print a confident `no` for
+    // something the reference never spoke about (AGENTS.md rule 7).
+    const matrix = matrixOf([shared()], [shared({ name: 'zustand', singleton: true })]);
+    const row = matrix.rows.find((entry) => entry.package === 'zustand')!;
+
+    assert.equal(row.referenceDeclares, false, 'the host never declared this package');
+    assert.equal(row.singleton, false, 'the row flag stays the reference declaration');
+    assert.equal(
+      CELL(matrix, 'zustand', 'wallet').singleton,
+      true,
+      'the remote own declaration is still on the cell, unmodified'
+    );
+  });
+
+  it('records the reference declaration for packages the host does declare', () => {
+    const matrix = matrixOf([shared({ singleton: false })], [shared({ singleton: false })]);
+
+    assert.equal(matrix.rows[0]?.referenceDeclares, true);
+    assert.equal(matrix.rows[0]?.singleton, false, 'the host really said: not a singleton');
+  });
+
+  it('handles an app with no manifest and an app with no shared declarations', () => {
+    const config = {
+      host: { manifest: './host.json' },
+      remotes: {
+        wallet: { manifest: './wallet.json', port: 9000 },
+        ghost: { manifest: './ghost.json', port: 9001 },
+      },
+    } as FederationConfig;
+    const graph = buildFederationGraph(
+      config,
+      [
+        {
+          name: 'host',
+          role: 'host',
+          manifest: { manifestVersion: 1, id: 'host', name: 'host', shared: [shared()] },
+        },
+        {
+          name: 'wallet',
+          role: 'remote',
+          manifest: { manifestVersion: 1, id: 'wallet', name: 'wallet' },
+        },
+        { name: 'ghost', role: 'remote' },
+      ],
+      []
+    );
+
+    assert.deepEqual(graph.sharedMatrix.apps, ['host', 'ghost', 'wallet']);
+    assert.deepEqual(
+      graph.sharedMatrix.rows[0]!.cells.map((cell) => `${cell.app}=${cell.status}/${cell.declared}`),
+      ['host=reference/true', 'ghost=absent/false', 'wallet=absent/false']
+    );
+  });
+
+  it('shows remote data without a verdict when the host declares nothing', () => {
+    // Reality check while writing this: `buildFederationGraph` always puts a
+    // host node in the roster (it names it after the host manifest, falling
+    // back to `host`), so a graph never lacks the column — what it can lack is
+    // a host MANIFEST, which is the case that must not invent verdicts.
+    const config = {
+      host: { manifest: './host.json' },
+      remotes: { wallet: { manifest: './wallet.json', port: 9000 } },
+    } as FederationConfig;
+    const graph = buildFederationGraph(
+      config,
+      [
+        { name: 'host', role: 'host' },
+        {
+          name: 'wallet',
+          role: 'remote',
+          manifest: {
+            manifestVersion: 1,
+            id: 'wallet',
+            name: 'wallet',
+            shared: [shared(), shared({ name: 'react-native', version: '0.79.2' })],
+          },
+        },
+      ],
+      []
+    );
+
+    assert.equal(graph.sharedMatrix.referenceApp, 'host');
+    assert.deepEqual(
+      graph.sharedMatrix.rows.map((row) => row.cells.map((cell) => cell.status)),
+      [['absent', 'uncompared'], ['absent', 'uncompared']],
+      'the remote versions are still on the wire, just never as a verdict'
+    );
+    assert.equal(
+      graph.sharedMatrix.rows[0]?.cells[1]?.version,
+      '19.0.0',
+      'uncompared cells keep their data'
+    );
+  });
+
+  it('compares nothing for an app list with no host at all', () => {
+    // The exported pure function can be handed a roster with no host; the
+    // builder never produces one today, so this pins the contract directly.
+    const app = (name: string, role: 'host' | 'remote'): GraphApp => ({
+      name,
+      role,
+      exposes: [],
+      shared: [shared()],
+      native: [],
+      consumedBy: [],
+      detection: { manifestAvailable: true, platforms: [], dynamicImportDetected: false },
+    });
+    const matrix = buildSharedMatrix([app('wallet', 'remote'), app('other', 'remote')]);
+
+    assert.equal(matrix.referenceApp, undefined);
+    assert.deepEqual(matrix.apps, ['other', 'wallet'], 'alphabetical without a reference');
+    assert.deepEqual(
+      matrix.rows.map((row) => row.cells.map((cell) => cell.status)),
+      [['uncompared', 'uncompared']],
+      'no reference means no verdict anywhere (that is #55 territory)'
+    );
+    assert.equal(matrix.rows[0]?.singleton, false, 'no reference means no row label to trust');
+    assert.equal(matrix.rows[0]?.referenceDeclares, false);
+  });
+
+  it('treats a hostile package name as opaque data', () => {
+    const hostile = '<svg onload=alert(7)>';
+    const matrix = matrixOf([shared({ name: hostile })], [shared({ name: hostile })]);
+
+    assert.equal(matrix.rows[0]?.package, hostile);
+    assert.equal(CELL(matrix, hostile, 'wallet').status, 'match');
   });
 });
 
