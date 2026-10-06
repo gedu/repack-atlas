@@ -411,7 +411,10 @@ argv shape and bundler detection, `--auto-ports`, host port 8081, one-shot
   inspector (1fr, tabs Exposes / Shared / Native / Bundle), and below them a
   findings panel scoped to the selected app only — the same error+warning
   mentions the node badge counts, plus an honest hint when infos also mention
-  it. Compare tab: the shared-dependency matrix (`graph.sharedMatrix`, built by
+  it. The inspector card is exactly as tall as the graph card and its tab body
+  scrolls inside the card, so an app that declares dozens of shared packages
+  never pushes the findings panel down the page (single-column layout below
+  900px hugs its content again). Compare tab: the shared-dependency matrix (`graph.sharedMatrix`, built by
   `buildSharedMatrix` in core) — rows are shared packages, columns are apps with
   the host first, and the host column is the reference every other cell is
   judged against; the scope is host-vs-app only (remote-vs-remote is #55 and

@@ -135,6 +135,62 @@ describe('Studio page keeps the mock design tokens', () => {
   });
 });
 
+describe('Studio inspector height is bounded by the graph panel', () => {
+  it('lets the graph panel alone drive the Apps row height', () => {
+    // .main must stretch (no align-items override): the inspector card then
+    // gets the row height, and the row is the graph's height because the
+    // inspector's intrinsic contribution is contained to zero.
+    assert.doesNotMatch(
+      page,
+      /\.main \{[^}]*align-items/,
+      'no align-items override on the graph+inspector row'
+    );
+    assert.match(
+      page,
+      /\.panel-inspector \{[^}]*contain:\s*size/,
+      'the inspector contributes no intrinsic height to the row'
+    );
+    assert.match(
+      page,
+      /\.panel-inspector \{[^}]*flex-direction:\s*column/,
+      'the inspector is a column so the tab body can take the leftover height'
+    );
+  });
+
+  it('makes the tab body the scroller inside the card', () => {
+    assert.match(
+      page,
+      /\.panel-inspector > \.tab-body \{[^}]*min-height:\s*0[^}]*overflow:\s*auto/,
+      'the tab body shrinks below its content and scrolls'
+    );
+    assert.match(
+      page,
+      /\.panel-inspector > \.panel-head,[\s\S]{0,80}\.tabs \{ flex: none; \}/,
+      'the head and the tab strip never shrink'
+    );
+  });
+
+  it('drops containment in the single-column layout', () => {
+    // Declared after the base rules so the cascade resolves in its favour.
+    assert.match(
+      page,
+      /@media \(max-width: 900px\) \{\n\s*\.panel-inspector \{ contain: none; \}/,
+      'stacked panels hug their own content again'
+    );
+    const containmentOff = page.search(/@media \(max-width: 900px\) \{\n\s*\.panel-inspector \{ contain: none/);
+    const baseRule = page.search(/\.panel-inspector \{ display: flex/);
+    assert.ok(containmentOff > baseRule, 'the stacked override comes after the base rule');
+  });
+
+  it('marks the inspector section with the class the CSS hooks', () => {
+    assert.match(
+      page,
+      /<section class="panel panel-inspector" aria-label="Inspector">/,
+      'exactly one inspector card carries the layout hook'
+    );
+  });
+});
+
 describe('Studio page keeps badges on one line', () => {
   it('never lets a pill or a pill cell wrap', () => {
     assert.match(page, /\.pill \{[^}]*white-space: nowrap/);

@@ -646,8 +646,14 @@ test.describe('Studio over the rendering probe fixture', () => {
  * left and three remotes stacked in one column (auth, trading, wallet), with
  * host -> each remote plus trading -> auth and wallet -> auth (the last one
  * spans the trading node). The wallet declares a heuristic native module.
+ * `sharedCount` inflates the host's shared declarations: the inspector layout
+ * test needs a tab long enough to have overflowed the graph panel.
  */
-async function writeStackedWorkspace(dir: string, standalone: string[] = []): Promise<void> {
+async function writeStackedWorkspace(
+  dir: string,
+  standalone: string[] = [],
+  sharedCount = 0
+): Promise<void> {
   const remoteNames = ['auth', 'trading', 'wallet'];
   const entry = (name: string, port: number) => ({
     federationContainerName: name,
@@ -683,8 +689,18 @@ async function writeStackedWorkspace(dir: string, standalone: string[] = []): Pr
     // Deliberately long: the nowrap test needs a version that would wrap.
     { package: 'react-native-mmkv', version: '7.21.11', turboModule: true, confidence },
   ];
+  const sharedOf = (count: number) =>
+    Array.from({ length: count }, (_unused, index) => ({
+      name: `@acme/shared-${String(index).padStart(2, '0')}`,
+      version: '1.0.0',
+      singleton: true,
+      eager: true,
+    }));
   const manifests: Record<string, object> = {
-    host: manifest('host', 'host', remoteNames, []),
+    host: {
+      ...manifest('host', 'host', remoteNames, []),
+      shared: sharedOf(sharedCount),
+    },
     auth: manifest('auth', 'remote', [], []),
     trading: manifest('trading', 'remote', ['auth'], []),
     wallet: manifest('wallet', 'remote', ['auth'], native('heuristic')),
@@ -896,5 +912,166 @@ test.describe('Studio over a workspace with a standalone-declaring remote', () =
     await expect(page.locator('#insp-meta')).toContainText('standalone');
     await page.locator('svg.graph g.node[data-node="wallet"]').click();
     await expect(page.locator('#insp-meta')).not.toContainText('standalone');
+  });
+});
+
+test.describe('Studio over a workspace with many shared declarations', () => {
+  let preview: Preview;
+  let workspace: string;
+
+  test.beforeAll(async () => {
+    workspace = await mkdtemp(path.join(os.tmpdir(), 'atlas-long-shared-'));
+    // 24 packages: the Shared table alone is taller than the graph of 4 apps,
+    // which is exactly what used to push the Findings panel down the page.
+    await writeStackedWorkspace(workspace, [], 24);
+    preview = await startPreview(workspace, basePort + 47);
+  });
+  test.afterAll(async () => {
+    await preview?.stop();
+    if (workspace) await rm(workspace, { recursive: true, force: true });
+  });
+
+  test('the inspector never outgrows the graph panel and scrolls inside its card', async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto(preview.url);
+    await expect(page.locator('svg.graph g.node')).toHaveCount(4);
+    await page.locator('.tab[data-tab="shared"]').click();
+
+    // The long table is really there: 24 rows in the inspector.
+    await expect(page.locator('#tab-body table.kv tbody tr')).toHaveCount(24);
+
+    const graph = await page.locator('.panel[aria-label="Federation graph"]').boundingBox();
+    const inspector = await page.locator('.panel[aria-label="Inspector"]').boundingBox();
+    const findings = await page.locator('#app-findings').boundingBox();
+    expect(graph).not.toBeNull();
+    expect(inspector).not.toBeNull();
+    expect(findings).not.toBeNull();
+
+    // The inspector hugs the graph row instead of growing with its content.
+    expect(inspector!.height).toBeLessThanOrEqual(graph!.height + 1);
+    expect(Math.abs(inspector!.height - graph!.height)).toBeLessThanOrEqual(1);
+
+    // It fits the viewport: the page is not scrolled by a tall tab.
+    const scroll = await page.evaluate(() => ({
+      doc: document.documentElement.scrollHeight,
+      client: document.documentElement.clientHeight,
+      maxPanel: Math.max(
+        document.querySelector<HTMLElement>('.panel[aria-label="Federation graph"]')!.offsetHeight,
+        document.querySelector<HTMLElement>('.panel[aria-label="Inspector"]')!.offsetHeight
+      ),
+    }));
+    expect(scroll.maxPanel).toBeLessThanOrEqual(scroll.client);
+
+    // The findings panel sits right below the graph row, so its top is driven
+    // by the graph, never by the number of shared rows.
+    expect(findings!.y).toBeGreaterThanOrEqual(graph!.y + graph!.height);
+    expect(findings!.y - (graph!.y + graph!.height)).toBeLessThanOrEqual(20);
+  });
+
+  test('the overflow scrolls inside the card instead of the page', async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto(preview.url);
+    await page.locator('.tab[data-tab="shared"]').click();
+
+    // Behaviour, not selectors: the last row starts hidden and becomes
+    // reachable by scrolling SOMETHING inside the inspector card, while the
+    // page itself never moves. Which node is the scroller (the tab body or the
+    // table's own scroll wrapper, which must scroll horizontally anyway for
+    // the sticky Package column) is deliberately not asserted.
+    const probe = () =>
+      page.evaluate(() => {
+        const card = document.querySelector<HTMLElement>('.panel[aria-label="Inspector"]')!;
+        const rows = card.querySelectorAll<HTMLElement>('#tab-body table.kv tbody tr');
+        const last = rows.item(rows.length - 1);
+        if (!last) {
+          return { rows: rows.length, visible: false, scrollerInCard: false, pageScroll: window.scrollY };
+        }
+        const host = card.getBoundingClientRect();
+        const box = last.getBoundingClientRect();
+        let scroller: HTMLElement | null = last.parentElement;
+        while (scroller && scroller !== card.parentElement) {
+          if (scroller.scrollHeight > scroller.clientHeight + 1) break;
+          scroller = scroller.parentElement;
+        }
+        return {
+          rows: rows.length,
+          visible: box.bottom <= host.bottom + 1 && box.top >= host.top - 1,
+          scrollerInCard: !!scroller && scroller !== card && card.contains(scroller),
+          pageScroll: window.scrollY,
+        };
+      });
+
+    const before = await probe();
+    expect(before.rows).toBe(24);
+    expect(before.visible).toBe(false);
+    expect(before.scrollerInCard).toBe(true);
+
+    // Scroll whatever inside the card actually overflows (no assumption about
+    // which node ended up being the scroller).
+    await page.locator('.panel[aria-label="Inspector"]').evaluate((card: HTMLElement) => {
+      for (const node of Array.from(card.querySelectorAll<HTMLElement>('*'))) {
+        if (node.scrollHeight > node.clientHeight + 1) node.scrollTop = node.scrollHeight;
+      }
+    });
+
+    const after = await probe();
+    expect(after.visible).toBe(true);
+    expect(after.pageScroll).toBe(before.pageScroll);
+  });
+
+  test('the stacked single-column layout hugs content and lets the page scroll', async ({ page }) => {
+    // Below the breakpoint every panel owns a row: containment would collapse
+    // the inspector card to its header, so it must be off there and nothing
+    // inside the card may scroll — the page itself does.
+    await page.setViewportSize({ width: 820, height: 700 });
+    await page.goto(preview.url);
+    await page.locator('.tab[data-tab="shared"]').click();
+
+    const inspector = page.locator('.panel[aria-label="Inspector"]');
+    await expect(inspector.locator('#tab-body table.kv tbody tr')).toHaveCount(24);
+
+    const card = await inspector.evaluate((node: HTMLElement) => {
+      const inner = Array.from(node.querySelectorAll<HTMLElement>('*')).filter(
+        (child) => child.scrollHeight > child.clientHeight + 1
+      );
+      return {
+        contain: getComputedStyle(node).contain,
+        card: node.getBoundingClientRect().height,
+        innerScrollers: inner.length,
+      };
+    });
+    expect(card.contain).toBe('none');
+    // The card hugs its 24 rows instead of being capped to a grid row; and
+    // stacked there is no nested scroller, the page itself scrolls.
+    expect(card.card).toBeGreaterThan(700);
+    expect(card.innerScrollers).toBe(0);
+
+    // The last row is reachable by scrolling the page.
+    await inspector.locator('#tab-body table.kv tbody tr').last().scrollIntoViewIfNeeded();
+    expect(await page.evaluate(() => window.scrollY)).toBeGreaterThan(0);
+    const lastVisible = await inspector.evaluate((node: HTMLElement) => {
+      const rows = node.querySelectorAll<HTMLElement>('#tab-body table.kv tbody tr');
+      const last = rows.item(rows.length - 1)!;
+      const box = last.getBoundingClientRect();
+      return box.top >= 0 && box.bottom <= window.innerHeight;
+    });
+    expect(lastVisible).toBe(true);
+  });
+
+  test('a short tab keeps the card at the graph row height with no inner scroll', async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto(preview.url);
+    await page.locator('.tab[data-tab="bundle"]').click();
+
+    const graph = await page.locator('.panel[aria-label="Federation graph"]').boundingBox();
+    const inspector = await page.locator('.panel[aria-label="Inspector"]').boundingBox();
+    expect(graph).not.toBeNull();
+    expect(inspector).not.toBeNull();
+    expect(Math.abs(inspector!.height - graph!.height)).toBeLessThanOrEqual(1);
+    const metrics = await page.locator('#tab-body').evaluate((node: HTMLElement) => ({
+      scrollHeight: node.scrollHeight,
+      clientHeight: node.clientHeight,
+    }));
+    expect(metrics.scrollHeight).toBeLessThanOrEqual(metrics.clientHeight + 1);
   });
 });
