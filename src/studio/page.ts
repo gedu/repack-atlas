@@ -142,8 +142,11 @@ export const STUDIO_PAGE_HTML = `<!doctype html>
   .view { display: grid; gap: 14px; }
   .view[hidden] { display: none; }
 
-  /* Graph (1.55fr) + inspector (1fr), full-width findings below. */
-  .main { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr); gap: 14px; align-items: start; }
+  /* Graph (1.55fr) + inspector (1fr), full-width findings below.
+     The row height is driven by the graph panel ALONE: 'align-items' stays at
+     its default 'stretch' and the inspector is size-contained (below), so a
+     long Shared table can never grow the row and push the findings panel down. */
+  .main { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr); gap: 14px; }
   @media (max-width: 900px) { .main { grid-template-columns: minmax(0, 1fr); } }
 
   .panel { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; min-width: 0; }
@@ -195,6 +198,23 @@ export const STUDIO_PAGE_HTML = `<!doctype html>
   .tab:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   .insp-title { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
   .insp-title strong { font-size: 16px; }
+  /* The inspector is exactly as tall as the graph panel and scrolls inside its
+     own card. 'contain: size' makes its intrinsic contribution to the grid row
+     zero, so the row is the graph's height and the default 'stretch' hands that
+     height back to this card; the tab body is the scroller. A browser without
+     containment falls back to the old behaviour (row grows, nothing clips), so
+     the height cap is the only thing that degrades, never the content. */
+  .panel-inspector { display: flex; flex-direction: column; contain: size; }
+  .panel-inspector > .panel-head,
+  .panel-inspector > .tabs { flex: none; }
+  .panel-inspector > .tab-body { flex: 1 1 auto; min-height: 0; overflow: auto; }
+  /* Single column (stacked): every panel owns a row and hugs its own content,
+     so there is no row height to match and size containment would collapse the
+     card to its header. Declared after the base rule so it wins. */
+  @media (max-width: 900px) {
+    .panel-inspector { contain: none; }
+    .panel-inspector > .tab-body { overflow: visible; }
+  }
   .tab-body { padding: 12px 14px 14px; display: grid; gap: 10px; }
   .hint { font-size: 12.5px; color: var(--ink-3); margin: 0; }
 
@@ -316,7 +336,7 @@ export const STUDIO_PAGE_HTML = `<!doctype html>
       </div>
     </section>
 
-    <section class="panel" aria-label="Inspector">
+    <section class="panel panel-inspector" aria-label="Inspector">
       <div class="panel-head">
         <div class="insp-title"><strong id="insp-name"></strong><span class="url" id="insp-meta"></span></div>
       </div>
