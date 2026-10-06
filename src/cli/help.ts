@@ -45,6 +45,14 @@ Options
                                 to warning (exit stays 0 without other errors)
   --fail-on-warnings            Opt-in: static warnings also exit 1 (CI gate
                                 mode). Heuristic advisories never escalate.
+  --show-infos                  List info-severity findings instead of the
+                                hint naming hidden codes. Human output only:
+                                --json always reports everything and exit
+                                codes never change.
+  --code <CODE>                 Show only this finding code, repeatable; each
+                                match is listed in full (no collapsing). Human
+                                output only, exit codes unchanged. An unknown
+                                code matches nothing.
   --help                        Print this help
 
 Exit codes

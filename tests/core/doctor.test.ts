@@ -93,9 +93,9 @@ describe('runDoctor', () => {
 
     // The conflicting fixture puts react-native eager: true on the host and
     // eager: false on the remote — the expected host-eager/remote-lazy
-    // convention — so it is an advisory, not an error.
+    // convention — so it is informational, not a warning or an error.
     const eager = findingFor('EAGER_ADVISORY');
-    assert.equal(eager.severity, 'warning');
+    assert.equal(eager.severity, 'info');
     assert.ok(eager.message.includes('true'));
     assert.ok(eager.message.includes('false'));
     assert.ok(eager.message.includes('host-eager/remote-lazy convention'));
@@ -141,6 +141,11 @@ describe('runDoctor', () => {
     });
 
     assert.deepEqual(codes(report), ['EAGER_ADVISORY']);
+    assert.equal(
+      report.findings.find((finding) => finding.code === 'EAGER_ADVISORY')
+        ?.severity,
+      'info'
+    );
     assert.equal(doctorExitCode(report), 0);
   });
 

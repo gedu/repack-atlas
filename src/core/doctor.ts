@@ -127,7 +127,7 @@ function checkSharedDeps(
     if (hostEntry.eager !== remoteEntry.eager) {
       const conventional = hostEntry.eager && !remoteEntry.eager; // host-eager / remote-lazy = MF convention
       findings.push({
-        severity: conventional ? 'warning' : 'error',
+        severity: conventional ? 'info' : 'error', // the convention is expected, not suspicious: info, never a warning
         code: conventional ? 'EAGER_ADVISORY' : 'EAGER_MISMATCH',
         message: conventional
           ? `Shared dependency "${name}" is eager: true on host "${host.name}" but eager: false on remote "${remoteName}" — expected host-eager/remote-lazy convention; reported as advisory.`

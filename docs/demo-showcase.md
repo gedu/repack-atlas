@@ -175,25 +175,36 @@ never writes them. The Atlas-owned wrapper writes the asset next to the app
 node ../repack-atlas/dist/cli.js doctor; echo "EXIT=$?"
 ```
 
-Verified real output on the clean showcase:
+Verified real output on the clean showcase (default human output, tail):
 
 ```
-summary: 0 errors, 62 warnings, 0 info
+warnings (5):
+  HEURISTIC_ADVISORY [heuristic] Native module "@gorhom/bottom-sheet" (5.2.14) used by remote "trading" is not in host "host" nativeModules, but the host list is heuristic or incomplete (dynamic imports were detected); verify manually.
+  + 4 more HEURISTIC_ADVISORY (--code HEURISTIC_ADVISORY lists each)
+
+infos (57 hidden — --show-infos or --code CODE to list):
+  EAGER_ADVISORY [static] × 57
+
+summary: 0 errors, 5 warnings, 57 info
 EXIT=0
 ```
 
-The 62 warnings are honest findings from the real workspace: 57
+These are honest findings from the real workspace, not a broken repo: 57
 `EAGER_ADVISORY` (host is `eager: true`, mini-apps `eager: false` on the
-same 19 shared deps — advisory by design) and 5 `HEURISTIC_ADVISORY`
-(native modules seen in remotes but missing from the host's heuristic
-native list). Present this as "the tool reads your real graph and tells you
-what a human would miss", not as "your repo is broken".
+same 19 shared deps — the Module Federation convention, so info severity,
+hidden by default in the human output; `--show-infos` or `--code
+EAGER_ADVISORY` lists them) and 5 `HEURISTIC_ADVISORY` (native modules seen
+in remotes but missing from the host's heuristic native list). `--json`
+always reports everything: summary `{"errors":0,"warnings":0,"advisories":5,"infos":57}`.
+Present this as "the tool reads your real graph and tells you what a human
+would miss — and ranks convention from suspicion", not as "your repo is
+broken".
 
 The exit-code contract — show all four states, each with its real trigger:
 
 | state | trigger (verified) | result |
 |-------|--------------------|--------|
-| clean | untouched workspace | 0 errors, 62 warnings, exit 0 |
+| clean | untouched workspace | 0 errors, 5 warnings + 57 hidden infos, exit 0 |
 | drift | edit a gitignored manifest: auth `shared[react].version` 19.2.8 → 19.1.0 | `SHARED_VERSION_DRIFT [static]` error, **exit 1** |
 | cycle | synth: auth manifest `remotes`→trading, trading→auth | `REMOTE_CYCLE [static]` warning, **exit 0** (cycles are advisory by design) |
 | corrupt | overwrite wallet manifest with garbage | `MANIFEST_UNREADABLE [static]` error naming `wallet`, other apps still checked, **exit 1** |
@@ -201,9 +212,9 @@ The exit-code contract — show all four states, each with its real trigger:
 
 Real output of the corrupt state (run on `fixtures/fixture-corrupt-manifest`,
 where the `mini_store` manifest is truncated JSON; absolute paths shortened).
-With the showcase, the finding names `wallet` the same way and the summary
-is `1 error, 42 warnings, 0 info` (wallet is not compared, so warnings drop
-from 62 to 42), exit 1:
+On the showcase the same corruption names `wallet` and exits 1 with
+`summary: 1 error, 4 warnings, 38 info` — the counts drop because wallet's
+shared deps and natives are never compared (verified, then restored):
 
 ```
 $ node dist/cli.js doctor --workspace fixtures/fixture-corrupt-manifest; echo "EXIT=$?"
@@ -295,8 +306,12 @@ For the GIF, record:
 1. The runner bringing the four apps up (statuses live).
 2. Studio in the browser: 4 ready nodes, **5 real edges** — host→auth,
    host→trading, host→wallet and trading→auth, wallet→auth (the mini-apps
-   genuinely consume auth in this showcase), expose list per node, 62
-   findings panel, SSE-live (no refresh needed).
+   genuinely consume auth in this showcase), expose list per node. The page
+   has two top-level tabs: **Apps** (graph, inspector and a panel of the
+   findings that mention the selected app) and **Doctor** (the workspace-wide
+   findings table with severity chips — `errors` / `warnings` on, `infos` off
+   by default — and repeated codes collapsed behind a `+ N more CODE — click
+   to expand all`), SSE-live (no refresh needed).
 3. `curl http://127.0.0.1:8099/api/graph` next to the page — same payload.
 
 Studio is read-only forever (no write endpoints, no config editing, manifest

@@ -274,7 +274,13 @@ not run — missing option, no/invalid config, host manifest missing/corrupt, or
 every remote manifest exists but is unreadable (missing manifests keep `1`, or `0` with `--allow-missing-manifests`). `NOTHING_COMPARED` (warning, static) is added when remotes exist and none was compared (all missing, or missing plus unreadable), with or without `--allow-missing-manifests`, so a clean exit does not read as "the federation was checked"; like any warning it only affects the exit code under `--fail-on-warnings`, and it is not added in the all-unreadable exit-`2` case, where `MANIFEST_UNREADABLE` already says it. `2` means "no answer", `1` means "bad answer"; CI
 treats both as failure. Heuristic honesty is preserved: `dynamicImportDetected`
 or `confidence: heuristic` downgrades missing-native findings to advisories —
-Atlas reports what it cannot check instead of guessing.
+Atlas reports what it cannot check instead of guessing. Severity `info` is
+reserved for findings that are expected by convention: the eager mismatch in
+the host-eager/remote-lazy direction is `EAGER_ADVISORY` at `info`, because a
+host loading a dependency eagerly while the remote stays lazy is the Module
+Federation convention, not a suspicion (the reverse direction stays
+`EAGER_MISMATCH`, error). Info never moves the exit code and never escalates
+under `--fail-on-warnings` — that flag only escalates static warnings.
 
 ### 7.1.1 `repack-atlas dev`
 
@@ -400,9 +406,14 @@ argv shape and bundler detection, `--auto-ports`, host port 8081, one-shot
   in the repack fork): accent `#8232ff`/`#9b6dff`, logo gradient
   `#9b6dff → #3ce4cb`, light + dark via `prefers-color-scheme`, keyboard-focusable
   graph nodes, `prefers-reduced-motion` respected.
-- Layout: top bar (title, URL, one pill per app with status dot + port); graph
-  (1.55fr) + inspector (1fr, tabs Exposes / Shared / Native / Bundle); full-width
-  doctor findings list with severity stripes; cycle edges dashed red.
+- Layout: top-level tabs **Apps | Doctor** under the top bar (title, URL, one
+  pill per app with status dot + port). Apps tab: graph (1.55fr) + inspector
+  (1fr, tabs Exposes / Shared / Native / Bundle), and below them a findings
+  panel scoped to the selected app only — the same error+warning mentions the
+  node badge counts, plus an honest hint when infos also mention it. Doctor
+  tab: the workspace-wide findings table with severity chips, per-code
+  collapse and severity stripes; clicking a row jumps to Apps with that app
+  selected. Cycle edges dashed red.
 - A remote that declares `standalone: true` in `repack-federation.json` gets a
   read-only `standalone` badge on its node (and inspector line). The flag is an
   owner declaration: Atlas validates only its type and never detects or acts on

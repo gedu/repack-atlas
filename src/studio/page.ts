@@ -126,6 +126,22 @@ export const STUDIO_PAGE_HTML = `<!doctype html>
   }
   .live.err { color: var(--bad); background: var(--bad-soft); }
 
+  /* Top-level views: Apps (graph + inspector + per-app findings) vs the
+     workspace-wide Doctor table. Distinct from the inspector's .tabs. */
+  .view-tabs {
+    display: flex; gap: 4px; background: var(--surface);
+    border: 1px solid var(--line); border-radius: 10px; padding: 0 8px;
+  }
+  .view-tab {
+    font: inherit; font-size: 13px; font-weight: 600; color: var(--ink-2);
+    background: none; border: 0; border-bottom: 2px solid transparent;
+    padding: 9px 12px; cursor: pointer; margin-bottom: -1px;
+  }
+  .view-tab[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--accent); }
+  .view-tab:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .view { display: grid; gap: 14px; }
+  .view[hidden] { display: none; }
+
   /* Graph (1.55fr) + inspector (1fr), full-width findings below. */
   .main { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr); gap: 14px; align-items: start; }
   @media (max-width: 900px) { .main { grid-template-columns: minmax(0, 1fr); } }
@@ -211,6 +227,17 @@ export const STUDIO_PAGE_HTML = `<!doctype html>
   .pill.warn { color: var(--warn); background: var(--warn-soft); }
   .pill.bad { color: var(--bad); background: var(--bad-soft); }
 
+  /* Doctor findings: severity filter chips (same pill language as .sess). */
+  .chips { display: flex; gap: 6px; flex-wrap: wrap; }
+  .chip {
+    font: inherit; font-family: var(--mono); font-size: 12px; color: var(--ink-2);
+    cursor: pointer; padding: 2px 9px; border-radius: 999px;
+    background: var(--surface-2); border: 1px solid var(--line);
+    font-variant-numeric: tabular-nums;
+  }
+  .chip[aria-pressed="true"] { border-color: var(--accent); color: var(--accent-ink); background: var(--accent-soft); }
+  .chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
   /* Doctor findings with severity stripes. */
   .issues { list-style: none; margin: 0; padding: 6px; display: grid; gap: 4px; }
   .issue {
@@ -226,6 +253,13 @@ export const STUDIO_PAGE_HTML = `<!doctype html>
   .code { font-family: var(--mono); font-size: 11.5px; font-weight: 500; color: var(--ink-2); white-space: nowrap; }
   .issue .msg { font-size: 13px; overflow-wrap: anywhere; }
   .issue .where { font-family: var(--mono); font-size: 11.5px; color: var(--ink-3); white-space: nowrap; }
+  .issue-more {
+    font: inherit; font-family: var(--mono); font-size: 11.5px; color: var(--ink-3);
+    background: none; border: 1px dashed var(--line-strong); border-radius: 6px;
+    padding: 3px 10px; margin: 2px 0 0 14px; cursor: pointer;
+  }
+  .issue-more:hover { border-color: var(--accent); color: var(--accent-ink); }
+  .issue-more:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   @media (max-width: 560px) {
     .issue { grid-template-columns: 4px 1fr; }
     .issue .code, .issue .msg, .issue .where { grid-column: 2; }
@@ -251,6 +285,14 @@ export const STUDIO_PAGE_HTML = `<!doctype html>
     <div class="sessions" id="sessions"></div>
   </header>
 
+  <nav class="view-tabs" id="view-tabs" role="tablist" aria-label="Studio views">
+    <button class="view-tab" role="tab" type="button" id="view-tab-apps" data-view="apps"
+            aria-selected="true" aria-controls="view-apps">Apps</button>
+    <button class="view-tab" role="tab" type="button" id="view-tab-doctor" data-view="doctor"
+            aria-selected="false" aria-controls="view-doctor">Doctor</button>
+  </nav>
+
+  <section class="view" id="view-apps" role="tabpanel" aria-labelledby="view-tab-apps">
   <div class="main">
     <section class="panel" aria-label="Federation graph">
       <div class="panel-head">
@@ -279,9 +321,18 @@ export const STUDIO_PAGE_HTML = `<!doctype html>
     </section>
   </div>
 
-  <section class="panel" aria-label="Doctor findings">
+    <section class="panel" id="app-findings" aria-label="Findings for the selected app">
+      <div class="panel-head">
+        <h2 id="app-findings-title">Findings</h2>
+      </div>
+      <ul class="issues" id="app-issues"></ul>
+    </section>
+  </section>
+
+  <section class="panel view" id="view-doctor" role="tabpanel" aria-labelledby="view-tab-doctor" aria-label="Doctor findings" hidden>
     <div class="panel-head">
       <h2>Doctor findings</h2>
+      <div class="chips" id="issue-chips"></div>
       <span class="hint" id="issue-count"></span>
     </div>
     <ul class="issues" id="issues"></ul>
@@ -301,6 +352,14 @@ export const STUDIO_PAGE_HTML = `<!doctype html>
   var graph = { apps: [], edges: [], findings: [] };
   var selected = null;
   var tab = 'exposes';
+  // Top-level view ('apps' or 'doctor'). Module state like the inspector
+  // 'tab': SSE re-renders must never reset it back to the default view.
+  var view = 'apps';
+  // Panel filters: error+warning visible by default, info hidden until the
+  // chip enables it (same signal-to-noise rule as the CLI doctor panel).
+  var showSeverity = { error: true, warning: true, info: false };
+  // Finding codes the human expanded beyond the first row, e.g. code -> true.
+  var expandedCodes = {};
   var svg = document.getElementById('graph');
   var toastTimer = null;
 
@@ -562,13 +621,22 @@ export const STUDIO_PAGE_HTML = `<!doctype html>
         if (own[f].severity === 'error') errors++;
         else if (own[f].severity === 'warning') warnings++;
       }
+      var mentions = errors + warnings;
       var node = svgEl('g', {
         'class': 'node' + (name === selected ? ' sel' : ''),
         tabindex: '0', role: 'button',
         'aria-label': name + ', ' + app.role + ' on ' + portLabel(app) + ', ' + statusOf(app) +
-          (app.standalone === true ? ', standalone' : ''),
+          (app.standalone === true ? ', standalone' : '') +
+          (truthy(mentions) ? ', ' + mentions + ' findings mention ' + name : ''),
         'data-node': name
       }, svg);
+      if (truthy(mentions)) {
+        // The badges count findings whose MESSAGE mentions this app (the
+        // doctor's messages carry no app field). Label the badge group so it
+        // is not misread as "findings belonging to this app".
+        var tip = svgEl('title', {}, node);
+        tip.appendChild(document.createTextNode(mentions + ' findings mention ' + name));
+      }
       svgEl('rect', { x: place.x, y: place.y, width: W, height: H, rx: 9, 'class': 'box' }, node);
       svgText(node, { x: place.x + 14, y: place.y + 20, 'class': 'role' }, app.role.toUpperCase());
       svgText(node, { x: place.x + 14, y: place.y + 41, 'class': 'name' }, name);
@@ -623,6 +691,29 @@ export const STUDIO_PAGE_HTML = `<!doctype html>
 
   function selectHandler(name) {
     return function () { select(name); };
+  }
+
+  function expandHandler(code) {
+    return function () {
+      if (expandedCodes[code]) delete expandedCodes[code];
+      else expandedCodes[code] = true;
+      renderIssues();
+    };
+  }
+
+  function renderViewTabs() {
+    var buttons = document.getElementById('view-tabs').querySelectorAll('.view-tab');
+    for (var i = 0; i < buttons.length; i++) {
+      buttons[i].setAttribute('aria-selected',
+        String(buttons[i].getAttribute('data-view') === view));
+    }
+    document.getElementById('view-apps').hidden = view !== 'apps';
+    document.getElementById('view-doctor').hidden = view !== 'doctor';
+  }
+
+  function setView(name) {
+    view = name;
+    renderViewTabs();
   }
 
   function select(name, requestedTab) {
@@ -877,47 +968,171 @@ export const STUDIO_PAGE_HTML = `<!doctype html>
     else renderExposes(app, body);
   }
 
+  function severityTotal(severity) {
+    var count = 0;
+    for (var i = 0; i < graph.findings.length; i++) {
+      if (graph.findings[i].severity === severity) count++;
+    }
+    return count;
+  }
+
+  function renderIssueChips() {
+    var host = clear(document.getElementById('issue-chips'));
+    var chips = [
+      ['error', 'errors'],
+      ['warning', 'warnings'],
+      ['info', 'infos']
+    ];
+    for (var c = 0; c < chips.length; c++) {
+      var chip = el('button', 'chip', chips[c][1] + ' (' + severityTotal(chips[c][0]) + ')');
+      chip.type = 'button';
+      chip.setAttribute('data-severity', chips[c][1]);
+      chip.setAttribute('aria-pressed', String(showSeverity[chips[c][0]] === true));
+      chip.addEventListener('click', (function (key) {
+        return function () {
+          showSeverity[key] = !showSeverity[key];
+          renderIssues();
+        };
+      })(chips[c][0]));
+      host.appendChild(chip);
+    }
+  }
+
+  function issueRow(finding) {
+    var item = el('li');
+    var button = el('button', 'issue');
+    button.type = 'button';
+    button.setAttribute('data-code', String(finding.code));
+    button.appendChild(el('span', 'stripe' + (finding.severity === 'error' ? ' bad' : finding.severity === 'info' ? ' info' : '')));
+    button.appendChild(el('span', 'code', String(finding.code)));
+    button.appendChild(el('span', 'msg', String(finding.message)));
+    button.appendChild(el('span', 'where', finding.confidence === 'heuristic' ? 'heuristic' : 'static'));
+    button.addEventListener('click', function (candidate) {
+      return function () {
+        for (var a = 0; a < graph.apps.length; a++) {
+          if (String(candidate.message).indexOf(graph.apps[a].name) !== -1) {
+            // The jump must keep working across the top-level tabs: a row in
+            // the Doctor view selects an app that lives in the Apps view.
+            setView('apps');
+            select(graph.apps[a].name);
+            return;
+          }
+        }
+      };
+    }(finding));
+    item.appendChild(button);
+    return item;
+  }
+
+  // Apps-view panel: the findings that mention the selected app, no chips
+  // and no per-code collapse (the subsets are small; keep it a plain list).
+  // The listed set is the badge set (error + warning), so the header count
+  // and the node badge can never disagree; infos are counted in a hint and
+  // listed in the Doctor tab.
+  function renderAppFindings() {
+    var heading = document.getElementById('app-findings-title');
+    var list = clear(document.getElementById('app-issues'));
+    var app = appByName(selected);
+    if (!app) {
+      heading.textContent = 'Findings';
+      list.appendChild(el('li', 'hint', 'Select an app to see the findings that mention it.'));
+      return;
+    }
+    var mentions = findingsFor(app.name);
+    var shown = [];
+    var hiddenInfos = 0;
+    for (var m = 0; m < mentions.length; m++) {
+      if (mentions[m].severity === 'info') hiddenInfos++;
+      else shown.push(mentions[m]);
+    }
+    heading.textContent = 'Findings \\u00b7 ' + app.name + ' (' + shown.length + ')';
+    if (!truthy(shown.length) && !truthy(hiddenInfos)) {
+      list.appendChild(el('li', 'hint', 'No findings mention ' + app.name + '.'));
+      return;
+    }
+    for (var i = 0; i < shown.length; i++) list.appendChild(issueRow(shown[i]));
+    if (truthy(hiddenInfos)) {
+      list.appendChild(el('li', 'hint', hiddenInfos + ' info ' +
+        (hiddenInfos === 1 ? 'finding' : 'findings') +
+        ' hidden \\u2014 the Doctor tab lists them.'));
+    }
+  }
+
   function renderIssues() {
+    renderIssueChips();
     var list = clear(document.getElementById('issues'));
-    var errors = 0, warnings = 0, infos = 0;
+    var errors = severityTotal('error');
+    var warnings = severityTotal('warning');
+    var infos = severityTotal('info');
+
+    // Group visible findings by code, first-occurrence order; groups larger
+    // than one collapse behind a "+ N more" button, collapsed by default
+    // (same signal-to-noise rule as the CLI doctor panel).
+    var order = [];
+    var groups = {};
+    var hiddenInfos = 0;
     for (var i = 0; i < graph.findings.length; i++) {
       var finding = graph.findings[i];
-      if (finding.severity === 'error') errors++;
-      else if (finding.severity === 'warning') warnings++;
-      else infos++;
-
-      var item = el('li');
-      var button = el('button', 'issue');
-      button.type = 'button';
-      button.setAttribute('data-code', String(finding.code));
-      button.appendChild(el('span', 'stripe' + (finding.severity === 'error' ? ' bad' : finding.severity === 'info' ? ' info' : '')));
-      button.appendChild(el('span', 'code', String(finding.code)));
-      button.appendChild(el('span', 'msg', String(finding.message)));
-      button.appendChild(el('span', 'where', finding.confidence === 'heuristic' ? 'heuristic' : 'static'));
-      button.addEventListener('click', function (candidate) {
-        return function () {
-          for (var a = 0; a < graph.apps.length; a++) {
-            if (String(candidate.message).indexOf(graph.apps[a].name) !== -1) {
-              select(graph.apps[a].name);
-              return;
-            }
-          }
-        };
-      }(finding));
-      item.appendChild(button);
-      list.appendChild(item);
+      var severity = finding.severity;
+      if (showSeverity[severity] !== true) {
+        if (severity === 'info') hiddenInfos++;
+        continue;
+      }
+      var code = String(finding.code);
+      if (!groups[code]) { groups[code] = []; order.push(code); }
+      groups[code].push(finding);
     }
-    if (!truthy(graph.findings.length)) {
-      list.appendChild(el('li', 'hint', 'No findings.'));
+
+    var visibleRows = 0;
+    for (var g = 0; g < order.length; g++) {
+      var groupCode = order[g];
+      var findings = groups[groupCode];
+      var expanded = expandedCodes[groupCode] === true;
+      list.appendChild(issueRow(findings[0]));
+      visibleRows++;
+      if (!expanded) {
+        if (findings.length > 1) {
+          list.appendChild(moreButton(groupCode, false,
+            '+ ' + (findings.length - 1) + ' more ' + groupCode + ' \\u2014 click to expand all'));
+        }
+      } else {
+        for (var r = 1; r < findings.length; r++) {
+          list.appendChild(issueRow(findings[r]));
+          visibleRows++;
+        }
+        list.appendChild(moreButton(groupCode, true,
+          '\\u25b4 ' + findings.length + ' ' + groupCode + ' \\u2014 click to collapse'));
+      }
+    }
+
+    if (!truthy(visibleRows)) {
+      list.appendChild(el('li', 'hint', truthy(graph.findings.length)
+        ? (truthy(hiddenInfos)
+          ? 'infos are hidden \\u2014 enable the infos chip to show them'
+          : 'No findings match the selected severities.')
+        : 'No findings.'));
     }
     document.getElementById('issue-count').textContent =
       errors + ' errors \\u00b7 ' + warnings + ' warnings \\u00b7 ' + infos + ' infos';
   }
 
+  // The "+ N more" / collapse toggle of a code group (Doctor view only).
+  function moreButton(code, expanded, text) {
+    var button = el('button', 'issue-more');
+    button.type = 'button';
+    button.setAttribute('data-code', code);
+    button.setAttribute('aria-pressed', String(expanded));
+    button.textContent = text;
+    button.addEventListener('click', expandHandler(code));
+    return button;
+  }
+
   function render() {
+    renderViewTabs();
     drawGraph();
     renderSessions();
     renderInspector();
+    renderAppFindings();
     renderIssues();
   }
 
@@ -989,6 +1204,21 @@ export const STUDIO_PAGE_HTML = `<!doctype html>
       tab = button.getAttribute('data-tab');
       renderInspector();
     }
+  });
+
+  var viewTabs = document.getElementById('view-tabs');
+  viewTabs.addEventListener('click', function (event) {
+    var button = event.target && event.target.closest ? event.target.closest('.view-tab') : null;
+    if (button) setView(button.getAttribute('data-view'));
+  });
+  viewTabs.addEventListener('keydown', function (event) {
+    var views = ['apps', 'doctor'];
+    var step = event.key === 'ArrowRight' ? 1 : event.key === 'ArrowLeft' ? views.length - 1 : 0;
+    if (!step) return;
+    event.preventDefault();
+    var next = views[(views.indexOf(view) + step) % views.length];
+    setView(next);
+    document.getElementById('view-tab-' + next).focus();
   });
 
   document.getElementById('workspace-url').textContent = window.location.host;

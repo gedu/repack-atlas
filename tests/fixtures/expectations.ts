@@ -39,6 +39,36 @@ export interface WorkspaceExpectation {
 export const EXPECTATIONS: WorkspaceExpectation[] = [
   { dir: 'workspace', findings: [], exitCode: 0 },
   {
+    // The host-eager/remote-lazy direction is the MF convention: one info
+    // finding per shared dep × remote (react + react-native × two remotes).
+    dir: 'fixture-eager-advisory',
+    findings: [
+      {
+        code: 'EAGER_ADVISORY',
+        severity: 'info',
+        confidence: 'static',
+      },
+      {
+        code: 'EAGER_ADVISORY',
+        severity: 'info',
+        confidence: 'static',
+      },
+      {
+        code: 'EAGER_ADVISORY',
+        severity: 'info',
+        confidence: 'static',
+      },
+      {
+        code: 'EAGER_ADVISORY',
+        severity: 'info',
+        confidence: 'static',
+      },
+    ],
+    exitCode: 0,
+    // Info findings never escalate, even under --fail-on-warnings.
+    failOnWarningsExit: 0,
+  },
+  {
     dir: 'fixture-remote-cycle',
     findings: [
       { code: 'REMOTE_CYCLE', severity: 'warning', confidence: 'static' },

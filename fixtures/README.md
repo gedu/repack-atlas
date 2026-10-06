@@ -60,6 +60,7 @@ tests (e.g. the remote-cycle graph test) rely on.
 | Workspace | Provokes | Severity | Exit |
 |---|---|---|---|
 | `workspace/` | nothing — clean workspace | — | `0` |
+| `fixture-eager-advisory/` | `EAGER_ADVISORY` × 4 (host-eager/remote-lazy convention: react + react-native × two remotes) | info | `0` |
 | `fixture-remote-cycle/` | `REMOTE_CYCLE` | warning | `0` |
 | `fixture-version-drift/` | `SHARED_VERSION_DRIFT` | error | `1` |
 | `fixture-missing-native/` | `MISSING_NATIVE_MODULE` | error | `1` |
