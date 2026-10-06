@@ -150,6 +150,109 @@ describe('Studio page standalone badge', () => {
   });
 });
 
+describe('Studio page Compare view (shared-dependency matrix)', () => {
+  it('offers a Compare tab between Apps and Doctor', () => {
+    assert.match(
+      page,
+      /id="view-tab-compare"\s+data-view="compare"\s+aria-selected="false"\s+aria-controls="view-compare">Compare</,
+      'the Compare tab button exists with its aria wiring'
+    );
+    const position = (view: string): number => page.indexOf(`id="view-tab-${view}"`);
+    assert.ok(
+      position('apps') >= 0 && position('apps') < position('compare'),
+      'Compare sits after Apps'
+    );
+    assert.ok(
+      position('compare') < position('doctor'),
+      'Compare sits before Doctor'
+    );
+  });
+
+  it('ships a hidden Compare panel labelled by its tab', () => {
+    const panel = page.match(/<section[^>]*id="view-compare"[^>]*>/);
+    assert.ok(panel, 'the view-compare section exists');
+    for (const fragment of [
+      'class="panel view"',
+      'role="tabpanel"',
+      'aria-labelledby="view-tab-compare"',
+      'aria-label="Shared dependency comparison"',
+      'hidden',
+    ]) {
+      assert.ok(panel[0].includes(fragment), `panel carries ${fragment}`);
+    }
+    assert.match(page, /<h2>Shared dependencies<\/h2>/, 'panel heading');
+    assert.match(page, /id="matrix-legend"/, 'legend slot');
+    assert.match(page, /id="matrix-count"/, 'count slot');
+    assert.match(page, /class="tab-body" id="matrix"/, 'matrix slot');
+  });
+
+  it('lists the three views in tab order for the arrow-key handler', () => {
+    assert.match(page, /var VIEWS = \['apps', 'compare', 'doctor'\];/);
+    assert.match(page, /document\.getElementById\('view-compare'\)\.hidden = view !== 'compare';/);
+  });
+
+  it('draws the matrix from core data through text nodes only', () => {
+    // The page must not judge: verdicts come from graph.sharedMatrix.
+    assert.match(page, /var matrix = graph\.sharedMatrix;/);
+    assert.match(page, /function renderMatrix\(\)/);
+    assert.match(page, /renderMatrix\(\);/, 'renderMatrix runs with the view render');
+    // Verdict text rides text nodes inside a pill span; an undeclared cell is
+    // a bare em dash, never a pill about nothing.
+    assert.match(page, /td\.appendChild\(document\.createTextNode\('\\u2014'\)\);/);
+    assert.match(page, /el\('span', 'pill ' \+ shown\.pill, shown\.text\)/);
+    assert.match(page, /el\('td', 'pkg', matrixRow\.package\)/, 'sticky package column');
+  });
+
+  it('keeps the status-to-pill mapping honest', () => {
+    const mapping: [string, string][] = [
+      ['reference', 'ref'],
+      ['match', 'ok'],
+      ['drift', 'bad'],
+      ["'singleton-mismatch'", 'bad'],
+      ['unknown', 'warn'],
+      ['coexist', 'mute'],
+      ['absent', 'mute'],
+      ['uncompared', 'mute'],
+    ];
+    for (const [status, pill] of mapping) {
+      assert.match(
+        page,
+        new RegExp(`${status}: \\{ pill: '${pill}'`),
+        `${status} maps to the ${pill} pill`
+      );
+    }
+    // Unknown must not be dressed as a pass.
+    assert.match(page, /unknown: \{ pill: 'warn'/);
+  });
+
+  it('states the comparison scope instead of implying exhaustiveness', () => {
+    assert.ok(
+      page.includes('Every app is compared against '),
+      'hint names the reference app'
+    );
+    assert.ok(
+      page.includes("'the host \"' + matrix.referenceApp + '\"'"),
+      'hint quotes the host'
+    );
+    assert.ok(
+      page.includes('Two remotes that disagree with each '),
+      'hint states that remote-vs-remote is out of scope'
+    );
+    assert.ok(
+      page.includes('is never a pass.'),
+      'hint states that unknown is never a pass'
+    );
+  });
+
+  it('says so when the payload carries no usable matrix', () => {
+    assert.match(
+      page,
+      /No shared-dependency data: no app in this workspace reported shared declarations\./
+    );
+    assert.match(page, /count\.textContent = '';/, 'count is cleared, not guessed');
+  });
+});
+
 interface PlannedItem {
   geometry: { ly: number };
   rect: { x: number; y: number; width: number; height: number };

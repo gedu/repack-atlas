@@ -419,6 +419,145 @@ test.describe('Studio over the eager-advisory fixture (info findings)', () => {
   });
 });
 
+test.describe('Studio Compare view (shared-dependency matrix)', () => {
+  let drift: Preview;
+
+  test.beforeAll(async () => {
+    // fixture-version-drift: mini_store ships react 19.1.0 against the host's
+    // 19.0.0, both singleton => exactly one `drift` cell (SHARED_VERSION_DRIFT).
+    drift = await startPreview(path.join(repoRoot, 'fixtures', 'fixture-version-drift'), basePort + 61);
+  });
+  test.afterAll(async () => {
+    await drift?.stop();
+  });
+
+  // Open the Compare tab and wait for the panel to take over the view slot.
+  const openCompareTab = async (page: Page): Promise<void> => {
+    await page.locator('#view-tabs .view-tab[data-view="compare"]').click();
+    await expect(page.locator('#view-compare')).toBeVisible();
+  };
+
+  test('Apps stays the default view and Compare is hidden until clicked', async ({ page }) => {
+    await page.goto('/');
+    await expectAppsTab(page);
+    await expect(page.locator('#view-compare')).toBeHidden();
+    await expect(page.locator('#view-tab-compare')).toHaveAttribute('aria-selected', 'false');
+  });
+
+  test('clicking Compare shows the matrix and hides the other views', async ({ page }) => {
+    await page.goto('/');
+    await openCompareTab(page);
+
+    await expect(page.locator('#view-tab-compare')).toHaveAttribute('aria-selected', 'true');
+    await expect(page.locator('#view-tab-apps')).toHaveAttribute('aria-selected', 'false');
+    await expect(page.locator('#view-tab-doctor')).toHaveAttribute('aria-selected', 'false');
+    await expect(page.locator('#view-apps')).toBeHidden();
+    await expect(page.locator('#view-doctor')).toBeHidden();
+
+    // Round trip: leaving and coming back keeps the tab state honest.
+    await openDoctorTab(page);
+    await expect(page.locator('#view-compare')).toBeHidden();
+    await expect(page.locator('#view-tab-compare')).toHaveAttribute('aria-selected', 'false');
+  });
+
+  test('on the clean workspace every non-reference cell is a match', async ({ page }) => {
+    await page.goto('/');
+    await openCompareTab(page);
+
+    // One row per shared package (react, react-native), host first.
+    await expect(page.locator('#matrix table.kv tbody tr')).toHaveCount(2);
+    const headers = await page.locator('#matrix table.kv thead th').allInnerTexts();
+    // th text is uppercased by CSS (text-transform), so compare case-folded.
+    expect(headers.map((header) => header.toLowerCase())).toEqual([
+      'package', 'singleton', 'host', 'mini_auth', 'mini_store',
+    ]);
+
+    // Pills: the host column is the reference, every other cell is ok.
+    const pills = await page.locator('#matrix table.kv tbody tr').evaluateAll((rows) =>
+      rows.map((row) =>
+        Array.from(row.querySelectorAll('td.verdict .pill')).map((pill) =>
+          (pill as HTMLElement).className.replace('pill ', '')
+        )
+      )
+    );
+    expect(pills).toEqual([
+      ['ref', 'ok', 'ok'],
+      ['ref', 'ok', 'ok'],
+    ]);
+
+    await expect(page.locator('#matrix-count')).toHaveText('2 packages \u00b7 3 apps \u00b7 0 conflicts');
+
+    // The matrix must not introduce a page-level horizontal scrollbar; the
+    // table itself may scroll inside .scroll-x.
+    const overflow = await page.evaluate(
+      () => document.documentElement.scrollWidth - document.documentElement.clientWidth
+    );
+    expect(overflow).toBeLessThanOrEqual(0);
+  });
+
+  test('over the drift fixture the offending cell is a bad pill and the count says 1 conflict', async ({ page }) => {
+    await page.goto(drift.url);
+    await openCompareTab(page);
+
+    // The `react` row (exact td.pkg text, not the react-native substring).
+    const reactRow = page
+      .locator('#matrix table.kv tbody tr')
+      .filter({ has: page.locator('td.pkg', { hasText: /^react$/ }) });
+    await expect(reactRow).toHaveCount(1);
+
+    // Columns are host, mini_auth, mini_store: the third verdict is the drift.
+    const offender = reactRow.locator('td.verdict').nth(2);
+    await expect(offender.locator('.pill.bad')).toHaveCount(1);
+    await expect(offender.locator('.pill.bad')).toHaveText('drift');
+    await expect(offender).toContainText('19.1.0');
+
+    // The rest of the row stays quiet: reference + one ok match.
+    await expect(reactRow.locator('.pill.ref')).toHaveCount(1);
+    await expect(reactRow.locator('.pill.ok')).toHaveCount(1);
+    // react-native is identical everywhere: its row carries no bad pill.
+    const nativeRow = page
+      .locator('#matrix table.kv tbody tr')
+      .filter({ has: page.locator('td.pkg', { hasText: /^react-native$/ }) });
+    await expect(nativeRow.locator('.pill.bad')).toHaveCount(0);
+
+    await expect(page.locator('#matrix-count')).toHaveText('2 packages \u00b7 3 apps \u00b7 1 conflict');
+  });
+
+  test('the honest-scope hint names the host reference and refuses false passes', async ({ page }) => {
+    await page.goto(drift.url);
+    await openCompareTab(page);
+
+    // The scope hint is the FIRST thing in #matrix, before the table.
+    const scopeHint = page.locator('#matrix p.hint').first();
+    await expect(scopeHint).toBeVisible();
+    await expect(scopeHint).toContainText('Every app is compared against the host "host"');
+    await expect(scopeHint).toContainText(
+      'Two remotes that disagree with each other while both agreeing with the host '
+        + 'are not reported here, and "unknown" is never a pass.'
+    );
+  });
+
+  test('ArrowRight walks Apps to Compare and Compare to Doctor', async ({ page }) => {
+    await page.goto('/');
+    await expectAppsTab(page);
+
+    // The keydown handler lives on the #view-tabs tablist; focus starts on the
+    // selected Apps tab, exactly like a keyboard user after Tab.
+    await page.locator('#view-tab-apps').focus();
+    await page.keyboard.press('ArrowRight');
+    await expect(page.locator('#view-compare')).toBeVisible();
+    await expect(page.locator('#view-tab-compare')).toHaveAttribute('aria-selected', 'true');
+
+    await page.keyboard.press('ArrowRight');
+    await expect(page.locator('#view-doctor')).toBeVisible();
+    await expect(page.locator('#view-compare')).toBeHidden();
+
+    // ArrowLeft wraps back to Compare (the handler walks the three views).
+    await page.keyboard.press('ArrowLeft');
+    await expect(page.locator('#view-compare')).toBeVisible();
+  });
+});
+
 test.describe('Studio over the rendering probe fixture', () => {
   let preview: Preview;
 
@@ -466,6 +605,38 @@ test.describe('Studio over the rendering probe fixture', () => {
     // Only the page's own inline script exists: no script was injected.
     expect(await page.locator('script').count()).toBe(1);
     // A manifest probe must never reach alert(): no dialog was observed.
+    expect(dialogs).toEqual([]);
+  });
+
+  test('the Compare matrix renders hostile package and app names as text', async ({ page }) => {
+    // The hostile fixture also feeds the shared matrix: the app NAME and a
+    // shared package NAME are markup, and every one of them reaches the
+    // matrix as text (this fixture's mini_store declares `"><svg ...>`).
+    const dialogs = watchDialogs(page);
+    await page.goto(preview.url);
+    await page.locator('#view-tabs .view-tab[data-view="compare"]').click();
+    await expect(page.locator('#view-compare')).toBeVisible();
+
+    // Hostile shared package name: literal text in the sticky package cell.
+    const pkgCells = page.locator('#matrix td.pkg');
+    await expect(pkgCells.filter({ hasText: '<svg onload=alert(3)>' })).toHaveCount(1);
+    expect(await page.locator('#matrix').innerText()).toContain('"><svg onload=alert(3)>');
+    // Hostile app name reaches the matrix as a header cell, as text.
+    await expect(page.locator('#matrix table.kv thead th')).toContainText([
+      'host<img src=x onerror=alert(6)>',
+    ]);
+
+    // Text, never elements: no probe became a node or an event attribute.
+    expect(await page.locator('#matrix img, #matrix svg').count()).toBe(0);
+    expect(await page.locator('#matrix [onerror], #matrix [onload]').count()).toBe(0);
+    // The remote-only package has no host declaration: a bare dash, no pill.
+    const absentRow = page
+      .locator('#matrix table.kv tbody tr')
+      .filter({ has: page.locator('td.pkg', { hasText: 'svg onload=alert(3)' }) });
+    await expect(absentRow.locator('td.verdict').first()).toHaveText('\u2014');
+    await expect(absentRow.locator('td.verdict .pill').first()).toHaveText('no reference');
+
+    // Nothing executed: still no dialog from the Compare view.
     expect(dialogs).toEqual([]);
   });
 });

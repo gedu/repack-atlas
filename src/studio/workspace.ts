@@ -14,6 +14,7 @@
 import path from 'node:path';
 import {
   buildFederationGraph,
+  buildSharedMatrix,
   runDoctor,
   unableToAnswerReport,
   type AppStatusMap,
@@ -134,7 +135,14 @@ export function createWorkspaceGraphSource(
     async build(statuses: AppStatusMap): Promise<FederationGraph> {
       const { config, hostName, report, inputs } = await load();
       if (!config) {
-        return { apps: [], edges: [], findings: report.findings };
+        // An unusable workspace still answers with the full graph shape, so the
+        // page never has to special-case a missing matrix field.
+        return {
+          apps: [],
+          edges: [],
+          findings: report.findings,
+          sharedMatrix: buildSharedMatrix([]),
+        };
       }
       // The runner keys statuses by the config key `host` (the only name a
       // user types); the graph node is named from the host manifest. Alias

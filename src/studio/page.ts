@@ -227,6 +227,13 @@ export const STUDIO_PAGE_HTML = `<!doctype html>
   .pill.warn { color: var(--warn); background: var(--warn-soft); }
   .pill.bad { color: var(--bad); background: var(--bad-soft); }
 
+  /* Compare view: the shared-dependency matrix (issue #73). The package
+     column sticks so the row label survives the horizontal scroll. */
+  .pill.ref { color: var(--accent-ink); background: var(--accent-soft); }
+  .pill.mute { color: var(--ink-3); background: var(--surface-2); }
+  table.kv td.pkg, table.kv th.pkg { position: sticky; left: 0; background: var(--surface); }
+  table.kv td.verdict { white-space: nowrap; overflow-wrap: normal; }
+
   /* Doctor findings: severity filter chips (same pill language as .sess). */
   .chips { display: flex; gap: 6px; flex-wrap: wrap; }
   .chip {
@@ -288,6 +295,8 @@ export const STUDIO_PAGE_HTML = `<!doctype html>
   <nav class="view-tabs" id="view-tabs" role="tablist" aria-label="Studio views">
     <button class="view-tab" role="tab" type="button" id="view-tab-apps" data-view="apps"
             aria-selected="true" aria-controls="view-apps">Apps</button>
+    <button class="view-tab" role="tab" type="button" id="view-tab-compare" data-view="compare"
+            aria-selected="false" aria-controls="view-compare">Compare</button>
     <button class="view-tab" role="tab" type="button" id="view-tab-doctor" data-view="doctor"
             aria-selected="false" aria-controls="view-doctor">Doctor</button>
   </nav>
@@ -329,6 +338,16 @@ export const STUDIO_PAGE_HTML = `<!doctype html>
     </section>
   </section>
 
+  <section class="panel view" id="view-compare" role="tabpanel" aria-labelledby="view-tab-compare"
+           aria-label="Shared dependency comparison" hidden>
+    <div class="panel-head">
+      <h2>Shared dependencies</h2>
+      <div class="legend" id="matrix-legend"></div>
+      <span class="hint" id="matrix-count"></span>
+    </div>
+    <div class="tab-body" id="matrix"></div>
+  </section>
+
   <section class="panel view" id="view-doctor" role="tabpanel" aria-labelledby="view-tab-doctor" aria-label="Doctor findings" hidden>
     <div class="panel-head">
       <h2>Doctor findings</h2>
@@ -349,12 +368,14 @@ export const STUDIO_PAGE_HTML = `<!doctype html>
   var W = 168, H = 78;
   // Standalone pill: right edge sits 32px inside the node, left of the status dot.
   var TAG_W = 62, TAG_RIGHT = 32;
-  var graph = { apps: [], edges: [], findings: [] };
+  var graph = { apps: [], edges: [], findings: [], sharedMatrix: null };
   var selected = null;
   var tab = 'exposes';
-  // Top-level view ('apps' or 'doctor'). Module state like the inspector
-  // 'tab': SSE re-renders must never reset it back to the default view.
+  // Top-level view: 'apps', 'compare' or 'doctor'. Module state like the
+  // inspector 'tab': SSE re-renders must never reset it back to the default.
   var view = 'apps';
+  // Which top-level views exist, in arrow-key order (same order as the tabs).
+  var VIEWS = ['apps', 'compare', 'doctor'];
   // Panel filters: error+warning visible by default, info hidden until the
   // chip enables it (same signal-to-noise rule as the CLI doctor panel).
   var showSeverity = { error: true, warning: true, info: false };
@@ -708,6 +729,7 @@ export const STUDIO_PAGE_HTML = `<!doctype html>
         String(buttons[i].getAttribute('data-view') === view));
     }
     document.getElementById('view-apps').hidden = view !== 'apps';
+    document.getElementById('view-compare').hidden = view !== 'compare';
     document.getElementById('view-doctor').hidden = view !== 'doctor';
   }
 
@@ -1058,6 +1080,128 @@ export const STUDIO_PAGE_HTML = `<!doctype html>
     }
   }
 
+  // --- Compare view: the shared-dependency matrix (issue #73) --------------
+  // The verdicts come from core (graph.sharedMatrix, built by buildSharedMatrix
+  // in src/core/graph.ts): this page only maps a status to a pill class and
+  // some text, it never compares two versions itself.
+  var MATRIX_STATUS = {
+    reference: { pill: 'ref', text: 'reference' },
+    match: { pill: 'ok', text: 'match' },
+    drift: { pill: 'bad', text: 'drift' },
+    'singleton-mismatch': { pill: 'bad', text: 'singleton' },
+    unknown: { pill: 'warn', text: 'unknown' },
+    coexist: { pill: 'mute', text: 'coexists' },
+    absent: { pill: 'mute', text: 'not declared' },
+    uncompared: { pill: 'mute', text: 'no reference' }
+  };
+
+  function matrixStatus(status) {
+    // An unknown status (a newer core) says what it is: never guess a colour.
+    return MATRIX_STATUS[status] || { pill: 'mute', text: String(status) };
+  }
+
+  function renderMatrixLegend(host) {
+    var entries = [
+      ['ref', 'reference', 'the column every other app is compared against'],
+      ['ok', 'match', 'same version and same singleton flag'],
+      ['bad', 'drift', 'both singleton with different versions, or the flags differ'],
+      ['warn', 'unknown', 'a version could not be resolved \\u2014 verify it manually'],
+      ['mute', 'n/a', 'not comparable: not declared, or nothing to compare against']
+    ];
+    for (var i = 0; i < entries.length; i++) {
+      var span = el('span');
+      span.appendChild(el('span', 'pill ' + entries[i][0], entries[i][1]));
+      span.appendChild(document.createTextNode(' ' + entries[i][2]));
+      host.appendChild(span);
+    }
+  }
+
+  function matrixCountText(matrix, conflicts) {
+    return plural(matrix.rows.length, 'package') + ' \\u00b7 ' +
+      plural(matrix.apps.length, 'app') + ' \\u00b7 ' +
+      plural(conflicts, 'conflict');
+  }
+
+  function plural(count, word) {
+    return count + ' ' + word + (count === 1 ? '' : 's');
+  }
+
+  function renderMatrix() {
+    var host = clear(document.getElementById('matrix'));
+    var legend = clear(document.getElementById('matrix-legend'));
+    var count = document.getElementById('matrix-count');
+    var matrix = graph.sharedMatrix;
+
+    if (!matrix || !Array.isArray(matrix.rows) || !Array.isArray(matrix.apps) ||
+        !matrix.apps.length) {
+      count.textContent = '';
+      host.appendChild(hint('No shared-dependency data: no app in this workspace reported shared declarations.'));
+      return;
+    }
+
+    var conflicts = 0;
+    for (var r = 0; r < matrix.rows.length; r++) {
+      for (var c = 0; c < matrix.rows[r].cells.length; c++) {
+        var status = matrix.rows[r].cells[c].status;
+        if (status === 'drift' || status === 'singleton-mismatch') conflicts++;
+      }
+    }
+    count.textContent = matrixCountText(matrix, conflicts);
+
+    // Honest scope (AGENTS.md rule 7): core compares each app against the host
+    // only, exactly like the doctor does; remote-vs-remote is issue #55.
+    host.appendChild(hint('Every app is compared against ' +
+      (matrix.referenceApp
+        ? 'the host "' + matrix.referenceApp + '"'
+        : 'no reference \\u2014 this workspace reports no host') +
+      ', the same comparison the Doctor makes. Two remotes that disagree with each ' +
+      'other while both agreeing with the host are not reported here, and "unknown" ' +
+      'is never a pass.'));
+
+    var built = table(['Package', 'Singleton'].concat(matrix.apps));
+    // The package column sticks to the left while the app columns scroll.
+    var firstHead = built.wrapper.querySelector('th');
+    if (firstHead) firstHead.className = 'pkg';
+    for (var i = 0; i < matrix.rows.length; i++) {
+      var matrixRow = matrix.rows[i];
+      var rowNode = el('tr');
+      rowNode.appendChild(el('td', 'pkg', matrixRow.package));
+      // The Singleton column reports the REFERENCE declaration only: when the
+      // host never declared the package there is no declaration to report, and
+      // printing "no" would be a claim the data does not support (rule 7).
+      rowNode.appendChild(el('td', 'st', matrixRow.referenceDeclares
+        ? (matrixRow.singleton ? 'yes' : 'no')
+        : 'not on host'));
+      for (var j = 0; j < matrixRow.cells.length; j++) {
+        rowNode.appendChild(matrixCell(matrixRow.package, matrixRow.cells[j]));
+      }
+      built.body.appendChild(rowNode);
+    }
+    host.appendChild(built.wrapper);
+    renderMatrixLegend(legend);
+  }
+
+  function matrixCell(pkg, cell) {
+    var shown = matrixStatus(cell.status);
+    var td = el('td', 'verdict');
+    td.title = cell.app + ' \\u00b7 ' + pkg + ': ' + shown.text +
+      (cell.declared
+        ? ' \\u00b7 version ' + (cell.version || 'unknown') +
+          ' \\u00b7 singleton ' + (cell.singleton ? 'yes' : 'no')
+        : ' \\u00b7 not declared') +
+      (cell.requiredVersion ? ' \\u00b7 requires ' + cell.requiredVersion : '');
+    if (!cell.declared) {
+      // A bare dash: a pill here would read as a verdict about nothing.
+      td.appendChild(document.createTextNode('\\u2014'));
+    } else {
+      td.appendChild(el('span', 'pill ' + shown.pill, shown.text));
+      if (cell.version) {
+        td.appendChild(document.createTextNode(' ' + cell.version));
+      }
+    }
+    return td;
+  }
+
   function renderIssues() {
     renderIssueChips();
     var list = clear(document.getElementById('issues'));
@@ -1133,6 +1277,7 @@ export const STUDIO_PAGE_HTML = `<!doctype html>
     renderSessions();
     renderInspector();
     renderAppFindings();
+    renderMatrix();
     renderIssues();
   }
 
@@ -1149,7 +1294,9 @@ export const STUDIO_PAGE_HTML = `<!doctype html>
     graph = {
       apps: payload.apps,
       edges: Array.isArray(payload.edges) ? payload.edges : [],
-      findings: Array.isArray(payload.findings) ? payload.findings : []
+      findings: Array.isArray(payload.findings) ? payload.findings : [],
+      sharedMatrix: payload.sharedMatrix && typeof payload.sharedMatrix === 'object'
+        ? payload.sharedMatrix : null
     };
     if (!appByName(selected)) {
       selected = graph.apps.length > 0
@@ -1212,7 +1359,7 @@ export const STUDIO_PAGE_HTML = `<!doctype html>
     if (button) setView(button.getAttribute('data-view'));
   });
   viewTabs.addEventListener('keydown', function (event) {
-    var views = ['apps', 'doctor'];
+    var views = VIEWS;
     var step = event.key === 'ArrowRight' ? 1 : event.key === 'ArrowLeft' ? views.length - 1 : 0;
     if (!step) return;
     event.preventDefault();
