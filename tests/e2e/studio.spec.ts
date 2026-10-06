@@ -73,12 +73,27 @@ function watchDialogs(page: Page): string[] {
   return dialogs;
 }
 
+/** Open the Doctor top-level tab (the findings table lives there). */
+async function openDoctorTab(page: Page): Promise<void> {
+  await page.locator('#view-tabs .view-tab[data-view="doctor"]').click();
+  await expect(page.locator('#view-doctor')).toBeVisible();
+}
+
+/** The default Apps view: the selected app's panel must be visible. */
+async function expectAppsTab(page: Page): Promise<void> {
+  await expect(page.locator('#view-tab-apps')).toHaveAttribute('aria-selected', 'true');
+  await expect(page.locator('#view-apps')).toBeVisible();
+  await expect(page.locator('#view-doctor')).toBeHidden();
+}
+
 const basePort = Number(process.env.ATLAS_STUDIO_PORT ?? 8099);
 
 test.describe('Studio over the clean workspace fixture', () => {
   test('renders the app pills, the graph and an empty findings list', async ({ page }) => {
     const dialogs = watchDialogs(page);
     await page.goto('/');
+    await expectAppsTab(page);
+    await openDoctorTab(page);
 
     await expect(page.locator('#sessions .sess')).toHaveCount(3);
     await expect(page.locator('#sessions .sess').first()).toContainText('host');
@@ -95,6 +110,20 @@ test.describe('Studio over the clean workspace fixture', () => {
     await expect(page.locator('#issue-count')).toContainText('0 errors');
 
     expect(dialogs).toEqual([]);
+  });
+
+  test('the per-app panel shows the honest hint when nothing mentions the app', async ({ page }) => {
+    // The clean workspace has no findings at all, so every app lands on the
+    // empty state instead of a borrowed global list.
+    await page.goto('/');
+    await expectAppsTab(page);
+    await expect(page.locator('#app-findings-title')).toHaveText('Findings · host (0)');
+    await expect(page.locator('#app-issues li.hint')).toHaveText('No findings mention host.');
+
+    await page.locator('svg.graph g.node[data-node="mini_auth"]').click();
+    await expect(page.locator('#app-findings-title')).toHaveText('Findings · mini_auth (0)');
+    await expect(page.locator('#app-issues li.hint')).toHaveText('No findings mention mini_auth.');
+    await expect(page.locator('#app-issues .issue')).toHaveCount(0);
   });
 
   test('clicking a node updates the inspector, tabs switch sections', async ({ page }) => {
@@ -172,6 +201,7 @@ test.describe('Studio over the remote-cycle fixture', () => {
 
   test('draws cycle edges dashed and lists the REMOTE_CYCLE finding', async ({ page }) => {
     await page.goto(preview.url);
+    await openDoctorTab(page);
 
     await expect(page.locator('svg.graph path.edge.cycle')).toHaveCount(2);
     await expect(page.locator('svg.graph g.node[data-node="mini_auth"]')).toHaveCount(1);
@@ -189,8 +219,39 @@ test.describe('Studio over the remote-cycle fixture', () => {
     await expect(page.locator('#issue-count')).toContainText('1 warnings');
   });
 
+  test('badge aria-label and tooltip read as findings that mention the app', async ({ page }) => {
+    await page.goto(preview.url);
+
+    // The badge counts findings whose MESSAGE mentions the app, and the
+    // accessible name now says so instead of implying ownership.
+    const label = await page
+      .locator('svg.graph g.node[data-node="mini_auth"]')
+      .getAttribute('aria-label');
+    expect(label).toContain('1 findings mention mini_auth');
+    await expect(
+      page.locator('svg.graph g.node[data-node="mini_auth"] title')
+    ).toHaveText('1 findings mention mini_auth');
+  });
+
+  test('Apps panel lists the warning that mentions the app and hides nothing', async ({ page }) => {
+    await page.goto(preview.url);
+    // Warning (not info) findings ARE listed here, and the header count is
+    // exactly the badge count: one REMOTE_CYCLE warning mentions mini_auth.
+    await page.locator('svg.graph g.node[data-node="mini_auth"]').click();
+    await expect(page.locator('#app-findings-title')).toHaveText('Findings · mini_auth (1)');
+    await expect(page.locator('#app-issues .issue[data-code="REMOTE_CYCLE"]')).toHaveCount(1);
+    await expect(page.locator('#app-issues li.hint')).toHaveCount(0);
+
+    // The cycle message never names the host: the host gets the honest hint,
+    // not an empty panel or the other apps' findings.
+    await page.locator('svg.graph g.node[data-node="host"]').click();
+    await expect(page.locator('#app-findings-title')).toHaveText('Findings · host (0)');
+    await expect(page.locator('#app-issues li.hint')).toHaveText('No findings mention host.');
+  });
+
   test('severity chips show the warning by default and hide it on click', async ({ page }) => {
     await page.goto(preview.url);
+    await openDoctorTab(page);
 
     const errors = page.locator('#issue-chips .chip[data-severity="errors"]');
     const warnings = page.locator('#issue-chips .chip[data-severity="warnings"]');
@@ -228,6 +289,7 @@ test.describe('Studio over the eager-advisory fixture (info findings)', () => {
 
   test('hides infos by default and collapses repeated codes behind a count', async ({ page }) => {
     await page.goto(preview.url);
+    await openDoctorTab(page);
 
     // Four info findings exist but are NOT in the default view: the hint
     // explains why (same signal-to-noise rule the CLI panel uses).
@@ -272,13 +334,88 @@ test.describe('Studio over the eager-advisory fixture (info findings)', () => {
 
   test('an expanded info row still selects the app it mentions', async ({ page }) => {
     await page.goto(preview.url);
+    await openDoctorTab(page);
     await page.locator('#issue-chips .chip[data-severity="infos"]').click();
     await page.locator('#issues .issue-more[data-code="EAGER_ADVISORY"]').click();
 
     // Existing row-click contract: the first app name occurring in the
-    // message is selected (every eager advisory mentions "host" first).
+    // message is selected (every eager advisory mentions "host" first), and
+    // the jump now also lands back on the Apps tab.
     await page.locator('#issues .issue[data-code="EAGER_ADVISORY"]').nth(2).click();
     await expect(page.locator('#insp-name')).toHaveText('host');
+    await expectAppsTab(page);
+  });
+
+  test('default view is Apps: doctor table hidden, per-app panel visible', async ({ page }) => {
+    await page.goto(preview.url);
+    await expectAppsTab(page);
+    await expect(page.locator('#app-findings')).toBeVisible();
+    await expect(page.locator('#view-tab-doctor')).toHaveAttribute('aria-selected', 'false');
+    // Host is selected by default. Every advisory is an info, and the panel
+    // lists the badge set (error + warning) only, so nothing is listed and
+    // the header count matches the (absent) badge instead of 4.
+    await expect(page.locator('#app-findings-title')).toHaveText('Findings · host (0)');
+    await expect(page.locator('#app-issues .issue')).toHaveCount(0);
+    await expect(page.locator('#app-issues li.hint')).toHaveText(
+      '4 info findings hidden \u2014 the Doctor tab lists them.'
+    );
+  });
+
+  test('Apps panel lists only the findings that mention the selected app', async ({ page }) => {
+    await page.goto(preview.url);
+    await expectAppsTab(page);
+
+    // Host selected by default: 4 mentioning findings, all infos -> none
+    // listed (the Doctor tab owns them) and the hint says how many.
+    await expect(page.locator('#app-findings-title')).toHaveText('Findings · host (0)');
+    await expect(page.locator('#app-issues li.hint')).toHaveText(
+      '4 info findings hidden \u2014 the Doctor tab lists them.'
+    );
+
+    // Selecting a remote narrows the hint to THAT app's mentions, and the
+    // panel stays honest: mini_auth is mentioned by 2 infos, listed by none.
+    await page.locator('svg.graph g.node[data-node="mini_auth"]').click();
+    await expect(page.locator('#app-findings-title')).toHaveText('Findings · mini_auth (0)');
+    await expect(page.locator('#app-issues .issue')).toHaveCount(0);
+    await expect(page.locator('#app-issues li.hint')).toHaveText(
+      '2 info findings hidden \u2014 the Doctor tab lists them.'
+    );
+    // Infos must not paint badges either: the Apps panel and the badges agree
+    // on the same error+warning set.
+    await expect(page.locator('svg.graph circle.badge-c, svg.graph circle.badge-w')).toHaveCount(0);
+
+    // The Doctor tab keeps the global view untouched by the selection.
+    await openDoctorTab(page);
+    await expect(page.locator('#issue-count')).toContainText('4 infos');
+  });
+
+  // An all-info app must never look silently empty, and the hint count must
+  // match the payload; the warning-set listing is covered in the cycle
+  // describe ('Apps panel lists the warning that mentions the app').
+  test('per-app counts survive a Doctor tab round trip and match the payload', async ({ page }) => {
+    await page.goto(preview.url);
+    // Open the Doctor tab first and come back: the tab state must survive.
+    await openDoctorTab(page);
+    await page.locator('#view-tabs .view-tab[data-view="apps"]').click();
+    await page.locator('.sess').filter({ hasText: 'mini_store' }).click();
+    await expect(page.locator('#app-findings-title')).toHaveText('Findings · mini_store (0)');
+
+    // Every finding in THIS fixture is an info, so mini_store lists nothing
+    // and must explain itself instead of looking silently empty: assert the
+    // count honestly against the payload the page rendered from.
+    const findings = await page.evaluate(async () => {
+      const response = await fetch('api/graph');
+      const graph = (await response.json()) as {
+        findings: { message: string; severity: string }[];
+      };
+      return graph.findings.filter(
+        (f) => f.message.includes('mini_store') && f.severity === 'info'
+      ).length;
+    });
+    await expect(page.locator('#app-issues li.hint')).toHaveText(
+      `${findings} info findings hidden \u2014 the Doctor tab lists them.`
+    );
+    await expect(page.locator('#app-issues .issue')).toHaveCount(0);
   });
 });
 

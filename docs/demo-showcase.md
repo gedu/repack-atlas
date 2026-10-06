@@ -306,10 +306,12 @@ For the GIF, record:
 1. The runner bringing the four apps up (statuses live).
 2. Studio in the browser: 4 ready nodes, **5 real edges** — host→auth,
    host→trading, host→wallet and trading→auth, wallet→auth (the mini-apps
-   genuinely consume auth in this showcase), expose list per node, findings
-   panel with severity chips (`errors` / `warnings` on, `infos` off by
-   default) and repeated codes collapsed behind a `+ N more CODE — click to
-   expand all`, SSE-live (no refresh needed).
+   genuinely consume auth in this showcase), expose list per node. The page
+   has two top-level tabs: **Apps** (graph, inspector and a panel of the
+   findings that mention the selected app) and **Doctor** (the workspace-wide
+   findings table with severity chips — `errors` / `warnings` on, `infos` off
+   by default — and repeated codes collapsed behind a `+ N more CODE — click
+   to expand all`), SSE-live (no refresh needed).
 3. `curl http://127.0.0.1:8099/api/graph` next to the page — same payload.
 
 Studio is read-only forever (no write endpoints, no config editing, manifest
