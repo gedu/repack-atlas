@@ -12,9 +12,16 @@ without a simulator:
 - **Can I run it?** An interactive dev runner that starts the whole workspace
   and serves a read-only **Federation Studio** page.
 
-![Federation Studio on the super-app-showcase workspace: a host and three mini-apps, all ready, with five consumption edges and 62 doctor findings](docs/assets/federation-studio.gif)
+![Federation Studio on the super-app-showcase workspace: the Apps tab with four
+ready nodes and five consumption edges, the Compare tab with the shared-package
+matrix, and the Doctor tab with the findings table](docs/assets/federation-studio.gif)
 
-_Federation Studio on a real Re.Pack workspace (host + 3 mini-apps). The
+_Federation Studio on a real Re.Pack workspace (host + 3 mini-apps), walking
+its three tabs: **Apps** (the graph, an inspector per app, and the findings
+that mention the selected app), **Compare** (every shared package × every app,
+with the host as the reference column, so singleton drift is one glance away)
+and **Doctor** (the workspace-wide findings table, severity chips and per-code
+collapse; clicking a finding jumps back to the app it mentions). The
 walkthrough is in [`docs/demo-showcase.md`](docs/demo-showcase.md)._
 
 Atlas grew out of three stacked Re.Pack PRs
@@ -136,7 +143,12 @@ dev: mini_auth → ready (port 8082)
 dev: mini_store → ready (port 8083)
 ```
 
-Open the printed URL. Without `--ci` a terminal also gets key handling (press
+Open the printed URL. The Studio page is read-only forever (manifest content is
+rendered as text, the server binds `127.0.0.1` only, there is nothing to write)
+and has three tabs: **Apps** (graph + inspector + the selected app's findings),
+**Compare** (the shared-dependency matrix — each app against the host, the same
+comparison the doctor makes) and **Doctor** (the workspace-wide findings
+table). Without `--ci` a terminal also gets key handling (press
 `v` to open the Studio, `q` to quit).
 
 | Flag | Effect |

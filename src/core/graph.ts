@@ -132,6 +132,12 @@ export interface FederationGraph {
   edges: GraphEdge[];
   /** Doctor findings for this workspace, passed through verbatim. */
   findings: DoctorFinding[];
+  /**
+   * Every app's `shared[]` declarations lined up in one grid (issue #73), so
+   * the Studio can draw the comparison without re-deriving a verdict. Derived
+   * from `apps`, so it can never disagree with the rest of the payload.
+   */
+  sharedMatrix: SharedMatrix;
 }
 
 /** One app as the caller hands it to the builder. */
@@ -245,6 +251,189 @@ function reaches(
 
 function byName(a: { name: string }, b: { name: string }): number {
   return a.name.localeCompare(b.name);
+}
+
+// ---------------------------------------------------------------------------
+// Shared-dependency matrix (issue #73)
+// ---------------------------------------------------------------------------
+
+/**
+ * One cell's verdict. The names track the doctor branches they mirror, so a
+ * Studio cell and a `doctor` finding can never disagree about a host/remote
+ * pair:
+ *
+ * - `reference`  — this cell IS the column everything is compared against.
+ * - `match`      — same resolved version, same `singleton` flag.
+ * - `drift`      — both singleton and the versions differ (`SHARED_VERSION_DRIFT`).
+ * - `singleton-mismatch` — the `singleton` flags differ (`SINGLETON_MISMATCH`).
+ * - `unknown`    — a version could not be resolved on either side
+ *   (`VERSION_UNKNOWN`): never drawn as a pass.
+ * - `coexist`    — versions differ but NOT both singleton, which Module
+ *   Federation allows by design, so it is neutral, never a finding.
+ * - `absent`     — this app does not declare the package at all (true of the
+ *   reference column too, when the host does not declare it).
+ * - `uncompared` — this app declares it and there is no reference declaration
+ *   to compare against (no host in the workspace, or the host never declares
+ *   that package). Data is shown, no verdict is invented.
+ */
+export type SharedCellStatus =
+  | 'reference'
+  | 'match'
+  | 'drift'
+  | 'singleton-mismatch'
+  | 'unknown'
+  | 'coexist'
+  | 'absent'
+  | 'uncompared';
+
+/** One app's declaration of one shared package, as the grid needs it. */
+export interface SharedMatrixCell {
+  /** Graph node name of the column (matches `GraphApp.name`). */
+  app: string;
+  status: SharedCellStatus;
+  /** Resolved version, or `''` when this app does not declare the package. */
+  version: string;
+  /** Declared `requiredVersion` range, or `''` when absent. */
+  requiredVersion: string;
+  /** This app's own `singleton` flag; `false` when it declares nothing. */
+  singleton: boolean;
+  /** Whether this app declares the package at all. */
+  declared: boolean;
+}
+
+/** One shared package: one row of the grid. */
+export interface SharedMatrixRow {
+  package: string;
+  /**
+   * The REFERENCE app's `singleton` flag — `false` when there is no reference
+   * or it does not declare the package. The page labels the row with it and
+   * keeps non-singleton rows neutral because coexistence is legal.
+   */
+  singleton: boolean;
+  /**
+   * Whether the REFERENCE declares this package at all. Without it the page
+   * could not tell "the host says this is not a singleton" from "the host says
+   * nothing", and would print a confident `no` for a package only a remote
+   * declares as singleton — the same over-claim rule 7 forbids elsewhere.
+   */
+  referenceDeclares: boolean;
+  cells: SharedMatrixCell[];
+}
+
+/** The whole grid: rows are packages, columns are apps. */
+export interface SharedMatrix {
+  /**
+   * Columns in render order: the reference app first, then every other app
+   * alphabetically. Absent only when the workspace has no host to compare
+   * against, in which case every cell is `uncompared`.
+   */
+  referenceApp?: string;
+  apps: string[];
+  rows: SharedMatrixRow[];
+}
+
+/**
+ * An unresolvable version, exactly as the doctor spells it in
+ * `VERSION_UNKNOWN`. Core has no notion of "missing": the manifest schema
+ * types are non-optional strings and `graph.ts` already fills a gap with
+ * `'unknown'` (`nativeOf`), so `'unknown'` is the one sentinel.
+ */
+const UNKNOWN_VERSION = 'unknown';
+
+function sharedCellStatus(
+  reference: ManifestSharedEntry | undefined,
+  entry: ManifestSharedEntry | undefined,
+  isReference: boolean
+): SharedCellStatus {
+  if (isReference) return entry ? 'reference' : 'absent';
+  if (!entry) return 'absent';
+  if (!reference) return 'uncompared';
+  if (
+    reference.version === UNKNOWN_VERSION ||
+    entry.version === UNKNOWN_VERSION
+  ) {
+    return 'unknown';
+  }
+  if (reference.singleton !== entry.singleton) return 'singleton-mismatch';
+  if (reference.version === entry.version) return 'match';
+  // Both singleton and the versions differ is the crash; two independent
+  // copies of a non-singleton package is a supported configuration.
+  return reference.singleton && entry.singleton ? 'drift' : 'coexist';
+}
+
+/**
+ * Project every app's `shared[]` declarations onto one package × app grid.
+ *
+ * Pure and deterministic like the rest of this file: rows are sorted by
+ * package, columns put the reference app first and stay alphabetical after it,
+ * and no `Map` iteration order reaches the output.
+ *
+ * Scope, stated so the page can repeat it verbatim (AGENTS.md rule 7): each
+ * app is compared against the REFERENCE (the host, or nothing when the
+ * workspace has no host) — the same comparison `runDoctor` performs through
+ * `checkSharedDeps(host, remote)`. Two remotes that disagree with each other
+ * while both agree with the host are NOT reported here: remote↔remote
+ * comparison is issue #55 and changes what the doctor proves, not just pixels.
+ */
+export function buildSharedMatrix(apps: readonly GraphApp[]): SharedMatrix {
+  const referenceApp = apps.find((app) => app.role === 'host')?.name;
+  const ordered = [
+    ...(referenceApp ? [referenceApp] : []),
+    ...apps
+      .map((app) => app.name)
+      .filter((name) => name !== referenceApp)
+      .sort((a, b) => a.localeCompare(b)),
+  ];
+
+  const byApp = new Map(apps.map((app) => [app.name, app]));
+  const declarationsFor = (name: string): Map<string, ManifestSharedEntry> =>
+    new Map(
+      (byApp.get(name)?.shared ?? []).map((entry) => [entry.name, entry])
+    );
+
+  // One declaration map per column, built once, so a package only a remote
+  // declares still gets a row (as `uncompared`) instead of disappearing.
+  const declarations = new Map<string, Map<string, ManifestSharedEntry>>();
+  const packages = new Set<string>();
+  for (const name of ordered) {
+    const entries = declarationsFor(name);
+    declarations.set(name, entries);
+    for (const pkg of entries.keys()) packages.add(pkg);
+  }
+
+  const referenceDeclarations =
+    (referenceApp ? declarations.get(referenceApp) : undefined) ??
+    new Map<string, ManifestSharedEntry>();
+
+  const rows: SharedMatrixRow[] = [...packages]
+    .sort((a, b) => a.localeCompare(b))
+    .map((pkg) => {
+      const reference = referenceDeclarations.get(pkg);
+      return {
+        package: pkg,
+        singleton: reference?.singleton === true,
+        referenceDeclares: reference !== undefined,
+        cells: ordered.map((name) => {
+          const entry = declarations.get(name)?.get(pkg);
+          return {
+            app: name,
+            status: sharedCellStatus(
+              reference,
+              entry,
+              name === referenceApp
+            ),
+            version: entry?.version ?? '',
+            requiredVersion: entry?.requiredVersion ?? '',
+            singleton: entry?.singleton === true,
+            declared: entry !== undefined,
+          };
+        }),
+      };
+    });
+
+  const matrix: SharedMatrix = { apps: ordered, rows };
+  if (referenceApp) matrix.referenceApp = referenceApp;
+  return matrix;
 }
 
 /**
@@ -458,5 +647,10 @@ export function buildFederationGraph(
     })
     .sort(byName);
 
-  return { apps, edges, findings: [...findings] };
+  return {
+    apps,
+    edges,
+    findings: [...findings],
+    sharedMatrix: buildSharedMatrix(apps),
+  };
 }

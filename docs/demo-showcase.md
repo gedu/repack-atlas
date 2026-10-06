@@ -307,12 +307,29 @@ For the GIF, record:
 2. Studio in the browser: 4 ready nodes, **5 real edges** — host→auth,
    host→trading, host→wallet and trading→auth, wallet→auth (the mini-apps
    genuinely consume auth in this showcase), expose list per node. The page
-   has two top-level tabs: **Apps** (graph, inspector and a panel of the
-   findings that mention the selected app) and **Doctor** (the workspace-wide
+   has three top-level tabs: **Apps** (graph, inspector and a panel of the
+   findings that mention the selected app), **Compare** (the shared-dependency
+   matrix: all 19 shared packages × 4 apps, every cell judged against the host
+   column — a perfectly aligned showcase grid reads 57 `match` pills and `0
+   conflicts`, which is itself the point) and **Doctor** (the workspace-wide
    findings table with severity chips — `errors` / `warnings` on, `infos` off
    by default — and repeated codes collapsed behind a `+ N more CODE — click
-   to expand all`), SSE-live (no refresh needed).
-3. `curl http://127.0.0.1:8099/api/graph` next to the page — same payload.
+   to expand all`), SSE-live (no refresh needed). A `finding jumps to Apps`
+   beat closes the loop: clicking a row lands back on Apps with that app
+   selected.
+3. `curl http://127.0.0.1:8099/api/graph` next to the page — same payload
+   (`sharedMatrix` is part of it: `referenceApp: "host"`, 19 rows, every cell
+   `match` against `reference`).
+
+How the current GIF was made (2026-10-06, replaces the pre-tabs capture):
+`node dist/cli.js dev --workspace ../super-app-showcase --no-interactive
+--platform ios --studio-port 8099` with all four apps `ready`, then a
+headless Playwright context at 1400x900 @2x with `recordVideo`, clicking
+auth→wallet→trading→host in Apps, opening Compare (scroll + one tooltip),
+opening Doctor (enable the infos chip, expand one `HEURISTIC_ADVISORY`
+group, click a finding), and `ctx.close()` before converting: `ffmpeg -i
+raw.webm` with `fps=8,scale=880:550:flags=lanczos` + a generated palette
+(128 colors) → `docs/assets/federation-studio.gif` (26s, ~2.8MB).
 
 Studio is read-only forever (no write endpoints, no config editing, manifest
 content rendered as text only, server on 127.0.0.1 only) — worth one line in
